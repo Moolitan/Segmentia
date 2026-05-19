@@ -37,4 +37,3 @@ git submodule update --recursive
   scripts.
 - `software-agent-sdk/`: software agent SDK submodule.
 - `vllm/`: vLLM submodule with ContextSegmentKV support.
-

@@ -5,10 +5,11 @@ This reuses scripts/03_14B_anthropic/run_multurn3.py for the actual agent,
 Conversation, tools, workspace, and benchmark turns. The only added behavior is:
 
 1. Before the benchmark, offline-prefill the expected context segments
-   (SKILL.md files) and save/register their KV in vLLM.
-2. Wrap the real LLM transport call. If a later real agent request contains one
-   of those exact segment texts outside the system message, compute its token
-   span with vLLM /tokenize and attach vllm_xargs.context_segment_cache.
+   (wrapped skill tool outputs) and save/register their KV in vLLM.
+2. Wrap the real skill tool output in the same <context_segment ...> block.
+3. Wrap the real LLM transport call. If a later real agent request contains one
+   of those exact wrapped segment texts outside the system message, compute its
+   token span with vLLM /tokenize and attach vllm_xargs.context_segment_cache.
 """
 
 from __future__ import annotations
@@ -31,7 +32,68 @@ ROOT = Path(__file__).resolve().parents[2]
 RUN_MULTURN3_PATH = ROOT / "scripts" / "03_14B_anthropic" / "run_multurn3.py"
 DEFAULT_BENCH_ROOT = ROOT / "anthropic_skill_benchmark_8_repos_explicit_skills"
 DEFAULT_REPO = "slack_launch_pack"
-DEFAULT_SKILLS = ["internal-comms", "slack-gif-creator", "brand-guidelines"]
+DEFAULT_SKILLS = [
+    "internal-comms",
+    "slack-gif-creator",
+    "brand-guidelines",
+    "canvas-design",
+    "web-artifacts-builder",
+    "theme-factory",
+]
+
+
+def wrap_context_segment(skill_name: str, text: str) -> str:
+    return (
+        f'<context_segment id="{skill_name}">\n'
+        f"{text}\n"
+        f"</context_segment>"
+    )
+
+
+def render_skill_tool_text(skill_dir: Path) -> str:
+    """Render the same text returned by SkillTool for a skill directory."""
+    skill_md = skill_dir / "SKILL.md"
+    result = skill_md.read_text(encoding="utf-8")
+    resources: list[str] = []
+    for sub in ["scripts", "references", "assets"]:
+        sub_dir = skill_dir / sub
+        if sub_dir.is_dir():
+            files = sorted(f.name for f in sub_dir.iterdir() if f.is_file())
+            if files:
+                resources.append(f"  {sub}/: {', '.join(files)}")
+    if resources:
+        result += "\n\n--- Skill Resources ---\n" + "\n".join(resources)
+    return result
+
+
+def install_context_segment_skill_tool_patch(skill_names: set[str]) -> None:
+    """Wrap selected SkillTool outputs without modifying SKILL.md files."""
+    from openhands.tools.skill.definition import SkillObservation
+    from openhands.tools.skill.impl import SkillExecutor
+
+    if getattr(SkillExecutor, "_context_segment_kv_wrapped", False):
+        return
+
+    original_call = SkillExecutor.__call__
+
+    def wrapped_call(self, action, _conversation=None):
+        obs = original_call(self, action, _conversation)
+        name = action.name.strip()
+        if name not in skill_names or obs.is_error:
+            return obs
+        text = obs.text
+        if text.startswith(f'<context_segment id="{name}">\n'):
+            return obs
+        return SkillObservation.from_text(
+            text=wrap_context_segment(name, text),
+            skill_name=obs.skill_name,
+            skill_path=obs.skill_path,
+            is_error=obs.is_error,
+            error_type=obs.error_type,
+        )
+
+    SkillExecutor.__call__ = wrapped_call
+    SkillExecutor._context_segment_kv_wrapped = True
 
 
 def load_run_multurn3():
@@ -269,14 +331,7 @@ def offline_prefill_segment(
     cache_id: str,
     segment_text: str,
 ) -> dict[str, Any]:
-    """
-    离线 prefill 一个 context segment,并请求 vLLM 保存它的 KV。
-
-    这里把单个 SKILL.md 当成 user message 发送给 vLLM。先计算该文本在
-    chat template 下的 source token span,再通过 vllm_xargs.context_segment_cache
-    的 sources 字段告诉 vLLM:这次 prefill 结束后收集这个 span 的 KV,
-    用 cache_id 存起来。
-    """
+    """离线 prefill 一个 wrapped context segment,并请求 vLLM 保存它的 KV。"""
     messages = [{"role": "user", "content": segment_text}]
     source_start, source_end = span_token_offsets_for_message_text(
         base_url,
@@ -448,8 +503,8 @@ def main() -> None:
     segments: dict[str, str] = {}
     offline_records = []
     for skill_name in skill_names:
-        skill_path = active_skills_dir / skill_name / "SKILL.md"
-        text = skill_path.read_text(encoding="utf-8")
+        skill_dir = active_skills_dir / skill_name
+        text = wrap_context_segment(skill_name, render_skill_tool_text(skill_dir))
         cache_id = f"context-segment-{skill_name}-v1"
         segments[cache_id] = text
         offline_records.append(
@@ -473,6 +528,7 @@ def main() -> None:
 
     runner = load_run_multurn3()
     template = runner.load_benchmark_sequence(args.benchmark_repo, bench_root=str(bench_root))
+    install_context_segment_skill_tool_patch(set(skill_names))
     llm, agent = runner.create_agent_and_llm(str(active_skills_dir), args.vllm_port)
     attach_context_segment_injector(
         llm,

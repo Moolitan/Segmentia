@@ -13,7 +13,7 @@ export VLLM_API_KEY="${VLLM_API_KEY:-EMPTY}"
 export VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-32768}"
 export VLLM_SERVED_NAME="${VLLM_SERVED_NAME:-Qwen3}"
 
-RUN_ROOT="${RUN_ROOT:-$ROOT/results/05_context_segment_agent_kv/internal_comms_incident_update}"
+RUN_ROOT="${RUN_ROOT:-$ROOT/results/05_context_segment_agent_kv/launch_poster_page_pack}"
 export VLLM_CONTEXT_SEGMENT_KV_SAVE_DIR="${VLLM_CONTEXT_SEGMENT_KV_SAVE_DIR:-$RUN_ROOT/kv_cache}"
 export VLLM_CONTEXT_SEGMENT_KV_DIR="${VLLM_CONTEXT_SEGMENT_KV_DIR:-$VLLM_CONTEXT_SEGMENT_KV_SAVE_DIR}"
 mkdir -p "$VLLM_CONTEXT_SEGMENT_KV_SAVE_DIR" "$ROOT/log/05_context_segment_agent_kv"
@@ -71,9 +71,9 @@ sleep 2
 wait_vllm_ready
 
 python "$SCRIPT_DIR/run_real_multurn_context_segment.py" \
-  --benchmark-repo internal_comms_incident_update \
+  --benchmark-repo launch_poster_page_pack \
   --bench-root "$ROOT/anthropic_skill_benchmark_8_repos_explicit_skills" \
-  --workspace "$ROOT/workspace/05_context_segment_agent_kv/internal_comms_incident_update" \
+  --workspace "$ROOT/workspace/05_context_segment_agent_kv/launch_poster_page_pack" \
   --skills-dir "$ROOT/skills" \
   --output "$RUN_ROOT/multiturn_sequence_traces.json" \
   --log-dir "$ROOT/log/05_context_segment_agent_kv" \

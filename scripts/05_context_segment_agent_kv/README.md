@@ -22,15 +22,27 @@ Flow:
 2. Copy `anthropic_skill_benchmark/slack_launch_pack/seed_files` into a fresh
    workspace.
 3. Copy repository `skills/` into `workspace/.agents/skills`.
-4. Offline prefill the expected context segments:
+4. Offline prefill the expected wrapped context segments:
    - `internal-comms/SKILL.md`
    - `slack-gif-creator/SKILL.md`
    - `brand-guidelines/SKILL.md`
-5. Create the real OpenHands Agent and Conversation via `run_multurn3.py`.
-6. Run all `slack_launch_pack` turns.
-7. Wrap the real `llm._transport_call`. When a real request contains one of the
-   cached segment texts outside the system message, compute the exact token span
-   with vLLM `/tokenize` and attach:
+   - `canvas-design/SKILL.md`
+   - `web-artifacts-builder/SKILL.md`
+   - `theme-factory/SKILL.md`
+5. Patch this experiment's `SkillTool` executor so those skill outputs are
+   wrapped as:
+
+```text
+<context_segment id="<skill-name>">
+...full SkillTool output...
+</context_segment>
+```
+
+6. Create the real OpenHands Agent and Conversation via `run_multurn3.py`.
+7. Run all `slack_launch_pack` turns.
+8. Wrap the real `llm._transport_call`. When a real request contains one of the
+   cached wrapped segment blocks outside the system message, compute the exact
+   token span with vLLM `/tokenize` and attach:
 
 ```json
 {

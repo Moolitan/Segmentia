@@ -1,0 +1,5 @@
+Please first read seed_files/issue_api_brief.md.
+
+I want to build an MCP server for this issue-tracking API.
+First, help me decide what tools the MCP server should expose.
+Do not go too deep into code yet.

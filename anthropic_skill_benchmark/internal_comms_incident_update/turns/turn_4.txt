@@ -1,0 +1,5 @@
+Add 4 FAQ items that people are likely to ask:
+- Could this happen again?
+- Was any data lost?
+- Is everything recovered now?
+- What will we do to prevent this next time?

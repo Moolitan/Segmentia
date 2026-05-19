@@ -1,0 +1,1 @@
+Now review this spec and point out 3 places where a real agent might still run into trouble when using the MCP server.

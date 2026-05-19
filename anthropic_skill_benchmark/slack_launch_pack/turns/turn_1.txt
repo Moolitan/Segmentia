@@ -1,0 +1,9 @@
+Before you begin, explicitly reference and use the relevant skills for this task.
+Please explicitly reference and use the "internal-comms" skills for this turn.
+
+Please first read seed_files/feature_launch_brief.md.
+
+We want to announce a new internal feature launch:
+the experiment task dashboard now supports retry for failed tasks.
+
+Please draft a short internal announcement.

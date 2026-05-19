@@ -1,0 +1,4 @@
+Please first read seed_files/product_context.md.
+
+Based on this tool background, help me think through the core value of an "auto-tagging" feature.
+Do not write a formal document.

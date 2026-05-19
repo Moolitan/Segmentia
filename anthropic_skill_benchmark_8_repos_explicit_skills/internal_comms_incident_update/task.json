@@ -1,0 +1,12 @@
+{
+  "repo_name": "internal_comms_incident_update",
+  "turn_count": 8,
+  "skill_class": "1_skill",
+  "context_mode": "seed_files",
+  "expected_skills": [
+    "internal-comms"
+  ],
+  "primary_outputs": [
+    "incident_update.md"
+  ]
+}

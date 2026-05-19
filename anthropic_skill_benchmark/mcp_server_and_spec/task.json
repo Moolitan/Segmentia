@@ -1,0 +1,13 @@
+{
+  "repo_name": "mcp_server_and_spec",
+  "turn_count": 5,
+  "skill_class": "2_skills",
+  "context_mode": "seed_files",
+  "expected_skills": [
+    "mcp-builder",
+    "doc-coauthoring"
+  ],
+  "primary_outputs": [
+    "mcp_server_spec.md"
+  ]
+}

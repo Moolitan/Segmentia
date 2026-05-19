@@ -1,0 +1,1 @@
+Please read seed_files/raw_project_update.txt and rewrite it so it is clearer, but not too formal.

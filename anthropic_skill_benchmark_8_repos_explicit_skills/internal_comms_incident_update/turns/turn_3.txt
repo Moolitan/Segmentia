@@ -1,0 +1,4 @@
+Please continue this task by explicitly referencing and using the relevant skills.
+Please explicitly reference and use the "internal-comms" skill for this turn.
+
+Now revise it so it is more suitable for leadership readers and contains fewer implementation details.

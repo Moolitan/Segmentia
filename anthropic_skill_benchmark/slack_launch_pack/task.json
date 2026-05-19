@@ -1,0 +1,16 @@
+{
+  "repo_name": "slack_launch_pack",
+  "turn_count": 5,
+  "skill_class": "3_skills",
+  "context_mode": "seed_files",
+  "expected_skills": [
+    "internal-comms",
+    "slack-gif-creator",
+    "brand-guidelines"
+  ],
+  "primary_outputs": [
+    "launch_announcement.md",
+    "launch_gif",
+    "final_launch_pack.md"
+  ]
+}

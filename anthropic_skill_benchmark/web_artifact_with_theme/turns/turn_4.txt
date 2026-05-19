@@ -1,0 +1,2 @@
+Now apply a unified theme to the whole page.
+The theme should feel clean, professional, and suitable for an internal technical event.

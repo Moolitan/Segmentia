@@ -1,0 +1,4 @@
+Based on the plan so far, write a short spec that includes:
+- goal
+- tool surface
+- error handling principles

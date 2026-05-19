@@ -1,0 +1,19 @@
+{
+  "turn_1": [
+    "internal-comms"
+  ],
+  "turn_2": [
+    "internal-comms"
+  ],
+  "turn_3": [
+    "slack-gif-creator"
+  ],
+  "turn_4": [
+    "brand-guidelines"
+  ],
+  "turn_5": [
+    "internal-comms",
+    "slack-gif-creator",
+    "brand-guidelines"
+  ]
+}

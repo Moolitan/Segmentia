@@ -1,0 +1,5 @@
+As you revise this further, continue to reference and use the relevant skills.
+Please explicitly reference and use the "internal-comms", "slack-gif-creator", and "brand-guidelines" skills for this turn.
+
+Now refine the GIF direction so it feels more polished and less like a generic recovery animation.
+It should still work well for Slack.

@@ -1,0 +1,5 @@
+Continue the task and make sure you are still using the relevant skills as guidance.
+Please explicitly reference and use the "internal-comms", "slack-gif-creator", and "brand-guidelines" skills for this turn.
+
+Finally, tighten everything according to the brand notes so that the wording, colors, and overall style are more consistent.
+Also output a short final launch-pack summary.

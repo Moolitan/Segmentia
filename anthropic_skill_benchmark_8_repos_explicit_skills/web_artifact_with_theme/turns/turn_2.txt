@@ -1,0 +1,5 @@
+As you continue, keep using the relevant skills and follow their guidance.
+Please explicitly reference and use the "web-artifacts-builder" skill and the "theme-factory" skill for this turn.
+
+Now add a speaker section.
+Each speaker should have an avatar placeholder, name, and short bio.

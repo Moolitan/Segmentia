@@ -1,0 +1,30 @@
+{
+  "turn_1": [
+    "canvas-design"
+  ],
+  "turn_2": [
+    "web-artifacts-builder"
+  ],
+  "turn_3": [
+    "web-artifacts-builder"
+  ],
+  "turn_4": [
+    "theme-factory"
+  ],
+  "turn_5": [
+    "canvas-design",
+    "web-artifacts-builder",
+    "theme-factory"
+  ],
+  "turn_6": [
+    "canvas-design"
+  ],
+  "turn_7": [
+    "web-artifacts-builder"
+  ],
+  "turn_8": [
+    "canvas-design",
+    "web-artifacts-builder",
+    "theme-factory"
+  ]
+}

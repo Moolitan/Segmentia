@@ -1,0 +1,4 @@
+Please continue this task by explicitly referencing and using the relevant skills.
+Please explicitly reference and use the "web-artifacts-builder" skill and the "theme-factory" skill for this turn.
+
+Add an FAQ section with 4 placeholder questions.

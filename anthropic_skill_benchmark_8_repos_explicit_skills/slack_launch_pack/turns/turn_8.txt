@@ -1,0 +1,9 @@
+For this final step, explicitly use the relevant skills and keep the output aligned with them.
+Please explicitly reference and use the "internal-comms", "slack-gif-creator", and "brand-guidelines" skills for this turn.
+
+Finally, provide a polished final version suitable for actual internal rollout.
+It should include:
+- the main Slack announcement
+- a shorter fallback version
+- the GIF concept or output
+- a brief note on how the pieces fit together

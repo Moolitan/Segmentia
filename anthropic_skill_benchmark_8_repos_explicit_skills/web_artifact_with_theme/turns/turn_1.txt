@@ -1,0 +1,13 @@
+Before you begin, explicitly reference and use the relevant skills for this task.
+Please explicitly reference and use the "web-artifacts-builder" skill and the "theme-factory" skill for this turn.
+
+Please first read seed_files/event_brief.md.
+
+Build an internal tech-event landing page that includes:
+- title
+- time
+- location
+- registration button
+- a short agenda
+
+It should feel like a proper event landing page, not just a plain demo.

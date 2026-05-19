@@ -1,0 +1,6 @@
+The minimum tool set is:
+- query issue
+- create issue
+- add comment to issue
+
+Please think about parameter design for each tool.

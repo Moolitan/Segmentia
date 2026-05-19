@@ -1,0 +1,6 @@
+[submodule "software-agent-sdk"]
+	path = software-agent-sdk
+	url = https://github.com/Moolitan/software-agent-sdk.git
+[submodule "vllm"]
+	path = vllm
+	url = https://github.com/Moolitan/vllm.git

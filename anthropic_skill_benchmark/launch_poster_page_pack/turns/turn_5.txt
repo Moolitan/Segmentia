@@ -1,0 +1,1 @@
+Finally, check whether the poster and the web page really look like they belong to the same event pack, and keep the poster as a shareable static final asset.

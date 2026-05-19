@@ -1,0 +1,5 @@
+Please keep working with the relevant skills explicitly in mind.
+Please explicitly reference and use the "internal-comms", "slack-gif-creator", and "brand-guidelines" skills for this turn.
+
+Please make the announcement slightly clearer for platform engineers who care about what the feature actually does.
+Keep it short, but add a bit more substance.

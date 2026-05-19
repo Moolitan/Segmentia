@@ -1,0 +1,4 @@
+As you revise this further, continue to reference and use the relevant skills.
+Please explicitly reference and use the "mcp-builder" skill and the "doc-coauthoring" skill for this turn.
+
+Please revise the spec so it reads like a more realistic implementation note for teammates who may build it later.

@@ -1,0 +1,1 @@
+Now sketch a minimal project structure, assuming the implementation will be in Python.

@@ -1,0 +1,7 @@
+For this final step, explicitly use the relevant skills and keep the output aligned with them.
+Please explicitly reference and use the "web-artifacts-builder" skill and the "theme-factory" skill for this turn.
+
+Finally, provide the finished landing page plus a short note summarizing:
+- the main sections
+- the theme direction
+- the key design choices you made

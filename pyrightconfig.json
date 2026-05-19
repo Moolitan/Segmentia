@@ -1,0 +1,8 @@
+{
+  "venvPath": "software-agent-sdk",
+  "venv": ".venv",
+  "extraPaths": [
+    "software-agent-sdk/openhands-tools",
+    "software-agent-sdk/openhands-sdk"
+  ]
+}

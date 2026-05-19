@@ -1,0 +1,4 @@
+Please continue this task by explicitly referencing and using the relevant skills.
+Please explicitly reference and use the "mcp-builder" skill and the "doc-coauthoring" skill for this turn.
+
+Now sketch a minimal project structure, assuming the implementation will be in Python.

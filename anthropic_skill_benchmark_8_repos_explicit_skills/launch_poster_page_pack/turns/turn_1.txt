@@ -1,0 +1,9 @@
+Before you begin, explicitly reference and use the relevant skills for this task.
+Please explicitly reference and use the "canvas-design", "web-artifacts-builder", and "theme-factory" skills for this turn.
+The skills "canvas-design", "web-artifacts-builder", and "theme-factory" are listed in <available_skills> in your system prompt. 
+Read each skill file using the skill tool before starting, then apply their guidelines.
+
+Please first read seed_files/open_day_brief.md.
+
+Start by creating a poster concept for this event.
+The style should feel modern, clean, and academic.

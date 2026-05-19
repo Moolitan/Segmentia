@@ -1,0 +1,8 @@
+As you continue, keep using the relevant skills and follow their guidance.
+Please explicitly reference and use the "canvas-design", "web-artifacts-builder", and "theme-factory" skills for this turn.
+
+Now create a short web page for the same event.
+It should include:
+- event introduction
+- agenda
+- registration entry

@@ -1,0 +1,12 @@
+{
+  "repo_name": "doc_coauthoring_design_doc",
+  "turn_count": 5,
+  "skill_class": "1_skill",
+  "context_mode": "seed_files",
+  "expected_skills": [
+    "doc-coauthoring"
+  ],
+  "primary_outputs": [
+    "design_doc.md"
+  ]
+}

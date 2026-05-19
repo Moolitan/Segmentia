@@ -1,0 +1,17 @@
+results.tar.gz
+results/
+log/
+workspace/*
+eval_outputs/
+nohup.out
+*.log
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+.agents/
+.claude/
+scripts/04_kv_cache_research/reports/
+scripts/04_kv_cache_research/prompts/
+scripts/04_kv_cache_research/results/

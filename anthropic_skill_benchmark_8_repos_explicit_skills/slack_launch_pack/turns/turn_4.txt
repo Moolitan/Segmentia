@@ -1,0 +1,6 @@
+Please keep using the relevant skills and follow them while refining the work.
+Please explicitly reference and use the "internal-comms", "slack-gif-creator", and "brand-guidelines" skills for this turn.
+
+Please also read seed_files/brand_notes.md.
+
+Now make the GIF direction and the announcement feel like they belong to the same launch pack.

@@ -1,0 +1,5 @@
+Please keep working with the relevant skills explicitly in mind.
+Please explicitly reference and use the "web-artifacts-builder" skill and the "theme-factory" skill for this turn.
+
+Please add a small registration-flow hint section near the call-to-action.
+It should briefly explain what happens after someone clicks the registration button.

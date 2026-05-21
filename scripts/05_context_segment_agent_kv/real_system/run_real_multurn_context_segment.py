@@ -232,10 +232,8 @@ def text_from_content(content: Any) -> str:
 
 
 def set_text_content(msg: dict[str, Any], new_text: str) -> dict[str, Any]:
-    """复制一个 message，并把其中的文本内容替换成 new_text。
-
-    这个函数用于构造“截断到某个字符位置”的临时 messages，然后调用
-    /tokenize 计算该字符位置对应的 token offset。原始 message 不会被修改。
+    """
+    复制一个 message,并把其中的文本内容替换成 new_text
     """
     out = copy.deepcopy(msg)
     content = out.get("content")
@@ -299,10 +297,6 @@ def span_token_offsets_for_message_text(
 ) -> tuple[int, int]:
     """
     把某个 message 内的字符 span 转换为整个 chat prompt 的 token span。
-
-    做法是分别构造“截至 char_start”和“截至 char_end”的 messages 前缀,
-    交给 vLLM /tokenize,两个 token 长度就是该文本片段在完整 prompt 中的
-    target_start/source_start 与 target_end/source_end。
     """
     msg_text = text_from_content(messages[msg_idx].get("content"))
 

@@ -1,5 +1,2 @@
-Continue the task and make sure you are still using the relevant skills as guidance.
-Please explicitly reference and use the "internal-comms" skill for this turn.
-
 Please also make a version that is suitable for a daily internal status digest.
 It should be shorter and more summary-like.

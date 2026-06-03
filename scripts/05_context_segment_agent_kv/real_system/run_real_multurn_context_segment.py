@@ -1,22 +1,7 @@
-#!/usr/bin/env python3
-"""Run the real slack_launch_pack OpenHands agent bench with ContextSegmentKV.
-
-This reuses scripts/03_14B_anthropic/run_multurn3.py for the actual agent,
-Conversation, tools, workspace, and benchmark turns. The only added behavior is:
-
-1. Before the benchmark, offline-prefill the expected context segments
-   (wrapped skill tool outputs) and save/register their KV in vLLM.
-2. Wrap the real skill tool output in the same <context_segment ...> block.
-3. Wrap the real LLM transport call. If a later real agent request contains one
-   of those exact wrapped segment texts outside the system message, compute its
-   token span with vLLM /tokenize and attach vllm_xargs.context_segment_cache.
-"""
-
 from __future__ import annotations
 
 import argparse
 import copy
-import importlib.util
 import json
 import os
 import shutil
@@ -28,8 +13,16 @@ from pathlib import Path
 from typing import Any
 
 
-ROOT = Path(__file__).resolve().parents[2]
-RUN_MULTURN3_PATH = ROOT / "scripts" / "03_14B_anthropic" / "run_multurn3.py"
+ROOT = Path(__file__).resolve().parents[3]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from core import (
+    create_agent_and_llm,
+    load_benchmark_sequence,
+    run_sequence,
+)
+
 DEFAULT_BENCH_ROOT = ROOT / "anthropic_skill_benchmark_8_repos_explicit_skills"
 DEFAULT_REPO = "slack_launch_pack"
 DEFAULT_SKILLS = [
@@ -94,25 +87,6 @@ def install_context_segment_skill_tool_patch(skill_names: set[str]) -> None:
 
     SkillExecutor.__call__ = wrapped_call
     SkillExecutor._context_segment_kv_wrapped = True
-
-
-def load_run_multurn3():
-    """动态加载真实 benchmark runner。
-
-    这里不重新实现 OpenHands agent 流程，而是复用
-    scripts/03_14B_anthropic/run_multurn3.py 里的真实多轮执行逻辑。
-    这样后面的实验仍然跑 slack_launch_pack 的真实 agent transcript、
-    workspace、tools 和 benchmark turns。
-    """
-    spec = importlib.util.spec_from_file_location(
-        "run_multurn3_real_context_segment", RUN_MULTURN3_PATH
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Cannot load {RUN_MULTURN3_PATH}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
 
 
 def post_json(base_url: str, path: str, payload: dict[str, Any], api_key: str) -> dict:
@@ -379,24 +353,22 @@ def attach_context_segment_injector(
     original = getattr(llm, "_transport_call")
     llm._context_segment_kv_patched = True
     llm._context_segment_kv_events = []
-    llm._context_segment_kv_seen_spans = set()
+    llm._context_segment_kv_collected_cache_ids = set()
 
     def wrapped(*args, **kwargs):
         """
         实际替换 llm._transport_call 的包装函数。
         """
         messages = kwargs.get("messages") or []
-        injections = []
-        seen_spans_to_mark = []
+        sources = []
+        targets = []
+        source_cache_ids = []
         for cache_id, segment_text in segments.items():
             found = locate_segment(messages, segment_text)
             if found is None:
                 continue
             msg_idx, char_start, char_end = found
-            span_key = (cache_id, msg_idx, char_start, char_end)
-            if span_key in llm._context_segment_kv_seen_spans:
-                continue
-            target_start, target_end = span_token_offsets_for_message_text(
+            span_start, span_end = span_token_offsets_for_message_text(
                 base_url,
                 model,
                 messages,
@@ -405,33 +377,54 @@ def attach_context_segment_injector(
                 char_start,
                 char_end,
             )
-            injections.append(
-                {
-                    "cache_id": cache_id,
-                    "mode": "rope",
-                    "target_start": target_start,
-                    "target_end": target_end,
-                }
-            )
-            seen_spans_to_mark.append(span_key)
+            if cache_id in llm._context_segment_kv_collected_cache_ids:
+                targets.append(
+                    {
+                        "cache_id": cache_id,
+                        "mode": "rope",
+                        "target_start": span_start,
+                        "target_end": span_end,
+                    }
+                )
+            else:
+                sources.append(
+                    {
+                        "cache_id": cache_id,
+                        "source_start": span_start,
+                        "source_end": span_end,
+                    }
+                )
+                source_cache_ids.append(cache_id)
 
-        if injections:
-            llm._context_segment_kv_seen_spans.update(seen_spans_to_mark)
+        event: dict[str, Any] | None = None
+        if sources or targets:
             extra_body = dict(kwargs.get("extra_body") or {})
             vllm_xargs = dict(extra_body.get("vllm_xargs") or {})
-            vllm_xargs["context_segment_cache"] = json.dumps(
-                {"targets": injections}, ensure_ascii=False, sort_keys=True
+            context_segment_cache = {"sources": sources, "targets": targets}
+            context_segment_cache_json = json.dumps(
+                context_segment_cache, ensure_ascii=False, sort_keys=True
             )
+            vllm_xargs["context_segment_cache"] = context_segment_cache_json
             extra_body["vllm_xargs"] = vllm_xargs
             kwargs["extra_body"] = extra_body
-            llm._context_segment_kv_events.append(
-                {
-                    "request_index": len(llm._context_segment_kv_events),
-                    "injections": injections,
-                    "num_messages": len(messages),
-                }
+            event = {
+                "request_index": len(llm._context_segment_kv_events),
+                "sources": sources,
+                "targets": targets,
+                "num_messages": len(messages),
+                "extra_body_keys": sorted(extra_body.keys()),
+                "vllm_xargs_keys": sorted(vllm_xargs.keys()),
+            }
+            print(
+                "[ContextSegmentKV] request "
+                + json.dumps(event, ensure_ascii=False, sort_keys=True),
+                flush=True,
             )
-        return original(*args, **kwargs)
+        response = original(*args, **kwargs)
+        if event is not None:
+            llm._context_segment_kv_collected_cache_ids.update(source_cache_ids)
+            llm._context_segment_kv_events.append(event)
+        return response
 
     object.__setattr__(wrapped, "_context_segment_kv_wrapped", True)
     object.__setattr__(llm, "_transport_call", wrapped)
@@ -474,7 +467,7 @@ def main() -> None:
     parser.add_argument("--vllm-port", type=int, default=int(os.environ.get("VLLM_PORT", "8000")))
     parser.add_argument("--model", default=os.environ.get("VLLM_SERVED_NAME", "Qwen3"))
     parser.add_argument("--max-iteration-per-run", type=int, default=500)
-    parser.add_argument("--cache-skill", action="append", default=None, help="Skill directory name to offline-cache. Can be repeated.")
+    parser.add_argument("--cache-skill", action="append", default=None, help="Skill directory name to runtime-cache. Can be repeated.")
     parser.add_argument(
         "--offline-only",
         action="store_true",
@@ -494,22 +487,36 @@ def main() -> None:
     prepare_workspace(args.benchmark_repo, bench_root, workspace, skills_src)
     active_skills_dir = workspace / ".agents" / "skills"
 
+    run_cache_namespace = (
+        f"{args.benchmark_repo}-{int(time.time())}-{os.getpid()}"
+    )
     segments: dict[str, str] = {}
-    offline_records = []
+    runtime_records = []
     for skill_name in skill_names:
         skill_dir = active_skills_dir / skill_name
         text = wrap_context_segment(skill_name, render_skill_tool_text(skill_dir))
-        cache_id = f"context-segment-{skill_name}-v1"
+        cache_id = f"context-segment-{run_cache_namespace}-{skill_name}-v1"
         segments[cache_id] = text
-        offline_records.append(
-            offline_prefill_segment(base_url, args.model, api_key, cache_id, text)
+        runtime_records.append(
+            {
+                "cache_id": cache_id,
+                "skill_name": skill_name,
+                "mode": "runtime",
+                "chars": len(text),
+            }
         )
 
     if args.offline_only:
+        offline_records = []
+        for cache_id, text in segments.items():
+            offline_records.append(
+                offline_prefill_segment(base_url, args.model, api_key, cache_id, text)
+            )
         final = {
             "benchmark_repo": args.benchmark_repo,
             "workspace": str(workspace),
             "skills_dir": str(active_skills_dir),
+            "context_segment_cache_namespace": run_cache_namespace,
             "offline_context_segments": offline_records,
             "context_segment_kv_events": [],
             "llm_calls": [],
@@ -520,10 +527,9 @@ def main() -> None:
         print(f"[done] offline segments: {len(offline_records)}")
         return
 
-    runner = load_run_multurn3()
-    template = runner.load_benchmark_sequence(args.benchmark_repo, bench_root=str(bench_root))
+    template = load_benchmark_sequence(args.benchmark_repo, bench_root=str(bench_root))
     install_context_segment_skill_tool_patch(set(skill_names))
-    llm, agent = runner.create_agent_and_llm(str(active_skills_dir), args.vllm_port)
+    llm, agent = create_agent_and_llm(str(active_skills_dir), args.vllm_port)
     attach_context_segment_injector(
         llm,
         base_url=base_url,
@@ -533,7 +539,7 @@ def main() -> None:
     )
 
     log_dir.mkdir(parents=True, exist_ok=True)
-    result = runner.run_sequence(
+    result = run_sequence(
         template=template,
         agent=agent,
         seq_workspace=str(workspace),
@@ -545,7 +551,9 @@ def main() -> None:
         "benchmark_repo": args.benchmark_repo,
         "workspace": str(workspace),
         "skills_dir": str(active_skills_dir),
-        "offline_context_segments": offline_records,
+        "context_segment_cache_namespace": run_cache_namespace,
+        "runtime_context_segments": runtime_records,
+        "offline_context_segments": [],
         "context_segment_kv_events": getattr(llm, "_context_segment_kv_events", []),
         "llm_calls": result["llm_calls"],
     }
@@ -554,8 +562,8 @@ def main() -> None:
 
     print(f"[done] real multiturn result: {output}")
     print(f"[done] log: {log_dir / f'{args.benchmark_repo}.log'}")
-    print(f"[done] offline segments: {len(offline_records)}")
-    print(f"[done] injected requests: {len(final['context_segment_kv_events'])}")
+    print(f"[done] runtime segments: {len(runtime_records)}")
+    print(f"[done] context segment requests: {len(final['context_segment_kv_events'])}")
 
 
 if __name__ == "__main__":

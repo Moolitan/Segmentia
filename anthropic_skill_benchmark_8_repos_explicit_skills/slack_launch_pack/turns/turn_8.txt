@@ -1,5 +1,4 @@
-For this final step, explicitly use the relevant skills and keep the output aligned with them.
-Please explicitly reference and use the "internal-comms", "slack-gif-creator", and "brand-guidelines" skills for this turn.
+Please explicitly reference and use the "brand-guidelines", "internal-comms", and "slack-gif-creator" skills for this turn.
 
 Finally, provide a polished final version suitable for actual internal rollout.
 It should include:

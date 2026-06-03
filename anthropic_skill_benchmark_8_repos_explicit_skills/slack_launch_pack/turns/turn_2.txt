@@ -1,5 +1,2 @@
-As you continue, keep using the relevant skills and follow their guidance.
-Please explicitly reference and use the "internal-comms", "slack-gif-creator", and "brand-guidelines" skills for this turn.
-
 Now adapt it so it is more suitable for Slack.
 Make the tone a little lighter, but still professional.

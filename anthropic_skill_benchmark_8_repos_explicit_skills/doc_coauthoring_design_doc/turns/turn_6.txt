@@ -1,5 +1,2 @@
-Please keep working with the relevant skills explicitly in mind.
-Please explicitly reference and use the "doc-coauthoring" skill for this turn.
-
 Now add a short rollout section.
 How should we introduce this safely without affecting all workloads at once?

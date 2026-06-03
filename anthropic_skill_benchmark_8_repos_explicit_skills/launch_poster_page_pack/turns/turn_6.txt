@@ -1,5 +1,2 @@
-Please keep working with the relevant skills explicitly in mind.
-Please explicitly reference and use the "canvas-design", "web-artifacts-builder", and "theme-factory" skills for this turn.
-
 Please refine the poster so that the hierarchy is clearer at a glance.
 The event name, time, and location should feel easier to scan.

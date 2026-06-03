@@ -17,7 +17,7 @@ BENCH_ROOT = os.path.join(ROOT, "anthropic_skill_benchmark")  # default; overrid
 sys.path.insert(0, ROOT)
 
 
-from benchkit.metrics.vllm_prefix_cache import (
+from core.vllm_metrics import (
     attach_vllm_per_request_metrics,
 )
 

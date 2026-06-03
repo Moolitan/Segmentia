@@ -1,5 +1,2 @@
-As you revise this further, continue to reference and use the relevant skills.
-Please explicitly reference and use the "web-artifacts-builder" skill and the "theme-factory" skill for this turn.
-
 Please refine the visual theme further so the page feels slightly warmer and more welcoming,
 while still staying professional and technical.

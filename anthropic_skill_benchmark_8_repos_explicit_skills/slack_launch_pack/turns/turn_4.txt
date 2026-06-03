@@ -1,5 +1,4 @@
-Please keep using the relevant skills and follow them while refining the work.
-Please explicitly reference and use the "internal-comms", "slack-gif-creator", and "brand-guidelines" skills for this turn.
+Please explicitly reference and use the "brand-guidelines" skill for this turn.
 
 Please also read seed_files/brand_notes.md.
 

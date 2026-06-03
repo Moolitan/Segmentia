@@ -1,6 +1,3 @@
-As you continue, keep using the relevant skills and follow their guidance.
-Please explicitly reference and use the "mcp-builder" skill and the "doc-coauthoring" skill for this turn.
-
 The minimum tool set is:
 - query issue
 - create issue

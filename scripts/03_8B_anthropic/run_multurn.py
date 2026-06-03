@@ -20,7 +20,7 @@ from task_templates import (
     TaskSpec,
 )
 
-from benchkit.metrics.vllm_prefix_cache import (
+from core.vllm_metrics import (
     VllmTimelineSampler,
 )
 

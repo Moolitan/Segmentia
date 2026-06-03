@@ -1,5 +1,4 @@
-Before you begin, explicitly reference and use the relevant skills for this task.
-Please explicitly reference and use the "internal-comms", "slack-gif-creator", and "brand-guidelines" skills for this turn.
+Please explicitly reference and use the "internal-comms" skill for this turn.
 
 Please first read seed_files/feature_launch_brief.md.
 

@@ -1,4 +1,3 @@
-Continue the task and make sure you are still using the relevant skills as guidance.
-Please explicitly reference and use the "canvas-design", "web-artifacts-builder", and "theme-factory" skills for this turn.
+Please explicitly reference and use the "canvas-design", "theme-factory", and "web-artifacts-builder" skills for this turn.
 
 Finally, check whether the poster and the web page really look like they belong to the same event pack, and keep the poster as a shareable static final asset.

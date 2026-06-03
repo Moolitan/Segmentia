@@ -1,5 +1,4 @@
-For this final step, explicitly use the relevant skills and keep the output aligned with them.
-Please explicitly reference and use the "mcp-builder" skill and the "doc-coauthoring" skill for this turn.
+Please explicitly reference and use the "doc-coauthoring" skill and the "mcp-builder" skill for this turn.
 
 Finally, provide:
 1. the final concise spec

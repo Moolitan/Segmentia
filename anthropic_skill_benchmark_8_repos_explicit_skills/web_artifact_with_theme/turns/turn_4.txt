@@ -1,5 +1,4 @@
-Please keep using the relevant skills and follow them while refining the work.
-Please explicitly reference and use the "web-artifacts-builder" skill and the "theme-factory" skill for this turn.
+Please explicitly reference and use the "theme-factory" skill for this turn.
 
 Now apply a unified theme to the whole page.
 The theme should feel clean, professional, and suitable for an internal technical event.

@@ -1,5 +1,4 @@
-Please continue this task by explicitly referencing and using the relevant skills.
-Please explicitly reference and use the "internal-comms", "slack-gif-creator", and "brand-guidelines" skills for this turn.
+Please explicitly reference and use the "slack-gif-creator" skill for this turn.
 
 I also want a Slack GIF for this launch.
 The theme should be "a failed task gets back up and tries again".

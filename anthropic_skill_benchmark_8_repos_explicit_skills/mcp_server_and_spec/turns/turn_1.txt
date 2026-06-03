@@ -1,5 +1,4 @@
-Before you begin, explicitly reference and use the relevant skills for this task.
-Please explicitly reference and use the "mcp-builder" skill and the "doc-coauthoring" skill for this turn.
+Please explicitly reference and use the "mcp-builder" skill for this turn.
 
 Please first read seed_files/issue_api_brief.md.
 

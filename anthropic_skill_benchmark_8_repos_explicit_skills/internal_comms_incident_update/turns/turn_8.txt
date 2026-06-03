@@ -1,4 +1,3 @@
-For this final step, explicitly use the relevant skills and keep the output aligned with them.
 Please explicitly reference and use the "internal-comms" skill for this turn.
 
 Finally, provide:

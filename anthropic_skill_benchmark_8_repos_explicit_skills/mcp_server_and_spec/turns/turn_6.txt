@@ -1,5 +1,2 @@
-Please keep working with the relevant skills explicitly in mind.
-Please explicitly reference and use the "mcp-builder" skill and the "doc-coauthoring" skill for this turn.
-
 Please now think about pagination and filtering behavior.
 I want the MCP server to stay usable even if the issue list becomes large.

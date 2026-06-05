@@ -56,9 +56,12 @@ RESTART_VLLM=0 bash run_replay.sh
 1. 启动 vLLM，跑 `--phase recompute`，只 dump 完整上下文 recompute KV：
    `cksim-recompute-<task>-<skill>-occ<N>.pt`
 2. 重启 vLLM，跑 `--phase reuse`，在 reuse pass 内 occurrence 1 收集 source，
-   occurrence 2/3 只注入这个 pass 自己收集的 source，并 dump：
+   occurrence 2/3 只注入这个 pass 自己收集的 source，并 dump RoPE 位置重旋转结果：
    `cksim-reuse-<task>-<skill>-occ<N>.pt`
-3. 跑 `--phase summarize`，读取两边 `.pt` 并计算 CKSim。
+3. 再次重启 vLLM，跑 `--phase reuse_no_rope`，重新收集 source，只 dump
+   direct/no-rope 复用结果：
+   `cksim-reuse-no-rope-<task>-<skill>-occ<N>.pt`
+4. 跑 `--phase summarize`，读取三边 `.pt` 并计算 CKSim。
 
 运行：
 
@@ -73,6 +76,14 @@ TASKS=launch_poster_page_pack bash run_cksim.sh
 results/05_context_segment_agent_kv/CKSim/trace_reuse_cksim.csv
 results/05_context_segment_agent_kv/CKSim/trace_reuse_cksim_summary.json
 ```
+
+CSV 的 `comparison` 列会区分 `recompute_vs_reuse` 和
+`recompute_vs_reuse_no_rope`。
+
+CKSim replay 只给 vLLM 设置 `VLLM_CONTEXT_SEGMENT_KV_SAVE_DIR`。不要在这些
+phase 里设置 `VLLM_CONTEXT_SEGMENT_KV_DIR=$KV_SAVE_DIR`，否则每次重启都会把前面
+dump 的 `.pt` 全部预加载进 GPU，随着 recompute/reuse/no-rope 文件累积很容易 OOM；
+每个 phase 的 source 都应在该 phase 内重新收集。
 
 ## 复用范围（reuse scope）
 

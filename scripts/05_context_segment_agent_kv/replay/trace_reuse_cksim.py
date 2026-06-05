@@ -29,7 +29,7 @@ JSON_PATH = OUTPUT_ROOT / "trace_reuse_cksim_summary.json"
 
 @dataclass
 class CKSimRow:
-    comparison: str  # always "recompute_vs_reuse"
+    comparison: str
     task: str
     skill_name: str
     occurrence: int
@@ -72,26 +72,27 @@ def cksim(a: torch.Tensor, b: torch.Tensor, tokens: int) -> tuple[float, float]:
     return float(head_scores.mean().item()), float(token_scores.mean().item())
 
 
-def compare_recompute_reuse(
+def compare_kv_entries(
     kv_dir: Path,
+    comparison: str,
     task: str,
     skill_name: str,
     occurrence: int,
     skill_tokens: int,
     recompute_cache_id: str,
-    reuse_cache_id: str,
+    other_cache_id: str,
 ) -> list[CKSimRow]:
     recompute = load_entry(kv_dir, recompute_cache_id)
-    reuse = load_entry(kv_dir, reuse_cache_id)
+    other = load_entry(kv_dir, other_cache_id)
     rows: list[CKSimRow] = []
-    for layer in sorted(set(recompute["kv_by_layer"]) & set(reuse["kv_by_layer"])):
+    for layer in sorted(set(recompute["kv_by_layer"]) & set(other["kv_by_layer"])):
         recompute_k, recompute_v = recompute["kv_by_layer"][layer]
-        reuse_k, reuse_v = reuse["kv_by_layer"][layer]
-        key_score, key_token_mean = cksim(recompute_k, reuse_k, skill_tokens)
-        value_score, value_token_mean = cksim(recompute_v, reuse_v, skill_tokens)
+        other_k, other_v = other["kv_by_layer"][layer]
+        key_score, key_token_mean = cksim(recompute_k, other_k, skill_tokens)
+        value_score, value_token_mean = cksim(recompute_v, other_v, skill_tokens)
         rows.append(
             CKSimRow(
-                comparison="recompute_vs_reuse",
+                comparison=comparison,
                 task=task,
                 skill_name=skill_name,
                 occurrence=occurrence,
@@ -123,13 +124,14 @@ def dump_recompute(base_url, model, msgs, tools, api_key, cache_id, start, end_p
 
 
 def dump_reuse(base_url, model, msgs, tools, api_key,
-               src_cache_id, dump_cache_id, start, end, end_plus1, req_id):
-    # Inject the saved source (rope) at [start,end), then dump the resulting
-    # injected KV over [start,end_plus1). The +1 token forces registration to
-    # happen after the injection has been applied.
+               src_cache_id, dump_cache_id, start, end, end_plus1, req_id,
+               mode="rope"):
+    # Inject the saved source at [start,end), then dump the resulting injected
+    # KV over [start,end_plus1). The +1 token forces registration to happen
+    # after the injection has been applied.
     cfg = {
         "targets": [
-            {"cache_id": src_cache_id, "mode": "rope",
+            {"cache_id": src_cache_id, "mode": mode,
              "target_start": start, "target_end": end}
         ],
         "sources": [
@@ -148,28 +150,34 @@ def write_outputs(rows: list[CKSimRow], metadata: dict[str, Any]) -> None:
         writer.writeheader()
         writer.writerows(asdict(r) for r in rows)
 
-    key_mean = sum(r.key_cksim for r in rows) / len(rows)
-    value_mean = sum(r.value_cksim for r in rows) / len(rows)
-    by_skill: dict[str, dict[str, float]] = {}
-    for sk in sorted({r.skill_name for r in rows}):
-        subset = [r for r in rows if r.skill_name == sk]
-        by_skill[sk] = {
-            "mean_key_cksim": sum(r.key_cksim for r in subset) / len(subset),
-            "mean_value_cksim": sum(r.value_cksim for r in subset) / len(subset),
-            "rows": len(subset),
+    by_comparison: dict[str, dict[str, Any]] = {}
+    for cmp_name in sorted({r.comparison for r in rows}):
+        cmp_rows = [r for r in rows if r.comparison == cmp_name]
+        by_skill: dict[str, dict[str, float]] = {}
+        for sk in sorted({r.skill_name for r in cmp_rows}):
+            subset = [r for r in cmp_rows if r.skill_name == sk]
+            by_skill[sk] = {
+                "mean_key_cksim": sum(r.key_cksim for r in subset) / len(subset),
+                "mean_value_cksim": sum(r.value_cksim for r in subset) / len(subset),
+                "rows": len(subset),
+            }
+        by_comparison[cmp_name] = {
+            "rows": len(cmp_rows),
+            "mean_key_cksim": sum(r.key_cksim for r in cmp_rows) / len(cmp_rows),
+            "mean_value_cksim": sum(r.value_cksim for r in cmp_rows) / len(cmp_rows),
+            "by_skill": by_skill,
         }
     summary = {
         **metadata,
         "rows": len(rows),
-        "mean_key_cksim": key_mean,
-        "mean_value_cksim": value_mean,
-        "by_skill": by_skill,
+        "by_comparison": by_comparison,
         "csv_path": str(CSV_PATH),
     }
     JSON_PATH.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\n[done] rows={len(rows)}")
-    print(f"[done] mean key   CKSim (recompute vs reuse) = {key_mean:.6f}")
-    print(f"[done] mean value CKSim (recompute vs reuse) = {value_mean:.6f}")
+    for cmp_name, stats in by_comparison.items():
+        print(f"[done] {cmp_name} mean key   CKSim = {stats['mean_key_cksim']:.6f}")
+        print(f"[done] {cmp_name} mean value CKSim = {stats['mean_value_cksim']:.6f}")
     print(f"[done] csv:  {CSV_PATH}")
     print(f"[done] json: {JSON_PATH}")
 
@@ -208,6 +216,10 @@ def reuse_cache_id(task: str, skill_name: str, occurrence: int) -> str:
     return f"cksim-reuse-{task}-{skill_name}-occ{occurrence}"
 
 
+def reuse_no_rope_cache_id(task: str, skill_name: str, occurrence: int) -> str:
+    return f"cksim-reuse-no-rope-{task}-{skill_name}-occ{occurrence}"
+
+
 def run_recompute_phase(args, tasks: list[str], system_prompt: str, tools: list[dict]) -> None:
     base_url = f"http://127.0.0.1:{args.vllm_port}"
     api_key = os.environ.get("VLLM_API_KEY", "EMPTY")
@@ -231,7 +243,15 @@ def run_recompute_phase(args, tasks: list[str], system_prompt: str, tools: list[
             print(f"  [dump recompute] {name:24s} occ{occ} span={tend - tstart} tok", flush=True)
 
 
-def run_reuse_phase(args, tasks: list[str], system_prompt: str, tools: list[dict]) -> None:
+def run_reuse_phase(
+    args,
+    tasks: list[str],
+    system_prompt: str,
+    tools: list[dict],
+    *,
+    mode: str,
+    phase_label: str,
+) -> None:
     base_url = f"http://127.0.0.1:{args.vllm_port}"
     api_key = os.environ.get("VLLM_API_KEY", "EMPTY")
     rid = 0
@@ -239,10 +259,10 @@ def run_reuse_phase(args, tasks: list[str], system_prompt: str, tools: list[dict
     def next_id(tag: str) -> str:
         nonlocal rid
         rid += 1
-        return f"cksim-reuse-{tag}-{rid}"
+        return f"cksim-{phase_label}-{tag}-{rid}"
 
     for task in tasks:
-        print(f"\n--- reuse task={task} ---", flush=True)
+        print(f"\n--- {phase_label} task={task} ---", flush=True)
         collected_src: dict[str, tuple[str, int]] = {}
         for _inv, msgs, name, occ, tstart, tend in iter_new_skill_occurrences(task, system_prompt):
             length = tend - tstart
@@ -264,12 +284,20 @@ def run_reuse_phase(args, tasks: list[str], system_prompt: str, tools: list[dict
                 print(f"  [skip] {name} occ{occ}: span len {length} != source {src_len}", flush=True)
                 continue
 
-            dump_cache = reuse_cache_id(task, name, occ)
+            dump_cache = (
+                reuse_no_rope_cache_id(task, name, occ)
+                if mode == "direct"
+                else reuse_cache_id(task, name, occ)
+            )
             dump_reuse(
                 base_url, args.model, msgs, tools, api_key,
                 src_cache, dump_cache, tstart, tend, tend + 1, next_id("dump"),
+                mode=mode,
             )
-            print(f"  [dump reuse]     {name:24s} occ{occ} span={length} tok", flush=True)
+            print(
+                f"  [dump {phase_label}] {name:24s} occ{occ} span={length} tok",
+                flush=True,
+            )
 
 
 def summarize_phase(args, tasks: list[str]) -> None:
@@ -284,33 +312,45 @@ def summarize_phase(args, tasks: list[str]) -> None:
                 continue
             length = tend - tstart
             r_cache = recompute_cache_id(task, name, occ)
-            u_cache = reuse_cache_id(task, name, occ)
-            try:
-                case_rows = compare_recompute_reuse(kv_dir, task, name, occ, length, r_cache, u_cache)
-            except FileNotFoundError as exc:
-                print(f"  [skip] missing KV for {task} {name} occ{occ}: {exc}", flush=True)
-                continue
-            rows.extend(case_rows)
-            mk = sum(r.key_cksim for r in case_rows) / len(case_rows)
-            mv = sum(r.value_cksim for r in case_rows) / len(case_rows)
-            print(
-                f"  [cmp] {task:32s} {name:24s} occ{occ} span={length} tok "
-                f"key={mk:.6f} value={mv:.6f}",
-                flush=True,
-            )
-            case_records.append(
-                {
-                    "task": task,
-                    "skill_name": name,
-                    "occurrence": occ,
-                    "skill_tokens": length,
+            comparisons = [
+                ("recompute_vs_reuse", reuse_cache_id(task, name, occ)),
+                ("recompute_vs_reuse_no_rope", reuse_no_rope_cache_id(task, name, occ)),
+            ]
+            case_record: dict[str, Any] = {
+                "task": task,
+                "skill_name": name,
+                "occurrence": occ,
+                "skill_tokens": length,
+                "recompute_cache_id": r_cache,
+                "comparisons": {},
+            }
+            for comparison, other_cache in comparisons:
+                try:
+                    case_rows = compare_kv_entries(
+                        kv_dir, comparison, task, name, occ, length, r_cache, other_cache
+                    )
+                except FileNotFoundError as exc:
+                    print(
+                        f"  [skip] missing KV for {comparison} {task} {name} occ{occ}: {exc}",
+                        flush=True,
+                    )
+                    continue
+                rows.extend(case_rows)
+                mk = sum(r.key_cksim for r in case_rows) / len(case_rows)
+                mv = sum(r.value_cksim for r in case_rows) / len(case_rows)
+                print(
+                    f"  [cmp] {comparison:28s} {task:32s} {name:24s} occ{occ} "
+                    f"span={length} tok key={mk:.6f} value={mv:.6f}",
+                    flush=True,
+                )
+                case_record["comparisons"][comparison] = {
                     "layers": len(case_rows),
                     "mean_key_cksim": mk,
                     "mean_value_cksim": mv,
-                    "recompute_cache_id": r_cache,
-                    "reuse_cache_id": u_cache,
+                    "cache_id": other_cache,
                 }
-            )
+            if case_record["comparisons"]:
+                case_records.append(case_record)
 
     if not rows:
         raise RuntimeError(
@@ -323,7 +363,7 @@ def summarize_phase(args, tasks: list[str]) -> None:
             "model": args.model,
             "tasks": tasks,
             "kv_cache_dir": str(kv_dir),
-            "comparison": "recompute_vs_reuse",
+            "comparisons": ["recompute_vs_reuse", "recompute_vs_reuse_no_rope"],
             "cases": case_records,
         },
     )
@@ -335,9 +375,9 @@ def main() -> None:
     )
     ap.add_argument(
         "--phase",
-        choices=["recompute", "reuse", "summarize"],
+        choices=["recompute", "reuse", "reuse_no_rope", "summarize"],
         required=True,
-        help="which phase to run; run_cksim.sh orchestrates all three",
+        help="which phase to run; run_cksim.sh orchestrates all phases",
     )
     ap.add_argument("--tasks", default="all", help="comma list of task names, or 'all'")
     ap.add_argument("--vllm-port", type=int, default=int(os.environ.get("VLLM_PORT", "8000")))
@@ -368,7 +408,13 @@ def main() -> None:
     if args.phase == "recompute":
         run_recompute_phase(args, tasks, system_prompt, tools)
     elif args.phase == "reuse":
-        run_reuse_phase(args, tasks, system_prompt, tools)
+        run_reuse_phase(
+            args, tasks, system_prompt, tools, mode="rope", phase_label="reuse"
+        )
+    elif args.phase == "reuse_no_rope":
+        run_reuse_phase(
+            args, tasks, system_prompt, tools, mode="direct", phase_label="reuse-no-rope"
+        )
 
 
 if __name__ == "__main__":

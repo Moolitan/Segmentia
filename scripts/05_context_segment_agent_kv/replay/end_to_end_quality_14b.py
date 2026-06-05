@@ -43,9 +43,7 @@ if str(PKG_ROOT) not in sys.path:
     sys.path.insert(0, str(PKG_ROOT))
 
 from core.config import SKILL_TOKEN_LOCATIONS  # noqa: E402
-from residual_checkpoint_probe_14b import (  # noqa: E402
-    DEFAULT_MODEL, build_full_ids, skill_hidden,
-)
+from core.hf_probe import DEFAULT_MODEL, build_full_ids, skill_hidden  # noqa: E402
 
 
 def main() -> None:

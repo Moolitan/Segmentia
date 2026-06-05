@@ -31,66 +31,20 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
 import torch
-import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 PKG_ROOT = Path(__file__).resolve().parent.parent
 if str(PKG_ROOT) not in sys.path:
     sys.path.insert(0, str(PKG_ROOT))
 
-from core.config import SKILL_TOKEN_LOCATIONS, TRACES_DIR  # noqa: E402
-from core.message_convert import convert_messages, convert_tools  # noqa: E402
-
-DEFAULT_MODEL = "/mnt/Large_Language_Model_Lab_1/llm_models/Qwen3-14B/Qwen/Qwen3-14B"
-
-
-def last_invocation_path(task: str) -> Path:
-    files = sorted(
-        (TRACES_DIR / task).glob("turn_*_inv_*.json"),
-        key=lambda p: (int(p.stem.split("turn_")[1].split("_")[0]),
-                       int(p.stem.split("inv_")[1])),
-    )
-    if not files:
-        raise FileNotFoundError(f"no invocation files for {task}")
-    return files[-1]
-
-
-def build_full_ids(tok, task: str):
-    system_prompt = (TRACES_DIR / "_system_prompt.txt").read_text(encoding="utf-8")
-    tools = convert_tools(json.loads((TRACES_DIR / "_tools.json").read_text(encoding="utf-8")))
-    inv = json.loads(last_invocation_path(task).read_text(encoding="utf-8"))
-    msgs, _ = convert_messages(inv["messages"], system_prompt)
-    ids = tok.apply_chat_template(
-        msgs, tools=tools, add_generation_prompt=False,
-        tokenize=True, return_tensors="pt",
-        chat_template_kwargs={"enable_thinking": True},
-    )
-    return ids  # [1, T]
-
-
-def cos_rows(a: torch.Tensor, b: torch.Tensor) -> float:
-    return float(F.cosine_similarity(a.float(), b.float(), dim=-1).mean().item())
-
-
-@torch.no_grad()
-def value_of(model, layer_idx: int, h_rows: torch.Tensor) -> torch.Tensor:
-    layer = model.model.layers[layer_idx]
-    return layer.self_attn.v_proj(layer.input_layernorm(h_rows))
-
-
-@torch.no_grad()
-def skill_hidden(model, ids: torch.Tensor, start: int, end: int) -> list[torch.Tensor]:
-    """Return per-layer skill-span activation (input to each layer), on CPU."""
-    out = model(ids, output_hidden_states=True, use_cache=False)
-    hs = [h[0, start:end, :].to("cpu") for h in out.hidden_states]  # len L+1
-    del out
-    torch.cuda.empty_cache()
-    return hs
+from core.config import SKILL_TOKEN_LOCATIONS  # noqa: E402
+from core.hf_probe import (  # noqa: E402
+    DEFAULT_MODEL, build_full_ids, cos_rows, skill_hidden, value_of,
+)
 
 
 def main() -> None:

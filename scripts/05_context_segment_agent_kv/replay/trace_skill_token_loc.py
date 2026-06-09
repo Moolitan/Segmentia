@@ -18,7 +18,7 @@ from core.config import DEFAULT_TASKS, ROOT, TRACES_DIR  # noqa: E402
 from core.message_convert import convert_messages, convert_tools  # noqa: E402
 from core.segments import find_skill_segments, span_token_offsets  # noqa: E402
 
-
+# bash scripts/05_context_segment_agent_kv/replay/run_trace_skill_token_loc.sh
 def build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         description=(
@@ -74,6 +74,31 @@ def last_invocation_path(task: str) -> Path:
     if not files:
         raise FileNotFoundError(f"No invocation JSON files found for task: {task}")
     return files[-1]
+
+
+def collect_skill_first_invocations(task: str, system_prompt: str) -> dict[str, list[int]]:
+    """Walk all invocation files for a task in chronological order.
+
+    Returns {skill_name: [inv_file_idx_occ1, inv_file_idx_occ2, ...]}, where
+    each index is 1-based (the Nth file in sorted order).  An index is appended
+    each time a new copy of the skill appears in the cumulative message history
+    (i.e. the skill's occurrence count in that request exceeds the previous max).
+    """
+    files = sorted((TRACES_DIR / task).glob("turn_*_inv_*.json"), key=invocation_sort_key)
+    seen: dict[str, int] = {}      # skill -> max occurrence count seen so far
+    result: dict[str, list[int]] = {}
+    for idx, f in enumerate(files, start=1):
+        inv = json.loads(f.read_text(encoding="utf-8"))
+        msgs, _ = convert_messages(inv["messages"], system_prompt)
+        segs = find_skill_segments(msgs)
+        counts: dict[str, int] = {}
+        for name, _, _, _ in segs:
+            counts[name] = counts.get(name, 0) + 1
+        for skill, c in counts.items():
+            if c > seen.get(skill, 0):
+                seen[skill] = c
+                result.setdefault(skill, []).append(idx)
+    return result
 
 
 def relative_to_root(path: Path) -> str:
@@ -137,6 +162,11 @@ def collect_task_skill_locations(
             {k: v for k, v in occurrence.items() if k != "skill"}
         )
 
+    # Walk all invocation files to record which file index each skill occ first appears in.
+    inv_indices = collect_skill_first_invocations(task, system_prompt)
+    for skill_name in skills:
+        skills[skill_name]["invocation_indices"] = inv_indices.get(skill_name, [])
+
     return {
         "task": task,
         "trace_file": relative_to_root(trace_path),
@@ -165,9 +195,61 @@ def build_cross_task_index(task_records: list[dict[str, Any]]) -> dict[str, Any]
                     "token_spans": [
                         occ["token_span"] for occ in skill_record["occurrences"]
                     ],
+                    "invocation_indices": skill_record.get("invocation_indices", []),
                 }
             )
     return index
+
+
+def format_skill_token_locations(task_records: list[dict[str, Any]]) -> str:
+    """Generate Python source code for the SKILL_TOKEN_LOCATIONS constant."""
+    lines = ["SKILL_TOKEN_LOCATIONS: dict[str, dict] = {"]
+    for record in task_records:
+        task = record["task"]
+        lines.append(f'    "{task}": {{')
+        lines.append('        "skills": {')
+        for skill_name, skill_data in record["skills"].items():
+            occs = skill_data["occurrences"]
+            tokens = occs[0]["tokens"] if occs else None
+            msg_indices = [o["message_index"] for o in occs]
+            token_spans = [o["token_span"] for o in occs]
+            inv_indices = skill_data.get("invocation_indices", [])
+            lines.append(f'            "{skill_name}": {{')
+            lines.append(f'                "tokens": {tokens},')
+            lines.append(f'                "message_indices": {msg_indices},')
+            lines.append(f'                "token_spans": {token_spans},')
+            lines.append(f'                "invocation_indices": {inv_indices},')
+            lines.append('            },')
+        lines.append('        },')
+        lines.append('    },')
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def update_config_py(task_records: list[dict[str, Any]]) -> None:
+    """Rewrite the SKILL_TOKEN_LOCATIONS block in core/config.py in-place."""
+    config_path = PKG_ROOT / "core" / "config.py"
+    content = config_path.read_text(encoding="utf-8")
+
+    start_marker = "SKILL_TOKEN_LOCATIONS: dict[str, dict] = {"
+    start_idx = content.index(start_marker)
+
+    # Find the matching closing brace at depth 0.
+    depth, end_idx = 0, start_idx
+    for i, ch in enumerate(content[start_idx:], start=start_idx):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end_idx = i + 1
+                break
+
+    new_block = format_skill_token_locations(task_records)
+    config_path.write_text(
+        content[:start_idx] + new_block + content[end_idx:], encoding="utf-8"
+    )
+    print(f"[config] updated SKILL_TOKEN_LOCATIONS in {config_path}", flush=True)
 
 
 def main() -> None:
@@ -225,6 +307,10 @@ def main() -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"[done] wrote {output}", flush=True)
+
+    # Rewrite SKILL_TOKEN_LOCATIONS in config.py when we have token span data.
+    if not args.char_only and task_records:
+        update_config_py(task_records)
 
 
 if __name__ == "__main__":

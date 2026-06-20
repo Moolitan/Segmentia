@@ -64,6 +64,8 @@ def chat_completion(
     temperature: float = 0.0,
     top_p: float = 1.0,
     seed: int | None = None,
+    logprobs: bool = False,
+    top_logprobs: int | None = None,
 ) -> tuple[dict, float]:
     payload: dict[str, Any] = {
         "model": model,
@@ -76,6 +78,10 @@ def chat_completion(
     }
     if seed is not None:
         payload["seed"] = seed
+    if logprobs:
+        payload["logprobs"] = True
+        if top_logprobs is not None:
+            payload["top_logprobs"] = top_logprobs
     if tools:
         payload["tools"] = tools
     if context_segment_cache is not None:

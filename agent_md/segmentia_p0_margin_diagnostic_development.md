@@ -45,8 +45,8 @@ Read vs Write
 新增文件：
 
 ```text
-scripts/06_context_free_segment_cache/run_margin_diagnostic.py
-scripts/06_context_free_segment_cache/run_margin_diagnostic.sh
+scripts/06_context_free_segment_cache/logprob_margin_diagnostic/run_margin_diagnostic.py
+scripts/06_context_free_segment_cache/logprob_margin_diagnostic/run_margin_diagnostic.sh
 ```
 
 代码流程：
@@ -58,7 +58,7 @@ results/problem_exploration/headline_semantic_action_gap/data/decode_outputs.jso
 ```
 
 2. 按 `(task, skill, occurrence, invocation_index)` 分组，得到 recompute/direct/rope 的 action label。
-3. 用和 `run_decode_compare.py` 相同的 case selection、message conversion、context segment cache 配置重新请求 vLLM。
+3. 用和 `module/replay.py`、各研究目录本地 `decode_compare.py` 相同的 case selection、message conversion、context segment cache 配置重新请求 vLLM。
 4. 请求中打开：
 
 ```text
@@ -96,14 +96,14 @@ results/problem_exploration/logprob_margin_diagnostic/tables/margin_case_summary
 由用户运行：
 
 ```bash
-bash scripts/06_context_free_segment_cache/run_margin_diagnostic.sh
+bash scripts/06_context_free_segment_cache/logprob_margin_diagnostic/run_margin_diagnostic.sh
 ```
 
 可缩小范围试跑：
 
 ```bash
 TASKS=doc_coauthoring_design_doc MODES=recompute,rope \
-bash scripts/06_context_free_segment_cache/run_margin_diagnostic.sh
+bash scripts/06_context_free_segment_cache/logprob_margin_diagnostic/run_margin_diagnostic.sh
 ```
 
 ## Go / No-Go 判据
@@ -161,7 +161,7 @@ figures/margin_first_diff_scatter.png
 本轮新增：
 
 ```text
-scripts/06_context_free_segment_cache/plot_margin_diagnostic.py
+scripts/06_context_free_segment_cache/logprob_margin_diagnostic/plot_margin_diagnostic.py
 ```
 
 该脚本只读取已完成实验的 CSV 后处理表，不启动 vLLM，不重新 decode。生成三张图：
@@ -183,14 +183,14 @@ scripts/06_context_free_segment_cache/plot_margin_diagnostic.py
 已完成：
 
 ```text
-python -m py_compile scripts/06_context_free_segment_cache/vllm_client.py scripts/06_context_free_segment_cache/run_margin_diagnostic.py
-bash -n scripts/06_context_free_segment_cache/run_margin_diagnostic.sh
+python -m py_compile scripts/06_context_free_segment_cache/module/vllm_client.py scripts/06_context_free_segment_cache/logprob_margin_diagnostic/run_margin_diagnostic.py
+bash -n scripts/06_context_free_segment_cache/logprob_margin_diagnostic/run_margin_diagnostic.sh
 ```
 
 未执行：
 
 ```text
-bash scripts/06_context_free_segment_cache/run_margin_diagnostic.sh
+bash scripts/06_context_free_segment_cache/logprob_margin_diagnostic/run_margin_diagnostic.sh
 ```
 
 原因：按 `AGENTS.md` 约束，实验由用户手动启动。用户已在后续完成运行，本轮只做结果分析与文档整理。

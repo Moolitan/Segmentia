@@ -41,11 +41,11 @@ SEGMENTIA_OUTPUT_DIR=/mnt/Large_Language_Model_Lab_1/wsh/Segmentia/output/06_con
 
 代码路径调整：
 
-- `scripts/06_context_free_segment_cache/config.py`：新增 `SEGMENTIA_OUTPUT_DIR`，并将 `DEFAULT_KV_DIR`、`DEFAULT_CKSIM_KV_DIR`、`DEFAULT_REPAIR_KV_DIR` 指向外存。
-- `scripts/06_context_free_segment_cache/run_decode_compare.sh`：`KV_DIR` 默认指向外存 `offline_skill_kv/`，`OUTPUT` 仍写仓库轻量结果目录。
-- `scripts/06_context_free_segment_cache/run_value_repair_compare.sh`：`SKILL_KV_DIR`、`CKSIM_KV_DIR`、`REPAIR_KV_DIR` 默认指向外存。
-- `scripts/06_context_free_segment_cache/run_all_overnight.sh`：评估阶段默认从外存 `cksim_kv/` 读取 CKSim KV。
-- `scripts/06_context_free_segment_cache/build_repair_arms_kv.py`：repair arms 默认输出目录改为 `config.py` 中的外存路径。
+- `scripts/06_context_free_segment_cache/module/config.py`：新增 `SEGMENTIA_OUTPUT_DIR`，并将 `DEFAULT_KV_DIR`、`DEFAULT_CKSIM_KV_DIR`、`DEFAULT_REPAIR_KV_DIR` 指向外存。
+- `scripts/06_context_free_segment_cache/headline_semantic_action_gap/run_decode_compare.sh`：`KV_DIR` 默认指向外存 `offline_skill_kv/`，`OUTPUT` 仍写仓库轻量结果目录。
+- `scripts/06_context_free_segment_cache/value_repair_key_value_diagnosis/run_value_repair_compare.sh`：`SKILL_KV_DIR`、`CKSIM_KV_DIR`、`REPAIR_KV_DIR` 默认指向外存。
+- `scripts/06_context_free_segment_cache/pipeline/run_all_overnight.sh`：评估阶段默认从外存 `cksim_kv/` 读取 CKSim KV。
+- `scripts/06_context_free_segment_cache/value_repair_key_value_diagnosis/build_repair_arms_kv.py`：repair arms 默认输出目录改为 `config.py` 中的外存路径。
 - `scripts/06_context_free_segment_cache/README.md`：更新命令示例，明确大 KV 使用 `SEGMENTIA_OUTPUT_DIR`。
 - `AGENTS.md`：更新第 4 节迁移记录。
 

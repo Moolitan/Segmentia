@@ -1,121 +1,83 @@
 # Segmentia Results Organization Development
 
+## 总开发目标
+
+维护 `results/problem_exploration/` 作为 Segmentia 问题探究阶段的可复查入口，使阶段 summary 负责导航和证据链，各子研究 summary 负责实验细节。
+
 ## 开发阶段总览
 
 | 阶段 | 名称 | 目标 | 当前进度 | 剩余 |
 |---|---|---|---|---|
-| 1 | 明确阶段命名 | 将当前结果从脚本编号转为研究阶段命名 | 已完成：当前阶段命名为 `problem_exploration` | 无 |
-| 2 | 整理 Segmentia 结果 | 将旧 `results/06_context_free_segment_cache` 改为语义化阶段目录 | 已完成：迁移到 `results/problem_exploration/` | 无 |
-| 3 | 删除非当前主线旧结果 | 清理 `03_*` 和 `05_context_segment_agent_kv` 旧结果目录 | 已完成 | 无 |
-| 4 | 更新代码与文档 | 更新默认结果路径、README、AGENTS 和索引文档 | 已完成 | 后续新增脚本必须沿用新路径 |
-| 5 | 补齐研究内容规范 | 每个研究内容补 `summary.md` 和 `source_manifest.csv`，阶段 summary 补目标/导航/总论/建议 | 已完成 | 无 |
-| 6 | 验证 | 检查旧路径、目录大小、脚本语法与 Python 编译 | 已完成 | 无 |
+| 1 | 阶段目录 | 使用研究阶段和研究问题命名结果目录。 | 已完成。 | 无。 |
+| 2 | 子研究结构 | 每个子研究具备 summary、figures、tables、data 和 manifest。 | 已完成。 | 新研究持续遵守。 |
+| 3 | 大文件迁移 | KV `.pt` 写入外存，仓库只保留轻量产物。 | 已完成。 | 新实验持续遵守。 |
+| 4 | 阶段入口 | 阶段 summary 只保留导航、证据链、结论边界和下一步。 | 已完成本轮重写。 | 随新结果更新。 |
 
-## 目标
-
-整理 `results/`，不再用 `06`、`05`、`03` 这类脚本编号表达研究阶段。当前 Segmentia 尚未进入设计阶段，因此归入问题探究阶段：
+## 当前目录
 
 ```text
 results/problem_exploration/
+  headline_semantic_action_gap/
+  stability_systematic_vs_noise/
+  value_repair_key_value_diagnosis/
+  logprob_margin_diagnostic/
+  thinking_to_action_divergence/
+  attention_matrix_visualization/
+  manifests/
+  summary.md
+  source_manifest.csv
 ```
 
-## 实施记录
+## 文档职责
 
-旧结果目录：
+阶段 `summary.md`：
 
 ```text
-results/06_context_free_segment_cache/
+阶段目标
+研究导航
+跨实验的证据链
+已验证事实 / 当前推测 / 尚未解决
+下一阶段顺序
 ```
 
-新阶段目录：
+子研究 `summary.md`：
 
 ```text
-results/problem_exploration/
+具体研究问题
+实验设置与代码逻辑
+数据来源
+指标定义
+结果和图表
+限制
 ```
 
-子研究结构：
+`source_manifest.csv` 记录阶段和子研究入口、图表与数据的来源，不替代研究结论。
+
+## 路径边界
+
+轻量结果根目录：
 
 ```text
-headline_semantic_action_gap/
-stability_systematic_vs_noise/
-value_repair_key_value_diagnosis/
-manifests/
+/home/wsh/openhands_code_research/results/problem_exploration/
 ```
 
-删除的旧结果目录：
+大体量 KV：
 
 ```text
-results/03_14B_anthropic/
-results/03_14B_anthropic_3/
-results/03_14B_anthropic_sglang/
-results/05_context_segment_agent_kv/
+/mnt/Large_Language_Model_Lab_1/wsh/Segmentia/output/06_context_free_segment_cache/
 ```
 
-这些目录不是当前 Segmentia problem exploration 的结果，且用户已确认可以删除。
+脚本目录 `scripts/06_context_free_segment_cache/` 是代码位置，不作为结果阶段名。
 
-## 代码与文档更新
+## 本轮修改
 
-- `scripts/06_context_free_segment_cache/config.py`：`RESULTS_DIR` 改为 `results/problem_exploration`。
-- `scripts/06_context_free_segment_cache/run_decode_compare.sh`：默认 headline decode 输出改到 `headline_semantic_action_gap/data/`。
-- `scripts/06_context_free_segment_cache/run_value_repair_compare.sh`：默认 value-repair decode 输出和评估命令改到 `value_repair_key_value_diagnosis/`。
-- `scripts/06_context_free_segment_cache/run_all_overnight.sh`：三类子研究的 decode、evaluate、plot 路径改到对应子目录。
-- `scripts/06_context_free_segment_cache/plot_action_fidelity.py`、`plot_metrics.py`、`plot_report_figures.py`：默认读写路径改到结构化阶段目录。
-- `scripts/06_context_free_segment_cache/README.md`：更新轻量结果路径示例。
-- `AGENTS.md`：记录当前阶段目录为 `problem_exploration`。
-- `results/problem_exploration/summary.md`：阶段级入口，已融合原 `scripts/06_context_free_segment_cache/ANALYSIS_REPORT.md` 的完整分析内容。
-- `results/problem_exploration/source_manifest.csv`：记录所有轻量产物来源。
-- `results/problem_exploration/headline_semantic_action_gap/summary.md` 与 `source_manifest.csv`：补齐 semantic/action gap 子研究入口。
-- `results/problem_exploration/stability_systematic_vs_noise/summary.md` 与 `source_manifest.csv`：补齐 systematic-vs-noise 子研究入口。
-- `results/problem_exploration/value_repair_key_value_diagnosis/summary.md` 与 `source_manifest.csv`：补齐 key/value diagnosis 子研究入口。
-- `results/problem_exploration/analysis_summary.md`：已删除。该文件是早期单次实验分析，已被当前阶段 summary 和三个子研究 summary 取代。
-- `results/problem_exploration/decode_texts.txt`：已移动到 `headline_semantic_action_gap/data/decode_texts.txt`。
-- `scripts/06_context_free_segment_cache/ANALYSIS_REPORT.md`：已删除；不在结果包下保留单独 `analysis_report.md`，避免违反 `AGENTS.md` 中每个研究内容以 `summary.md` 作为主入口的组织方式。
+- 删除没有当前实验结果的 `cross_occurrence_controller/` 结果目录及其阶段 manifest 引用。
+- 方法设计入口改为直接指向 scripts 下的当前设计文档。
+- 更新阶段下一步为 FV existence、interaction mediation、block restoration 和 online policy。
 
-## 验证结果
+## 验证
 
-目录大小：
-
-```text
-results: 4.4M
-results/problem_exploration: 4.4M
-```
-
-旧结果目录删除验证：
-
-```text
-results/06_context_free_segment_cache: removed
-results/05_context_segment_agent_kv: removed
-results/03_14B_anthropic: removed
-results/03_14B_anthropic_3: removed
-results/03_14B_anthropic_sglang: removed
-```
-
-文件数量验证：
-
-```text
-lightweight files in problem_exploration: 34
-.pt files in repo result package: 0
-.pt files in external Segmentia output: 104
-```
-
-默认路径验证：
-
-```text
-RESULTS_DIR=/home/wsh/openhands_code_research/results/problem_exploration
-DEFAULT_OUTPUT_JSONL=/home/wsh/openhands_code_research/results/problem_exploration/headline_semantic_action_gap/data/decode_outputs.jsonl
-DEFAULT_METRICS_CSV=/home/wsh/openhands_code_research/results/problem_exploration/headline_semantic_action_gap/tables/headline_metrics_rows.csv
-DEFAULT_KV_DIR=/mnt/Large_Language_Model_Lab_1/wsh/Segmentia/output/06_context_free_segment_cache/offline_skill_kv
-```
-
-语法检查：
-
-```text
-python -m py_compile ... : passed
-bash -n run_decode_compare.sh run_value_repair_compare.sh run_all_overnight.sh : passed
-```
-
-## 后续注意事项
-
-- 后续不要再把新结果写回 `results/06_context_free_segment_cache/`。
-- 脚本目录名仍为 `scripts/06_context_free_segment_cache/`，这是代码位置，不再等同于结果阶段名。
-- 大体量 KV `.pt` 仍保存在 `/mnt/Large_Language_Model_Lab_1/wsh/Segmentia/output/06_context_free_segment_cache/`，不随轻量结果目录整理移动。
+- `results/problem_exploration/cross_occurrence_controller/` 已不存在。
+- 阶段 `source_manifest.csv` 中所有保留路径均存在。
+- 阶段 summary 的方法设计链接指向现有 `LiangFunctionVectorDesign.md`。
+- 其他问题探究子研究的原始 JSONL、CSV 和图未修改。

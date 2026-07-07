@@ -7,7 +7,7 @@ import torch
 from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorMetadata
 from vllm.logger import init_logger
 
-from cskcache.integration.vllm.utils import load_segment_catalog, load_vllm_config
+from cskcache.integration.vllm.utils import load_vllm_config
 from cskcache.v1.matcher import SegmentCatalog, find_best_occurrence
 from cskcache.v1.metadata import CSKCacheMode, CSKLoadPlan, SegmentOccurrence
 from cskcache.v1.registry import CSKCacheRegistry, get_global_registry
@@ -43,7 +43,6 @@ class CSKCacheConnectorV1Impl:
         self._parent = parent
         self._block_size = vllm_config.cache_config.block_size
         self._config = load_vllm_config(vllm_config)
-        self._catalog: SegmentCatalog = load_segment_catalog(self._config)
         self._registry: CSKCacheRegistry = get_global_registry()
         self._plans: dict[str, CSKLoadPlan] = {}
         self._allocated_blocks: dict[str, tuple[list[int], ...]] = {}
@@ -52,6 +51,9 @@ class CSKCacheConnectorV1Impl:
         if self._config.kv_dir is not None:
             loaded = self._registry.load_dir(self._config.kv_dir)
             logger.info("CSKCache loaded %d KV entries from %s", len(loaded), self._config.kv_dir)
+        self._catalog: SegmentCatalog = SegmentCatalog.from_entries(
+            self._registry.entries()
+        )
         logger.info(
             "CSKCache connector initialized: role=%s catalog_segments=%d",
             role,
@@ -216,8 +218,8 @@ class CSKCacheConnectorV1Impl:
 
     def save_kv_layer(self, layer_name: str, kv_layer: torch.Tensor, attn_metadata: Any, **kwargs: Any) -> None:
         # Save path is intentionally deferred. First version only validates
-        # catalog-driven load.  TODO(B): when prompt metadata is available, use
-        # it to save canonical segment KV without relying on oracle span xargs.
+        # registry-derived load. TODO(B): when prompt metadata is available,
+        # use it to save canonical segment KV without relying on oracle span xargs.
         return
 
     def wait_for_save(self) -> None:
@@ -234,4 +236,3 @@ class CSKCacheConnectorV1Impl:
             kv_cache = getattr(layer, "kv_cache", None)
             if kv_cache is not None:
                 self._kv_caches[layer_name] = kv_cache[0]
-

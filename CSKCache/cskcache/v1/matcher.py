@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Iterable
 
 from cskcache.v1.metadata import (
+    CSKCacheEntry,
     CSKCacheMode,
     CSKCacheSegment,
     SegmentOccurrence,
@@ -17,21 +16,17 @@ class SegmentCatalog:
     segments: list[CSKCacheSegment]
 
     @classmethod
-    def from_json_file(cls, path: str | Path) -> "SegmentCatalog":
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
-        raw_segments = payload.get("segments", payload)
-        if not isinstance(raw_segments, list):
-            raise ValueError("CSKCache catalog must be a list or {'segments': list}")
+    def from_entries(cls, entries: Iterable[CSKCacheEntry]) -> "SegmentCatalog":
         segments: list[CSKCacheSegment] = []
-        for item in raw_segments:
-            token_ids = tuple(int(value) for value in item["token_ids"])
+        for entry in entries:
+            token_ids = tuple(int(value) for value in entry.token_ids)
             if not token_ids:
                 continue
             segments.append(
                 CSKCacheSegment(
-                    cache_id=str(item.get("cache_id", item.get("segment_id"))),
+                    cache_id=entry.cache_id,
                     token_ids=token_ids,
-                    mode=CSKCacheMode(item.get("mode", CSKCacheMode.ROPE_REUSE.value)),
+                    mode=CSKCacheMode.REUSE,
                 )
             )
         return cls(segments)
@@ -108,4 +103,3 @@ def find_best_occurrence(
     if covering:
         return max(covering, key=lambda item: (item.end, item.length, item.cache_id))
     return None
-

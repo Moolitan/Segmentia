@@ -2,14 +2,15 @@
 
 CSKCache is the package-side migration target for Segmentia context-skill KV
 cache reuse. The first version is intentionally small: it provides a vLLM v1
-KV connector, an exact token catalog matcher, and paged-KV slot helpers.
+KV connector, a registry-derived token matcher, and paged-KV slot helpers.
 
 ## Current Scope
 
 Implemented:
 
 - `CSKCacheConnectorV1` vLLM connector entrypoint.
-- Exact token catalog matching for segment occurrence discovery.
+- Exact token matching against loaded KV registry entries for segment occurrence
+  discovery.
 - Scheduler-side load planning when `num_computed_tokens == segment_start`.
 - Worker-side KV scatter from loaded `.pt` entries into vLLM paged KV cache.
 - Direct reuse path and RoPE key correction for reused spans whose target
@@ -24,24 +25,11 @@ Deferred:
 - Save path for collecting canonical segment KV through CSKCache.
 - End-to-end parity validation on real vLLM model runs.
 
-## Catalog Format
+## Cache Entry Metadata
 
-First version uses token catalog matching:
-
-```json
-{
-  "segments": [
-    {
-      "cache_id": "skill-a",
-      "token_ids": [1, 2, 3],
-      "mode": "rope"
-    }
-  ]
-}
-```
-
-The corresponding KV directory contains `<cache_id>.pt` files in the same basic
-format as the old Segmentia context segment cache:
+The first version discovers reusable segments from loaded cache entries. Each
+`<cache_id>.pt` file carries both the cached KV tensors and the token sequence
+that identifies the segment:
 
 ```python
 {
@@ -54,6 +42,9 @@ format as the old Segmentia context segment cache:
     },
 }
 ```
+
+`SegmentCatalog` is derived in memory from these registry entries. There is no
+separate external catalog file in the CSKCache core path.
 
 ## vLLM Loading
 
@@ -68,7 +59,6 @@ vllm serve ... \
     "kv_connector_module_path": "cskcache.integration.vllm.v1_connector",
     "kv_role": "kv_both",
     "kv_connector_extra_config": {
-      "cskcache.catalog_file": "/path/to/catalog.json",
       "cskcache.kv_dir": "/path/to/kv_dir"
     }
   }'
@@ -77,7 +67,6 @@ vllm serve ... \
 Environment variable alternatives:
 
 ```text
-CSKCACHE_CATALOG_FILE=/path/to/catalog.json
 CSKCACHE_KV_DIR=/path/to/kv_dir
 ```
 

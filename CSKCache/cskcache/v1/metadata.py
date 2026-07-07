@@ -15,9 +15,10 @@ class CSKCacheMode(str, Enum):
 class CSKCacheSegment:
     """Canonical segment token sequence known to CSKCache.
 
-    First version uses token catalog matching.  TODO(B): allow an upstream
-    prompt builder to pass structured segment metadata, then use token matching
-    only as a verification step instead of the primary discovery mechanism.
+    First version uses token matching against segment entries derived from the
+    loaded KV registry. TODO(B): allow an upstream prompt builder to pass
+    structured segment metadata, then use token matching only as a verification
+    step instead of the primary discovery mechanism.
     """
 
     cache_id: str
@@ -66,4 +67,3 @@ class CSKLoadPlan:
     @property
     def length(self) -> int:
         return self.end - self.start
-

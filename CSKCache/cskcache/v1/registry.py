@@ -18,6 +18,9 @@ class CSKCacheRegistry:
     def get(self, cache_id: str) -> CSKCacheEntry | None:
         return self._entries.get(cache_id)
 
+    def entries(self) -> tuple[CSKCacheEntry, ...]:
+        return tuple(self._entries.values())
+
     def __contains__(self, cache_id: str) -> bool:
         return cache_id in self._entries
 
@@ -68,4 +71,3 @@ def get_global_registry() -> CSKCacheRegistry:
     if _GLOBAL_REGISTRY is None:
         _GLOBAL_REGISTRY = CSKCacheRegistry()
     return _GLOBAL_REGISTRY
-

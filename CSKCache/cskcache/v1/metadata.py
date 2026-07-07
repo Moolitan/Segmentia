@@ -8,8 +8,7 @@ import torch
 
 class CSKCacheMode(str, Enum):
     DISABLED = "disabled"
-    DIRECT_REUSE = "direct"
-    ROPE_REUSE = "rope"
+    REUSE = "reuse"
 
 
 @dataclass(frozen=True)
@@ -23,7 +22,7 @@ class CSKCacheSegment:
 
     cache_id: str
     token_ids: tuple[int, ...]
-    mode: CSKCacheMode = CSKCacheMode.ROPE_REUSE
+    mode: CSKCacheMode = CSKCacheMode.REUSE
 
     @property
     def length(self) -> int:

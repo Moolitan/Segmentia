@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import os
+import sys
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -30,6 +32,12 @@ if TYPE_CHECKING:
 
 
 logger = init_logger(__name__)
+
+
+def _trace(message: str, *args: object) -> None:
+    if args:
+        message = message % args
+    print(f"CSKCacheTRACE pid={os.getpid()} {message}", file=sys.stderr, flush=True)
 
 
 class CSKProbePhase(str, Enum):
@@ -123,15 +131,27 @@ class CSKCacheConnectorV1Impl:
         self._pending_boundaries: dict[str, SegmentOccurrence] = {}
         self._probe_states: dict[str, CSKProbeState] = {}
         self._probe_accumulators: dict[str, CSKProbeAccumulator] = {}
+        self._probe_warned_no_accumulator: set[str] = set()
+        self._probe_warned_worker_meta_type: set[str] = set()
+        self._probe_skip_logs_remaining = 8
+        self._probe_no_match_logs_remaining = 8
+        self._probe_cap_logs_remaining = 20
         self._current_rope: object | None = None
         if self._config.kv_dir is not None:
             loaded = self._registry.load_dir(self._config.kv_dir)
-            logger.info("CSKCache loaded %d KV entries from %s", len(loaded), self._config.kv_dir)
+            logger.warning("CSKCache loaded %d KV entries from %s", len(loaded), self._config.kv_dir)
+            _trace("loaded %d KV entries from %s", len(loaded), self._config.kv_dir)
         self._catalog: SegmentCatalog = SegmentCatalog.from_entries(
             self._registry.entries()
         )
-        logger.info(
+        logger.warning(
             "CSKCache connector initialized: role=%s catalog_segments=%d probe_enabled=%s",
+            role,
+            len(self._catalog.segments),
+            self._config.probe_enabled,
+        )
+        _trace(
+            "connector initialized role=%s catalog_segments=%d probe_enabled=%s",
             role,
             len(self._catalog.segments),
             self._config.probe_enabled,
@@ -153,6 +173,19 @@ class CSKCacheConnectorV1Impl:
             return num_new_tokens
 
         base = base_num_computed_tokens
+        if self._probe_cap_logs_remaining > 0:
+            _trace(
+                "cap request=%s base=%d num_new=%d phase=%s span=[%d,%d) probe_end=%d anchor_end=%d",
+                request.request_id,
+                base,
+                num_new_tokens,
+                state.phase.value,
+                state.start,
+                state.end,
+                state.probe_end,
+                state.anchor_end,
+            )
+            self._probe_cap_logs_remaining -= 1
         if base < state.start:
             return min(num_new_tokens, state.start - base)
         if base > state.end:
@@ -216,6 +249,25 @@ class CSKCacheConnectorV1Impl:
             end=state.end,
             token_ids=target_token_ids,
             source_offset=load_start - state.start,
+        )
+        logger.warning(
+            "CSKCache in-process load requested request=%s cache_id=%s "
+            "target=[%d,%d) source_offset=%d tokens=%d",
+            request.request_id,
+            state.cache_id,
+            load_start,
+            state.end,
+            load_start - state.start,
+            length,
+        )
+        _trace(
+            "in-process load requested request=%s cache_id=%s target=[%d,%d) source_offset=%d tokens=%d",
+            request.request_id,
+            state.cache_id,
+            load_start,
+            state.end,
+            load_start - state.start,
+            length,
         )
         return length
 
@@ -331,12 +383,42 @@ class CSKCacheConnectorV1Impl:
                         gate_metric=state.gate_metric,
                     )
                 )
+                logger.warning(
+                    "CSKCache probe capture scheduled request=%s cache_id=%s "
+                    "target=[%d,%d)",
+                    req_id,
+                    state.cache_id,
+                    state.start,
+                    state.probe_end,
+                )
+                _trace(
+                    "probe capture scheduled request=%s cache_id=%s target=[%d,%d)",
+                    req_id,
+                    state.cache_id,
+                    state.start,
+                    state.probe_end,
+                )
                 state.pending_capture = None
                 state.phase = CSKProbePhase.WAIT_PROBE
             elif state.pending_capture == "anchor":
                 state.pending_capture = None
                 state.phase = CSKProbePhase.NEED_LOAD
                 state.load_start = state.anchor_end
+                logger.warning(
+                    "CSKCache anchor completed request=%s cache_id=%s "
+                    "anchor_end=%d load_start=%d",
+                    req_id,
+                    state.cache_id,
+                    state.anchor_end,
+                    state.load_start,
+                )
+                _trace(
+                    "anchor completed request=%s cache_id=%s anchor_end=%d load_start=%d",
+                    req_id,
+                    state.cache_id,
+                    state.anchor_end,
+                    state.load_start,
+                )
         return meta
 
     def start_load_kv(self, forward_context: "ForwardContext", **kwargs: Any) -> None:
@@ -424,8 +506,43 @@ class CSKCacheConnectorV1Impl:
         for probe in metadata.probes:
             entry = self._registry.get(probe.cache_id)
             if entry is None or layer_name not in entry.kv_by_layer:
+                if self._probe_skip_logs_remaining > 0:
+                    sample_layers = []
+                    if entry is not None:
+                        sample_layers = list(entry.kv_by_layer.keys())[:3]
+                    logger.warning(
+                        "CSKCache probe skip layer request=%s cache_id=%s "
+                        "layer_name=%s entry_found=%s sample_entry_layers=%s",
+                        probe.req_id,
+                        probe.cache_id,
+                        layer_name,
+                        entry is not None,
+                        sample_layers,
+                    )
+                    _trace(
+                        "probe skip layer request=%s cache_id=%s layer_name=%s entry_found=%s sample_entry_layers=%s",
+                        probe.req_id,
+                        probe.cache_id,
+                        layer_name,
+                        entry is not None,
+                        sample_layers,
+                    )
+                    self._probe_skip_logs_remaining -= 1
                 continue
             if not probe.block_ids or probe.block_ids[0] is None:
+                logger.warning(
+                    "CSKCache probe skip layer request=%s cache_id=%s "
+                    "layer_name=%s reason=no_block_ids",
+                    probe.req_id,
+                    probe.cache_id,
+                    layer_name,
+                )
+                _trace(
+                    "probe skip layer request=%s cache_id=%s layer_name=%s reason=no_block_ids",
+                    probe.req_id,
+                    probe.cache_id,
+                    layer_name,
+                )
                 continue
             reuse_key, reuse_value = prepare_reuse_slice(
                 entry,
@@ -452,6 +569,19 @@ class CSKCacheConnectorV1Impl:
                     gate_metric=probe.gate_metric,
                 )
                 self._probe_accumulators[probe.req_id] = accumulator
+                logger.warning(
+                    "CSKCache probe accumulator created request=%s cache_id=%s "
+                    "first_layer=%s",
+                    probe.req_id,
+                    probe.cache_id,
+                    layer_name,
+                )
+                _trace(
+                    "probe accumulator created request=%s cache_id=%s first_layer=%s",
+                    probe.req_id,
+                    probe.cache_id,
+                    layer_name,
+                )
             accumulator.add_layer(
                 layer_name,
                 reuse_key=reuse_key,
@@ -465,6 +595,26 @@ class CSKCacheConnectorV1Impl:
 
     def build_connector_worker_meta(self) -> CSKProbeWorkerMetadata | None:
         if not self._probe_accumulators:
+            metadata = self._parent._get_connector_metadata()
+            if isinstance(metadata, CSKConnectorMetadata):
+                for probe in metadata.probes:
+                    if probe.req_id not in self._probe_warned_no_accumulator:
+                        logger.warning(
+                            "CSKCache probe metadata produced no accumulator "
+                            "request=%s cache_id=%s target=[%d,%d)",
+                            probe.req_id,
+                            probe.cache_id,
+                            probe.start,
+                            probe.end,
+                        )
+                        _trace(
+                            "probe metadata produced no accumulator request=%s cache_id=%s target=[%d,%d)",
+                            probe.req_id,
+                            probe.cache_id,
+                            probe.start,
+                            probe.end,
+                        )
+                        self._probe_warned_no_accumulator.add(probe.req_id)
             return None
         decisions: list[CSKProbeDecision] = []
         for req_id, accumulator in list(self._probe_accumulators.items()):
@@ -474,11 +624,30 @@ class CSKCacheConnectorV1Impl:
                 logger.warning("CSKCache probe decision skipped for %s: %s", req_id, exc)
             finally:
                 self._probe_accumulators.pop(req_id, None)
+        if decisions:
+            logger.warning("CSKCache built %d probe worker decision(s)", len(decisions))
+            _trace("built %d probe worker decision(s)", len(decisions))
         return CSKProbeWorkerMetadata(decisions=decisions) if decisions else None
 
     def update_connector_output(self, connector_output: KVConnectorOutput) -> None:
         worker_meta = connector_output.kv_connector_worker_meta
         if not isinstance(worker_meta, CSKProbeWorkerMetadata):
+            for req_id, state in self._probe_states.items():
+                if state.phase == CSKProbePhase.WAIT_PROBE and req_id not in self._probe_warned_worker_meta_type:
+                    logger.warning(
+                        "CSKCache waiting for probe decision but worker meta is %s "
+                        "request=%s cache_id=%s",
+                        type(worker_meta).__name__,
+                        req_id,
+                        state.cache_id,
+                    )
+                    _trace(
+                        "waiting for probe decision but worker meta is %s request=%s cache_id=%s",
+                        type(worker_meta).__name__,
+                        req_id,
+                        state.cache_id,
+                    )
+                    self._probe_warned_worker_meta_type.add(req_id)
             return
         for decision in worker_meta.decisions:
             state = self._probe_states.get(decision.req_id)
@@ -493,6 +662,16 @@ class CSKCacheConnectorV1Impl:
             logger.info(
                 "CSKCache probe decision request=%s cache_id=%s passed=%s "
                 "gate=%.6f tau=%.6f metric=%s layers=%d",
+                decision.req_id,
+                decision.cache_id,
+                decision.passed,
+                decision.metrics.gate_value,
+                decision.tau,
+                decision.metrics.gate_metric,
+                decision.metrics.num_layers,
+            )
+            _trace(
+                "probe decision request=%s cache_id=%s passed=%s gate=%.6f tau=%.6f metric=%s layers=%d",
                 decision.req_id,
                 decision.cache_id,
                 decision.passed,
@@ -535,7 +714,18 @@ class CSKCacheConnectorV1Impl:
             token_ids,
             num_computed_tokens,
         )
-        if occurrence is None or occurrence.end <= num_computed_tokens:
+        if occurrence is None:
+            if self._probe_no_match_logs_remaining > 0:
+                _trace(
+                    "no probe occurrence request=%s computed=%d token_count=%d catalog_segments=%d",
+                    req_id,
+                    num_computed_tokens,
+                    len(token_ids),
+                    len(self._catalog.segments),
+                )
+                self._probe_no_match_logs_remaining -= 1
+            return None
+        if occurrence.end <= num_computed_tokens:
             return None
         if occurrence.start < num_computed_tokens:
             return None
@@ -560,4 +750,24 @@ class CSKCacheConnectorV1Impl:
             gate_metric=self._config.gate_metric,
         )
         self._probe_states[req_id] = state
+        logger.warning(
+            "CSKCache probe state request=%s cache_id=%s target=[%d,%d) "
+            "probe_len=%d anchor_len=%d",
+            req_id,
+            occurrence.cache_id,
+            occurrence.start,
+            occurrence.end,
+            state.probe_len,
+            state.anchor_len,
+        )
+        _trace(
+            "probe state request=%s cache_id=%s target=[%d,%d) probe_len=%d anchor_len=%d token_count=%d",
+            req_id,
+            occurrence.cache_id,
+            occurrence.start,
+            occurrence.end,
+            state.probe_len,
+            state.anchor_len,
+            len(token_ids),
+        )
         return state

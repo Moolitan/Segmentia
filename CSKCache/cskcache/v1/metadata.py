@@ -44,6 +44,10 @@ class SegmentOccurrence:
 
 @dataclass
 class CSKCacheEntry:
+    """Offline KV cache entry for a segment of tokens. 
+    
+    This is the data structure that is stored in the cache and retrieved when a segment is reused.
+    """
     cache_id: str
     source_start: int
     source_end: int
@@ -57,6 +61,11 @@ class CSKCacheEntry:
 
 @dataclass(frozen=True)
 class CSKLoadPlan:
+    """Final plan for loading a segment from the cache. 
+
+    This is the data structure that is returned by the cache when a segment is requested, 
+    and it contains all the information needed to load the segment into the model.
+    """
     req_id: str
     cache_id: str
     mode: CSKCacheMode

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -37,12 +38,24 @@ class CSKCacheConnectorV1(KVConnectorBase_V1):
         role: KVConnectorRole,
         kv_cache_config: "KVCacheConfig | None" = None,
     ) -> None:
+        print(
+            "CSKCacheConnectorV1 __init__ from "
+            f"{__file__} role={role} extra_config="
+            f"{vllm_config.kv_transfer_config.kv_connector_extra_config}",
+            file=sys.stderr,
+            flush=True,
+        )
         super().__init__(
             vllm_config=vllm_config,
             role=role,
             kv_cache_config=kv_cache_config,
         )
         self._engine = CSKCacheConnectorV1Impl(vllm_config, role, self)
+        print(
+            "CSKCacheConnectorV1 engine ready",
+            file=sys.stderr,
+            flush=True,
+        )
 
     def register_kv_caches(self, kv_caches: dict[str, torch.Tensor]) -> None:
         self._engine.register_kv_caches(kv_caches)

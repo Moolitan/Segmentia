@@ -15,15 +15,20 @@ Implemented:
 - Worker-side KV scatter from loaded `.pt` entries into vLLM paged KV cache.
 - Direct reuse path and RoPE key correction for reused spans whose target
   positions differ from their source positions.
+- Experimental probe-gated reuse path. When enabled, CSKCache asks the vLLM
+  scheduler to prefill a short probe prefix of the matched segment, compares
+  the recomputed probe KV with RoPE-shifted offline KV, then either loads the
+  remaining segment or computes an anchor prefix before loading the tail.
 
 Deferred:
 
-- Scheduler boundary hook for stopping chunked prefill at the next discovered
-  segment start.
 - Prompt-builder metadata path. TODO(B): upstream prompt metadata should become
   the primary segment discovery source, with token matching used as validation.
 - Save path for collecting canonical segment KV through CSKCache.
 - End-to-end parity validation on real vLLM model runs.
+- Dedicated internal mini-forward and attention-inline fusion paths are not
+  implemented. The current gate uses normal vLLM prefill for the probe/anchor
+  tokens.
 
 ## Cache Entry Metadata
 
@@ -69,6 +74,29 @@ Environment variable alternatives:
 ```text
 CSKCACHE_KV_DIR=/path/to/kv_dir
 ```
+
+Optional probe-gated reuse settings:
+
+```json
+{
+  "cskcache.probe_enabled": true,
+  "cskcache.probe_tokens": 4,
+  "cskcache.anchor_tokens": 32,
+  "cskcache.probe_tau": 0.15,
+  "cskcache.gate_metric": "max"
+}
+```
+
+Probe-gated reuse requires the local vLLM scheduler hook that exposes two
+duck-typed connector methods:
+
+```text
+cap_num_new_tokens(request, base_num_computed_tokens, num_new_tokens)
+get_inprocess_load_tokens(request, num_computed_tokens)
+```
+
+These hooks let CSKCache stop chunked prefill at the segment start/probe/anchor
+boundaries and schedule an in-process KV splice for the reused tail.
 
 ## Old vLLM Patch Status
 

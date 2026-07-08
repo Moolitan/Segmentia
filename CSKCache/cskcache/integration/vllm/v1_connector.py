@@ -65,11 +65,17 @@ class CSKCacheConnectorV1(KVConnectorBase_V1):
     def wait_for_save(self) -> None:
         self._engine.wait_for_save()
 
+    def build_connector_worker_meta(self):
+        return self._engine.build_connector_worker_meta()
+
     def get_finished(
         self,
         finished_req_ids: set[str],
     ) -> tuple[set[str] | None, set[str] | None]:
         return self._engine.get_finished(finished_req_ids)
+
+    def update_connector_output(self, connector_output) -> None:
+        self._engine.update_connector_output(connector_output)
 
     def shutdown(self) -> None:
         self._engine.shutdown()
@@ -95,3 +101,21 @@ class CSKCacheConnectorV1(KVConnectorBase_V1):
     ) -> KVConnectorMetadata:
         return self._engine.build_connector_meta(scheduler_output)
 
+    def cap_num_new_tokens(
+        self,
+        request: "Request",
+        base_num_computed_tokens: int,
+        num_new_tokens: int,
+    ) -> int:
+        return self._engine.cap_num_new_tokens(
+            request,
+            base_num_computed_tokens,
+            num_new_tokens,
+        )
+
+    def get_inprocess_load_tokens(
+        self,
+        request: "Request",
+        num_computed_tokens: int,
+    ) -> int:
+        return self._engine.get_inprocess_load_tokens(request, num_computed_tokens)

@@ -63,6 +63,7 @@ class CSKLoadPlan:
     start: int
     end: int
     token_ids: tuple[int, ...]
+    source_offset: int = 0
 
     @property
     def length(self) -> int:

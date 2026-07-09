@@ -146,3 +146,42 @@ class CSKLoadPlan:
     @property
     def length(self) -> int:
         return self.end - self.start
+
+
+@dataclass(frozen=True)
+class CSKReqMeta:
+    """Worker instruction for a concrete K/V load.
+
+    The scheduler has already allocated blocks for the target request span.
+    ``block_ids`` is the physical slot mapping that lets the worker scatter
+    cached K/V into the paged cache before any query depends on those positions.
+    This is a plain (vLLM-free) carrier; the integration layer wraps a list of
+    these into vLLM's ``KVConnectorMetadata`` envelope for serialization.
+    """
+
+    plan: CSKLoadPlan
+    block_ids: tuple[list[int], ...]
+
+
+@dataclass(frozen=True)
+class CSKProbeMeta:
+    """Worker instruction for gathering a recomputed probe span.
+
+    The span ``[start, end)`` has just been scheduled as normal prefill. During
+    the worker save hook, the freshly written K/V is gathered from the same
+    slots and compared to the corresponding cached K/V slice to build a gate
+    decision. Plain (vLLM-free) carrier, like :class:`CSKReqMeta`.
+    """
+
+    req_id: str
+    cache_id: str
+    start: int
+    end: int
+    source_offset: int
+    block_ids: tuple[list[int], ...]
+    tau: float
+    gate_metric: str
+
+    @property
+    def length(self) -> int:
+        return self.end - self.start

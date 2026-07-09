@@ -6,23 +6,38 @@ import warnings
 import torch
 
 from cskcache.v1.metadata import CSKCacheEntry
+from cskcache.v1.storage.local_disk_backend import payload_to_entry
+from cskcache.v1.storage.storage_manager import StorageManager
 
 
 class CSKCacheRegistry:
-    def __init__(self) -> None:
-        self._entries: dict[str, CSKCacheEntry] = {}
+    """Backward-compatible facade over the tiered storage stack.
+
+    Historically this class *was* the storage: a plain dict of entries. It now
+    delegates to a :class:`StorageManager`, so existing callers keep the same
+    ``put/get/entries/load_file/load_dir`` API while transparently gaining the
+    CPU+disk tiering. Constructed with no arguments it is a pure in-memory store,
+    identical in behavior to the original registry.
+    """
+
+    def __init__(self, storage: StorageManager | None = None) -> None:
+        self._storage = storage if storage is not None else StorageManager()
+
+    @property
+    def storage(self) -> StorageManager:
+        return self._storage
 
     def put(self, entry: CSKCacheEntry) -> None:
-        self._entries[entry.cache_id] = entry
+        self._storage.put(entry)
 
     def get(self, cache_id: str) -> CSKCacheEntry | None:
-        return self._entries.get(cache_id)
+        return self._storage.get(cache_id)
 
     def entries(self) -> tuple[CSKCacheEntry, ...]:
-        return tuple(self._entries.values())
+        return self._storage.all_entries()
 
     def __contains__(self, cache_id: str) -> bool:
-        return cache_id in self._entries
+        return self._storage.contains(cache_id)
 
     def load_file(
         self,
@@ -30,19 +45,7 @@ class CSKCacheRegistry:
         device: torch.device | str | None = None,
     ) -> CSKCacheEntry:
         payload = torch.load(path, map_location=device or "cpu")
-        entry = CSKCacheEntry(
-            cache_id=str(payload["cache_id"]),
-            source_start=int(payload["source_start"]),
-            source_end=int(payload["source_end"]),
-            token_ids=[int(value) for value in payload.get("token_ids", [])],
-            kv_by_layer={
-                str(layer): (
-                    key.to(device) if device else key,
-                    value.to(device) if device else value,
-                )
-                for layer, (key, value) in payload["kv_by_layer"].items()
-            },
-        )
+        entry = payload_to_entry(payload, device=device)
         self.put(entry)
         return entry
 

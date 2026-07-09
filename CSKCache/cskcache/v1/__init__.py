@@ -1,4 +1,4 @@
-from cskcache.v1.matcher import SegmentCatalog, find_best_occurrence
+from cskcache.v1.token.token_database import SegmentCatalog, find_best_occurrence
 from cskcache.v1.metadata import (
     CSKCacheDirectivePlacement,
     CSKCacheEntry,

@@ -16,10 +16,20 @@ from cskcache.v1.registry import CSKCacheRegistry
 
 
 class _Config:
+    """Minimal connector config used by the adapter methods under test."""
+
     probe_enabled = False
 
 
 class _Request:
+    """Small stand-in for vLLM Request.
+
+    The production path receives kv_transfer_params from the OpenAI request and
+    stores it on vllm.v1.request.Request. These tests exercise only CSKCache's
+    scheduler-side directive logic, so a tiny object with the same attributes is
+    enough and avoids starting a vLLM server.
+    """
+
     def __init__(self, token_ids: list[int], cskcache: dict | None) -> None:
         self.request_id = "req-directive"
         self.prompt_token_ids = token_ids
@@ -30,6 +40,8 @@ class _Request:
 
 
 def _make_entry() -> CSKCacheEntry:
+    """Build one cached skill entry with deterministic token identity."""
+
     length = 6
     key = torch.zeros(length, 1, 2)
     value = torch.ones(length, 1, 2)
@@ -43,6 +55,8 @@ def _make_entry() -> CSKCacheEntry:
 
 
 def _make_impl(entry: CSKCacheEntry) -> CSKCacheConnectorV1Impl:
+    """Construct only the adapter fields needed by directive scheduling tests."""
+
     registry = CSKCacheRegistry()
     registry.put(entry)
     impl = CSKCacheConnectorV1Impl.__new__(CSKCacheConnectorV1Impl)
@@ -60,6 +74,13 @@ def _make_impl(entry: CSKCacheEntry) -> CSKCacheConnectorV1Impl:
 
 
 def test_explicit_span_directive_caps_then_loads_mid_prompt() -> None:
+    """Explicit span path for [prefix][skill][trailing].
+
+    The directive says the current skill is [2, 8). Since the scheduler starts
+    at token 0, CSKCache should first cap normal prefill to 2 tokens, then
+    report a 6-token in-process load at the span boundary.
+    """
+
     entry = _make_entry()
     impl = _make_impl(entry)
     request = _Request(
@@ -87,6 +108,13 @@ def test_explicit_span_directive_caps_then_loads_mid_prompt() -> None:
 
 
 def test_suffix_before_trailing_directive_resolves_span() -> None:
+    """Suffix-before-trailing path for chat-template tail tokens.
+
+    The prompt ends with two non-skill tokens. CSKCache derives target_end by
+    subtracting trailing_token_count, then derives target_start from the cached
+    entry length. It still verifies exact token equality before accepting it.
+    """
+
     entry = _make_entry()
     impl = _make_impl(entry)
     request = _Request(
@@ -107,6 +135,13 @@ def test_suffix_before_trailing_directive_resolves_span() -> None:
 
 
 def test_disabled_directive_does_not_fallback_to_matching() -> None:
+    """enabled=false is an explicit opt-out, not an absent directive.
+
+    The prompt contains the cached tokens, so fallback matching would find a
+    hit. This test guards the contract that explicit disable suppresses that
+    fallback for the request.
+    """
+
     entry = _make_entry()
     impl = _make_impl(entry)
     request = _Request([1, 2, *entry.token_ids], {"enabled": False})
@@ -118,6 +153,13 @@ def test_disabled_directive_does_not_fallback_to_matching() -> None:
 
 
 def test_directive_token_mismatch_fails_closed() -> None:
+    """A directive with stale offsets must not silently fall back.
+
+    Wrong token identity at the requested span would scatter unrelated K/V into
+    the model cache. The adapter should raise immediately so the caller fixes
+    its span computation or tokenizer/template assumptions.
+    """
+
     entry = _make_entry()
     impl = _make_impl(entry)
     request = _Request(

@@ -1,3 +1,22 @@
+"""vLLM V1 adapter for CSKCache.
+
+This file is the bridge between vLLM's generic KVConnector lifecycle and the
+CSKCache-specific notion of a reusable skill span.
+
+The split is important:
+
+- Scheduler-side methods run in the EngineCore scheduler process. They decide
+  where a request should pause, how many tokens can be treated as externally
+  computed, and what opaque metadata should be sent to the worker.
+- Worker-side methods run around model forward. They receive that metadata,
+  load/scatter cached K/V into vLLM's paged KV cache, and optionally gather
+  probe K/V from a real prefill chunk.
+
+CSKCache has two ways to identify the current skill span. The preferred path is
+an agent-sent directive under request.kv_transfer_params["cskcache"]. If that is
+absent, the adapter falls back to exact token matching over loaded cache entries.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -48,6 +67,15 @@ def _trace(message: str, *args: object) -> None:
 
 
 class CSKProbePhase(str, Enum):
+    """Scheduler-visible state machine for probe-gated reuse.
+
+    Probe mode does not immediately trust the offline skill K/V. It first lets
+    vLLM normally prefill a short probe prefix, gathers the real K/V from that
+    prefill on the worker, compares it to RoPE-corrected cached K/V, and then
+    either loads the remaining tail or recomputes an anchor prefix before
+    loading the tail.
+    """
+
     NEED_PROBE = "need_probe"
     WAIT_PROBE = "wait_probe"
     NEED_ANCHOR = "need_anchor"
@@ -57,6 +85,8 @@ class CSKProbePhase(str, Enum):
 
 @dataclass
 class CSKProbeState:
+    """Per-request scheduler state for a candidate probe-gated skill span."""
+
     req_id: str
     cache_id: str
     start: int
@@ -85,12 +115,26 @@ class CSKProbeState:
 
 @dataclass(frozen=True)
 class CSKReqMeta:
+    """Worker metadata for a concrete K/V load.
+
+    The scheduler has already allocated blocks for the target request span.
+    block_ids is the physical slot mapping that lets the worker scatter cached
+    K/V into vLLM's paged cache before any query depends on those positions.
+    """
+
     plan: CSKLoadPlan
     block_ids: tuple[list[int], ...]
 
 
 @dataclass(frozen=True)
 class CSKProbeMeta:
+    """Worker metadata for gathering a real recomputed probe span.
+
+    The span [start, end) has just been scheduled as normal prefill. During
+    save_kv_layer(), the worker gathers the freshly written K/V from the same
+    slots and compares it to the corresponding cached K/V slice.
+    """
+
     req_id: str
     cache_id: str
     start: int
@@ -107,12 +151,16 @@ class CSKProbeMeta:
 
 @dataclass
 class CSKConnectorMetadata(KVConnectorMetadata):
+    """Opaque scheduler-to-worker payload carried by vLLM KVConnectorOutput."""
+
     requests: list[CSKReqMeta] = field(default_factory=list)
     probes: list[CSKProbeMeta] = field(default_factory=list)
 
 
 @dataclass
 class CSKProbeWorkerMetadata(KVConnectorWorkerMetadata):
+    """Worker-to-scheduler payload carrying probe gate decisions."""
+
     decisions: list[CSKProbeDecision] = field(default_factory=list)
 
     def aggregate(
@@ -132,10 +180,23 @@ class CSKCacheConnectorV1Impl:
         self._block_size = vllm_config.cache_config.block_size
         self._config = load_vllm_config(vllm_config)
         self._registry: CSKCacheRegistry = get_global_registry()
+        # _plans are created on the scheduler side and consumed exactly once by
+        # build_connector_meta(). They represent load work for the next worker
+        # forward, not persistent request state.
         self._plans: dict[str, CSKLoadPlan] = {}
+        # vLLM block allocation happens after scheduling decisions. We remember
+        # the resulting physical block IDs here so build_connector_meta() can
+        # attach them to the pending load/probe metadata.
         self._allocated_blocks: dict[str, tuple[list[int], ...]] = {}
         self._kv_caches: dict[str, torch.Tensor] = {}
+        # For a directive span that starts after the current frontier, the
+        # scheduler first needs to prefill the prefix up to span.start. The
+        # occurrence is held here until get_inprocess_load_tokens() observes the
+        # frontier at the span start and turns it into a load plan.
         self._pending_boundaries: dict[str, SegmentOccurrence] = {}
+        # Only directive-created boundaries use the non-probe in-process path.
+        # Fallback matcher boundaries are still recorded for diagnostics and do
+        # not change legacy behavior by silently injecting historical matches.
         self._directive_boundaries: set[str] = set()
         self._probe_states: dict[str, CSKProbeState] = {}
         self._probe_accumulators: dict[str, CSKProbeAccumulator] = {}
@@ -174,6 +235,14 @@ class CSKCacheConnectorV1Impl:
         base_num_computed_tokens: int,
         num_new_tokens: int,
     ) -> int:
+        """Ask CSKCache whether this scheduler chunk must stop early.
+
+        vLLM may try to prefill a long prompt in one chunk. CSKCache needs a
+        chance to intervene exactly before the current skill span. Returning a
+        smaller number lets vLLM compute the prefix first; returning 0 means
+        "pause this request until connector state advances".
+        """
+
         if num_new_tokens <= 0:
             return num_new_tokens
 
@@ -184,8 +253,13 @@ class CSKCacheConnectorV1Impl:
                 and request.request_id in self._directive_boundaries
             ):
                 base = base_num_computed_tokens
+                # Prefix before the skill is ordinary model prefill. Cap this
+                # chunk so it ends exactly at the directive span start.
                 if base < boundary.start:
                     return min(num_new_tokens, boundary.start - base)
+                # At the span start, the next scheduler pass should call
+                # get_inprocess_load_tokens() and allocate slots for cached K/V
+                # without running a forward pass for these tokens.
                 if base < boundary.end:
                     return 0
                 self._pending_boundaries.pop(request.request_id, None)
@@ -211,12 +285,16 @@ class CSKCacheConnectorV1Impl:
             )
             self._probe_cap_logs_remaining -= 1
         if base < state.start:
+            # Compute ordinary prefix tokens until the probe span begins.
             return min(num_new_tokens, state.start - base)
         if base > state.end:
             state.phase = CSKProbePhase.DONE
             return num_new_tokens
 
         if state.phase == CSKProbePhase.NEED_PROBE:
+            # Let vLLM prefill only the probe prefix. When the scheduled chunk
+            # reaches probe_end, build_connector_meta() will ask the worker to
+            # gather those freshly computed K/V tensors for the gate decision.
             if base >= state.probe_end:
                 state.phase = CSKProbePhase.WAIT_PROBE
                 return 0
@@ -226,9 +304,14 @@ class CSKCacheConnectorV1Impl:
             return capped
 
         if state.phase == CSKProbePhase.WAIT_PROBE:
+            # The worker has not returned a gate decision yet. Scheduling more
+            # tokens would cross the decision boundary and make the comparison
+            # meaningless, so hold this request.
             return 0
 
         if state.phase == CSKProbePhase.NEED_ANCHOR:
+            # Gate failed. Recompute a larger anchor prefix normally, then only
+            # load the remaining tail from cache.
             if base >= state.anchor_end:
                 state.phase = CSKProbePhase.NEED_LOAD
                 state.load_start = state.anchor_end
@@ -239,6 +322,8 @@ class CSKCacheConnectorV1Impl:
             return capped
 
         if state.phase == CSKProbePhase.NEED_LOAD:
+            # The next action is an in-process connector load, not model
+            # forward. get_inprocess_load_tokens() performs that transition.
             return 0
 
         return num_new_tokens
@@ -248,6 +333,15 @@ class CSKCacheConnectorV1Impl:
         request: "Request",
         num_computed_tokens: int,
     ) -> int:
+        """Return how many tokens should be loaded locally without forward.
+
+        This hook is used for middle-of-prompt spans. The scheduler allocates
+        slots for the returned length, records num_scheduled_tokens=0, and later
+        build_connector_meta() sends the load plan and physical slots to the
+        worker. This is how CSKCache can inject [skill_start, skill_end) while
+        still letting vLLM normally prefill trailing template tokens afterwards.
+        """
+
         req_id = request.request_id
         boundary = self._pending_boundaries.get(req_id)
         if (
@@ -255,6 +349,9 @@ class CSKCacheConnectorV1Impl:
             and req_id in self._directive_boundaries
             and num_computed_tokens == boundary.start
         ):
+            # Directive path: the agent told us exactly where the current skill
+            # lives. This branch does not scan for older occurrences in the
+            # prompt and therefore cannot repeat-inject historical skills.
             token_ids = self._request_token_ids(request)
             self._plans[req_id] = self._make_load_plan(
                 req_id=req_id,
@@ -288,6 +385,8 @@ class CSKCacheConnectorV1Impl:
             state.phase = CSKProbePhase.DONE
             return 0
 
+        # Probe path: source_offset skips the probe or anchor prefix that was
+        # already recomputed by vLLM. Only the remaining tail is loaded.
         token_ids = self._request_token_ids(request)
         target_token_ids = tuple(token_ids[load_start : state.end])
         self._plans[req_id] = CSKLoadPlan(
@@ -325,6 +424,14 @@ class CSKCacheConnectorV1Impl:
         request: "Request",
         num_computed_tokens: int,
     ) -> tuple[int | None, bool]:
+        """vLLM prefix-style lookup hook for non-probe direct reuse.
+
+        vLLM calls this while admitting a request. If the reusable span starts
+        at num_computed_tokens, returning its length lets vLLM allocate that
+        many external-computed tokens immediately. If the span starts later, we
+        record a boundary and return 0 so ordinary prefill can advance to it.
+        """
+
         if self._config.probe_enabled:
             return 0, False
 
@@ -341,6 +448,8 @@ class CSKCacheConnectorV1Impl:
         if occurrence is None:
             return 0, False
         if occurrence.end <= num_computed_tokens:
+            # Prefix cache already covered this span. Do not explicitly load it
+            # again; the request can continue normally.
             return 0, False
         if occurrence.start > num_computed_tokens:
             self._pending_boundaries[req_id] = occurrence
@@ -355,6 +464,10 @@ class CSKCacheConnectorV1Impl:
             )
             return 0, False
         if occurrence.start < num_computed_tokens:
+            # The scheduler has already entered the candidate span. Fallback
+            # matching does not attempt partial middle injection because that
+            # could accidentally act on an old occurrence. Probe mode has its
+            # own explicit tail-load path.
             logger.debug(
                 "CSKCache occurrence for request %s was partially crossed: "
                 "occurrence=[%d,%d), computed=%d",
@@ -385,6 +498,8 @@ class CSKCacheConnectorV1Impl:
         blocks: "KVCacheBlocks",
         num_external_tokens: int,
     ) -> None:
+        """Remember vLLM's physical block allocation for later worker metadata."""
+
         req_id = request.request_id
         self._allocated_blocks[req_id] = blocks.get_block_ids(allow_none=True)
         if num_external_tokens <= 0:
@@ -401,6 +516,14 @@ class CSKCacheConnectorV1Impl:
             )
 
     def build_connector_meta(self, scheduler_output: "SchedulerOutput") -> CSKConnectorMetadata:
+        """Package scheduler decisions into worker-consumable metadata.
+
+        vLLM serializes the returned object to the worker process. The worker
+        then receives it in kv_connector_model_runner_mixin before model
+        forward. This method also consumes one-shot scheduler state so a plan is
+        not replayed in later steps.
+        """
+
         meta = CSKConnectorMetadata()
         for req_id, num_scheduled_tokens in scheduler_output.num_scheduled_tokens.items():
             plan = self._plans.pop(req_id, None)
@@ -420,6 +543,9 @@ class CSKCacheConnectorV1Impl:
             if num_scheduled_tokens <= 0 or blocks is None:
                 continue
             if state.pending_capture == "probe":
+                # The previous scheduled chunk ended at probe_end. Ask worker
+                # save_kv_layer() to gather those just-computed K/V tensors and
+                # build a gate decision after forward completes.
                 meta.probes.append(
                     CSKProbeMeta(
                         req_id=req_id,
@@ -450,6 +576,8 @@ class CSKCacheConnectorV1Impl:
                 state.pending_capture = None
                 state.phase = CSKProbePhase.WAIT_PROBE
             elif state.pending_capture == "anchor":
+                # Anchor tokens were recomputed normally. The next scheduler
+                # step can now load only [anchor_end, skill_end) from cache.
                 state.pending_capture = None
                 state.phase = CSKProbePhase.NEED_LOAD
                 state.load_start = state.anchor_end
@@ -471,6 +599,15 @@ class CSKCacheConnectorV1Impl:
         return meta
 
     def start_load_kv(self, forward_context: "ForwardContext", **kwargs: Any) -> None:
+        """Worker-side load/scatter entry point called before model forward.
+
+        vLLM's KVConnectorModelRunnerMixin calls this inside the active forward
+        context. By this time scheduler_output.kv_connector_metadata has been
+        bound to the connector. Any request in metadata.requests is scheduled
+        as externally computed, so this method must fill its paged KV slots
+        before attention reads those positions.
+        """
+
         if not self._kv_caches:
             self._init_kv_caches_from_forward_context(forward_context)
         metadata = self._parent._get_connector_metadata()
@@ -479,6 +616,10 @@ class CSKCacheConnectorV1Impl:
         self._current_rope = None
         model = getattr(forward_context, "model", None)
         if model is not None:
+            # Cached keys were produced at source positions. If the target span
+            # appears at different request positions, prepare_reuse_slice()
+            # uses the model rotary embedding to rotate keys into target
+            # positions. Values are never RoPE-rotated.
             self._current_rope = find_rotary_embedding(model)
         if not metadata.requests:
             return
@@ -508,6 +649,9 @@ class CSKCacheConnectorV1Impl:
                 target_cache = self._kv_caches.get(layer_name)
                 if target_cache is None:
                     continue
+                # Slice the offline entry, optionally RoPE-correct keys for the
+                # target request position, then scatter into vLLM's paged cache
+                # according to the physical block IDs allocated by scheduler.
                 key, value = prepare_reuse_slice(
                     entry,
                     layer_name=layer_name,
@@ -547,6 +691,15 @@ class CSKCacheConnectorV1Impl:
         attn_metadata: Any,
         **kwargs: Any,
     ) -> None:
+        """Worker-side probe capture hook called after a layer writes K/V.
+
+        In probe mode, vLLM has just recomputed [start, end) normally. This
+        method gathers those real K/V tensors out of the paged cache and
+        compares them with the cached K/V slice that would have been reused.
+        The comparison itself is accumulated per layer and converted into a
+        gate decision in build_connector_worker_meta().
+        """
+
         metadata = self._parent._get_connector_metadata()
         assert isinstance(metadata, CSKConnectorMetadata)
         if not metadata.probes:
@@ -593,6 +746,10 @@ class CSKCacheConnectorV1Impl:
                     layer_name,
                 )
                 continue
+            # reuse_* is the candidate cached K/V after any target-position
+            # correction. recompute_* is the true K/V that vLLM just wrote for
+            # the same request span. The gate only compares tensors for matched
+            # layer names present in the offline entry.
             reuse_key, reuse_value = prepare_reuse_slice(
                 entry,
                 layer_name=layer_name,
@@ -643,6 +800,13 @@ class CSKCacheConnectorV1Impl:
         return
 
     def build_connector_worker_meta(self) -> CSKProbeWorkerMetadata | None:
+        """Return worker-side probe decisions to the scheduler process.
+
+        vLLM carries this object back in KVConnectorOutput. The scheduler then
+        calls update_connector_output(), which advances each probe state to
+        NEED_LOAD or NEED_ANCHOR. Direct reuse requests do not need worker meta.
+        """
+
         if not self._probe_accumulators:
             metadata = self._parent._get_connector_metadata()
             if isinstance(metadata, CSKConnectorMetadata):
@@ -679,6 +843,8 @@ class CSKCacheConnectorV1Impl:
         return CSKProbeWorkerMetadata(decisions=decisions) if decisions else None
 
     def update_connector_output(self, connector_output: KVConnectorOutput) -> None:
+        """Scheduler-side consumer for worker probe decisions."""
+
         worker_meta = connector_output.kv_connector_worker_meta
         if not isinstance(worker_meta, CSKProbeWorkerMetadata):
             for req_id, state in self._probe_states.items():
@@ -704,9 +870,13 @@ class CSKCacheConnectorV1Impl:
                 continue
             state.decision = decision
             if decision.passed:
+                # Cached K/V matches the real probe closely enough. Load the
+                # tail immediately after the probe prefix.
                 state.phase = CSKProbePhase.NEED_LOAD
                 state.load_start = state.probe_end
             else:
+                # Cached K/V diverged for the probe. Recompute a larger anchor
+                # prefix before loading the remaining tail.
                 state.phase = CSKProbePhase.NEED_ANCHOR
             logger.info(
                 "CSKCache probe decision request=%s cache_id=%s passed=%s "
@@ -744,6 +914,8 @@ class CSKCacheConnectorV1Impl:
         return None
 
     def _init_kv_caches_from_forward_context(self, forward_context: "ForwardContext") -> None:
+        """Discover vLLM layer KV cache tensors from the active forward context."""
+
         for layer_name, layer in getattr(forward_context, "no_compile_layers", {}).items():
             kv_cache = getattr(layer, "kv_cache", None)
             if kv_cache is not None:
@@ -751,6 +923,8 @@ class CSKCacheConnectorV1Impl:
 
     @staticmethod
     def _request_token_ids(request: "Request") -> list[int]:
+        """Materialize request tokens from vLLM's read-only token views."""
+
         return list(getattr(request, "all_token_ids", None) or request.prompt_token_ids or [])
 
     def _select_occurrence(
@@ -759,6 +933,14 @@ class CSKCacheConnectorV1Impl:
         token_ids: list[int],
         num_computed_tokens: int,
     ) -> tuple[SegmentOccurrence | None, bool]:
+        """Choose the current skill occurrence for this request.
+
+        Directive wins over fallback matching. This is what prevents a real
+        agent request from repeatedly scanning and injecting historical skill
+        spans that merely appear somewhere in the reconstructed multi-turn
+        prompt.
+        """
+
         directive = self._parse_request_directive(request)
         if directive is not None:
             if not directive.enabled:
@@ -773,6 +955,15 @@ class CSKCacheConnectorV1Impl:
         self,
         request: "Request",
     ) -> CSKCacheRequestDirective | None:
+        """Parse kv_transfer_params["cskcache"] into a typed directive.
+
+        The OpenAI protocol layer already copies request.kv_transfer_params
+        into SamplingParams.extra_args, and vLLM Request exposes it as
+        request.kv_transfer_params. We keep the parser strict: malformed
+        directives are request errors, not reasons to silently fall back to
+        full-prompt matching.
+        """
+
         params = getattr(request, "kv_transfer_params", None)
         if not isinstance(params, Mapping):
             return None
@@ -838,6 +1029,15 @@ class CSKCacheConnectorV1Impl:
         token_ids: list[int],
         directive: CSKCacheRequestDirective,
     ) -> SegmentOccurrence:
+        """Resolve and verify an agent-specified current skill span.
+
+        The directive identifies a cache_id and a placement rule. CSKCache still
+        verifies that the target prompt tokens exactly equal the cached entry
+        tokens before producing an occurrence. This fail-closed check prevents
+        stale token offsets or tokenizer/template drift from corrupting the KV
+        cache with a wrong segment.
+        """
+
         entry = self._registry.get(directive.cache_id)
         if entry is None:
             raise RuntimeError(
@@ -845,6 +1045,7 @@ class CSKCacheConnectorV1Impl:
             )
 
         if directive.placement == CSKCacheDirectivePlacement.EXPLICIT_SPAN:
+            # Caller already knows token offsets after prompt construction.
             if directive.target_start is None or directive.target_end is None:
                 raise ValueError(
                     "CSKCache explicit_span directive requires target_start and target_end"
@@ -852,6 +1053,9 @@ class CSKCacheConnectorV1Impl:
             target_start = directive.target_start
             target_end = directive.target_end
         elif directive.placement == CSKCacheDirectivePlacement.SUFFIX_BEFORE_TRAILING:
+            # Skill is immediately before chat-template/tool-wrapper trailing
+            # tokens. Derive the span from entry length and caller-provided
+            # trailing token count, then verify exact token identity below.
             target_end = len(token_ids) - directive.trailing_token_count
             target_start = target_end - entry.length
         else:
@@ -899,6 +1103,8 @@ class CSKCacheConnectorV1Impl:
         token_ids: list[int],
         source_offset: int = 0,
     ) -> CSKLoadPlan:
+        """Convert a request-local occurrence into a worker load plan."""
+
         return CSKLoadPlan(
             req_id=req_id,
             cache_id=occurrence.cache_id,
@@ -914,6 +1120,14 @@ class CSKCacheConnectorV1Impl:
         request: "Request",
         num_computed_tokens: int,
     ) -> CSKProbeState | None:
+        """Create or return probe-gated state for the current skill span.
+
+        This uses the same occurrence selection as direct reuse: directive
+        first, matcher fallback second. If the current computed frontier has
+        already passed into the span, probe mode refuses to create state because
+        the required probe prefix can no longer be isolated cleanly.
+        """
+
         req_id = request.request_id
         state = self._probe_states.get(req_id)
         if state is not None and state.phase != CSKProbePhase.DONE:

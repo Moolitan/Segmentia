@@ -11,6 +11,21 @@ class CSKCacheMode(str, Enum):
     REUSE = "reuse"
 
 
+class CSKCacheDirectivePlacement(str, Enum):
+    EXPLICIT_SPAN = "explicit_span"
+    SUFFIX_BEFORE_TRAILING = "suffix_before_trailing"
+
+
+@dataclass(frozen=True)
+class CSKCacheRequestDirective:
+    enabled: bool
+    cache_id: str
+    placement: CSKCacheDirectivePlacement = CSKCacheDirectivePlacement.EXPLICIT_SPAN
+    target_start: int | None = None
+    target_end: int | None = None
+    trailing_token_count: int = 0
+
+
 @dataclass(frozen=True)
 class CSKCacheSegment:
     """Canonical segment token sequence known to CSKCache.

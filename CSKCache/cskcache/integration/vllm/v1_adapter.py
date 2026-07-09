@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 import os
@@ -18,7 +19,13 @@ from cskcache.integration.vllm.utils import load_vllm_config
 from cskcache.v1.compute import CSKProbeAccumulator, CSKProbeDecision
 from cskcache.v1.compute.reuse import prepare_reuse_slice
 from cskcache.v1.matcher import SegmentCatalog, find_best_occurrence
-from cskcache.v1.metadata import CSKCacheMode, CSKLoadPlan, SegmentOccurrence
+from cskcache.v1.metadata import (
+    CSKCacheDirectivePlacement,
+    CSKCacheMode,
+    CSKCacheRequestDirective,
+    CSKLoadPlan,
+    SegmentOccurrence,
+)
 from cskcache.v1.registry import CSKCacheRegistry, get_global_registry
 from cskcache.v1.rope import find_rotary_embedding
 from cskcache.v1.slot_ops import gather_span, scatter_span
@@ -129,6 +136,7 @@ class CSKCacheConnectorV1Impl:
         self._allocated_blocks: dict[str, tuple[list[int], ...]] = {}
         self._kv_caches: dict[str, torch.Tensor] = {}
         self._pending_boundaries: dict[str, SegmentOccurrence] = {}
+        self._directive_boundaries: set[str] = set()
         self._probe_states: dict[str, CSKProbeState] = {}
         self._probe_accumulators: dict[str, CSKProbeAccumulator] = {}
         self._probe_warned_no_accumulator: set[str] = set()
@@ -166,8 +174,24 @@ class CSKCacheConnectorV1Impl:
         base_num_computed_tokens: int,
         num_new_tokens: int,
     ) -> int:
-        if not self._config.probe_enabled or num_new_tokens <= 0:
+        if num_new_tokens <= 0:
             return num_new_tokens
+
+        if not self._config.probe_enabled:
+            boundary = self._pending_boundaries.get(request.request_id)
+            if (
+                boundary is not None
+                and request.request_id in self._directive_boundaries
+            ):
+                base = base_num_computed_tokens
+                if base < boundary.start:
+                    return min(num_new_tokens, boundary.start - base)
+                if base < boundary.end:
+                    return 0
+                self._pending_boundaries.pop(request.request_id, None)
+                self._directive_boundaries.discard(request.request_id)
+            return num_new_tokens
+
         state = self._get_or_create_probe_state(request, base_num_computed_tokens)
         if state is None:
             return num_new_tokens
@@ -224,9 +248,34 @@ class CSKCacheConnectorV1Impl:
         request: "Request",
         num_computed_tokens: int,
     ) -> int:
+        req_id = request.request_id
+        boundary = self._pending_boundaries.get(req_id)
+        if (
+            boundary is not None
+            and req_id in self._directive_boundaries
+            and num_computed_tokens == boundary.start
+        ):
+            token_ids = self._request_token_ids(request)
+            self._plans[req_id] = self._make_load_plan(
+                req_id=req_id,
+                occurrence=boundary,
+                token_ids=token_ids,
+            )
+            self._pending_boundaries.pop(req_id, None)
+            self._directive_boundaries.discard(req_id)
+            _trace(
+                "directive in-process load requested request=%s cache_id=%s target=[%d,%d) tokens=%d",
+                req_id,
+                boundary.cache_id,
+                boundary.start,
+                boundary.end,
+                boundary.length,
+            )
+            return boundary.length
+
         if not self._config.probe_enabled:
             return 0
-        state = self._probe_states.get(request.request_id)
+        state = self._probe_states.get(req_id)
         if state is None or state.phase != CSKProbePhase.NEED_LOAD:
             return 0
         load_start = state.load_start
@@ -239,10 +288,10 @@ class CSKCacheConnectorV1Impl:
             state.phase = CSKProbePhase.DONE
             return 0
 
-        token_ids = list(getattr(request, "all_token_ids", None) or request.prompt_token_ids or [])
+        token_ids = self._request_token_ids(request)
         target_token_ids = tuple(token_ids[load_start : state.end])
-        self._plans[request.request_id] = CSKLoadPlan(
-            req_id=request.request_id,
+        self._plans[req_id] = CSKLoadPlan(
+            req_id=req_id,
             cache_id=state.cache_id,
             mode=CSKCacheMode.REUSE,
             start=load_start,
@@ -253,7 +302,7 @@ class CSKCacheConnectorV1Impl:
         logger.warning(
             "CSKCache in-process load requested request=%s cache_id=%s "
             "target=[%d,%d) source_offset=%d tokens=%d",
-            request.request_id,
+            req_id,
             state.cache_id,
             load_start,
             state.end,
@@ -262,7 +311,7 @@ class CSKCacheConnectorV1Impl:
         )
         _trace(
             "in-process load requested request=%s cache_id=%s target=[%d,%d) source_offset=%d tokens=%d",
-            request.request_id,
+            req_id,
             state.cache_id,
             load_start,
             state.end,
@@ -279,24 +328,27 @@ class CSKCacheConnectorV1Impl:
         if self._config.probe_enabled:
             return 0, False
 
-        token_ids = list(getattr(request, "all_token_ids", None) or request.prompt_token_ids or [])
-        occurrence = find_best_occurrence(
-            self._catalog,
+        req_id = request.request_id
+        token_ids = self._request_token_ids(request)
+        occurrence, directive_seen = self._select_occurrence(
+            request,
             token_ids,
             num_computed_tokens,
         )
-        req_id = request.request_id
         self._plans.pop(req_id, None)
         self._pending_boundaries.pop(req_id, None)
+        self._directive_boundaries.discard(req_id)
         if occurrence is None:
             return 0, False
         if occurrence.end <= num_computed_tokens:
             return 0, False
         if occurrence.start > num_computed_tokens:
             self._pending_boundaries[req_id] = occurrence
+            if directive_seen:
+                self._directive_boundaries.add(req_id)
             logger.debug(
                 "CSKCache occurrence for request %s starts at %d after computed=%d; "
-                "scheduler boundary hook not enabled yet",
+                "waiting for scheduler boundary",
                 req_id,
                 occurrence.start,
                 num_computed_tokens,
@@ -320,13 +372,10 @@ class CSKCacheConnectorV1Impl:
         if tuple(entry.token_ids) != target_token_ids:
             logger.warning("CSKCache token mismatch for cache_id=%s; skip load", occurrence.cache_id)
             return 0, False
-        self._plans[req_id] = CSKLoadPlan(
+        self._plans[req_id] = self._make_load_plan(
             req_id=req_id,
-            cache_id=occurrence.cache_id,
-            mode=occurrence.mode,
-            start=occurrence.start,
-            end=occurrence.end,
-            token_ids=target_token_ids,
+            occurrence=occurrence,
+            token_ids=token_ids,
         )
         return occurrence.length, False
 
@@ -687,6 +736,8 @@ class CSKCacheConnectorV1Impl:
             self._plans.pop(req_id, None)
             self._allocated_blocks.pop(req_id, None)
             self._probe_accumulators.pop(req_id, None)
+            self._pending_boundaries.pop(req_id, None)
+            self._directive_boundaries.discard(req_id)
         return None, None
 
     def shutdown(self) -> None:
@@ -698,6 +749,166 @@ class CSKCacheConnectorV1Impl:
             if kv_cache is not None:
                 self._kv_caches[layer_name] = kv_cache[0]
 
+    @staticmethod
+    def _request_token_ids(request: "Request") -> list[int]:
+        return list(getattr(request, "all_token_ids", None) or request.prompt_token_ids or [])
+
+    def _select_occurrence(
+        self,
+        request: "Request",
+        token_ids: list[int],
+        num_computed_tokens: int,
+    ) -> tuple[SegmentOccurrence | None, bool]:
+        directive = self._parse_request_directive(request)
+        if directive is not None:
+            if not directive.enabled:
+                return None, True
+            return self._occurrence_from_directive(request, token_ids, directive), True
+        return (
+            find_best_occurrence(self._catalog, token_ids, num_computed_tokens),
+            False,
+        )
+
+    def _parse_request_directive(
+        self,
+        request: "Request",
+    ) -> CSKCacheRequestDirective | None:
+        params = getattr(request, "kv_transfer_params", None)
+        if not isinstance(params, Mapping):
+            return None
+        raw = params.get("cskcache")
+        if raw is None:
+            return None
+        if not isinstance(raw, Mapping):
+            raise ValueError("CSKCache directive must be a mapping")
+
+        enabled_raw = raw.get("enabled", True)
+        if not isinstance(enabled_raw, bool):
+            raise ValueError("CSKCache directive enabled must be a bool")
+        if not enabled_raw:
+            return CSKCacheRequestDirective(enabled=False, cache_id="")
+
+        cache_id = raw.get("cache_id")
+        if not isinstance(cache_id, str) or not cache_id:
+            raise ValueError("CSKCache directive requires a non-empty cache_id")
+
+        placement_raw = raw.get(
+            "placement",
+            CSKCacheDirectivePlacement.EXPLICIT_SPAN.value,
+        )
+        try:
+            placement = CSKCacheDirectivePlacement(str(placement_raw))
+        except ValueError as exc:
+            raise ValueError(
+                f"Unsupported CSKCache directive placement: {placement_raw!r}"
+            ) from exc
+
+        trailing_token_count = self._parse_nonnegative_int(
+            raw.get("trailing_token_count", 0),
+            "trailing_token_count",
+        )
+        return CSKCacheRequestDirective(
+            enabled=True,
+            cache_id=cache_id,
+            placement=placement,
+            target_start=self._parse_optional_int(raw.get("target_start"), "target_start"),
+            target_end=self._parse_optional_int(raw.get("target_end"), "target_end"),
+            trailing_token_count=trailing_token_count,
+        )
+
+    @staticmethod
+    def _parse_optional_int(value: object, name: str) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"CSKCache directive {name} must be an int")
+        return value
+
+    @staticmethod
+    def _parse_nonnegative_int(value: object, name: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"CSKCache directive {name} must be an int")
+        if value < 0:
+            raise ValueError(f"CSKCache directive {name} must be non-negative")
+        return value
+
+    def _occurrence_from_directive(
+        self,
+        request: "Request",
+        token_ids: list[int],
+        directive: CSKCacheRequestDirective,
+    ) -> SegmentOccurrence:
+        entry = self._registry.get(directive.cache_id)
+        if entry is None:
+            raise RuntimeError(
+                f"CSKCache directive cache_id={directive.cache_id} is not loaded"
+            )
+
+        if directive.placement == CSKCacheDirectivePlacement.EXPLICIT_SPAN:
+            if directive.target_start is None or directive.target_end is None:
+                raise ValueError(
+                    "CSKCache explicit_span directive requires target_start and target_end"
+                )
+            target_start = directive.target_start
+            target_end = directive.target_end
+        elif directive.placement == CSKCacheDirectivePlacement.SUFFIX_BEFORE_TRAILING:
+            target_end = len(token_ids) - directive.trailing_token_count
+            target_start = target_end - entry.length
+        else:
+            raise ValueError(f"Unsupported CSKCache placement: {directive.placement}")
+
+        if target_start < 0 or target_end > len(token_ids) or target_start >= target_end:
+            raise RuntimeError(
+                f"CSKCache directive span out of bounds for {directive.cache_id}: "
+                f"target=[{target_start},{target_end}), token_count={len(token_ids)}"
+            )
+        if target_end - target_start != entry.length:
+            raise RuntimeError(
+                f"CSKCache directive span length mismatch for {directive.cache_id}: "
+                f"target_length={target_end - target_start}, entry_length={entry.length}"
+            )
+
+        target_token_ids = tuple(token_ids[target_start:target_end])
+        entry_token_ids = tuple(int(value) for value in entry.token_ids)
+        if target_token_ids != entry_token_ids:
+            raise RuntimeError(
+                f"CSKCache directive token mismatch for {directive.cache_id}: "
+                f"target=[{target_start},{target_end})"
+            )
+
+        _trace(
+            "directive resolved request=%s cache_id=%s placement=%s target=[%d,%d) trailing=%d",
+            request.request_id,
+            directive.cache_id,
+            directive.placement.value,
+            target_start,
+            target_end,
+            directive.trailing_token_count,
+        )
+        return SegmentOccurrence(
+            cache_id=directive.cache_id,
+            start=target_start,
+            end=target_end,
+            mode=CSKCacheMode.REUSE,
+        )
+
+    @staticmethod
+    def _make_load_plan(
+        req_id: str,
+        occurrence: SegmentOccurrence,
+        token_ids: list[int],
+        source_offset: int = 0,
+    ) -> CSKLoadPlan:
+        return CSKLoadPlan(
+            req_id=req_id,
+            cache_id=occurrence.cache_id,
+            mode=occurrence.mode,
+            start=occurrence.start,
+            end=occurrence.end,
+            token_ids=tuple(token_ids[occurrence.start : occurrence.end]),
+            source_offset=source_offset,
+        )
+
     def _get_or_create_probe_state(
         self,
         request: "Request",
@@ -708,9 +919,9 @@ class CSKCacheConnectorV1Impl:
         if state is not None and state.phase != CSKProbePhase.DONE:
             return state
 
-        token_ids = list(getattr(request, "all_token_ids", None) or request.prompt_token_ids or [])
-        occurrence = find_best_occurrence(
-            self._catalog,
+        token_ids = self._request_token_ids(request)
+        occurrence, _ = self._select_occurrence(
+            request,
             token_ids,
             num_computed_tokens,
         )

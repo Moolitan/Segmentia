@@ -107,10 +107,10 @@ def test_reuse_signal_middle_injection() -> None:
     print(f"n={n}")
     assert n == 0
     # Prefix chunk is capped to stop exactly at span start (3).
-    assert eng.cap_num_new_tokens("r1", prompt, 0, 10, signal) == 3
+    assert eng.cap_prefill_before_reuse("r1", prompt, 0, 10, signal) == 3
     # At the boundary, the chunk is held (0) so the next pass loads in-process.
-    assert eng.cap_num_new_tokens("r1", prompt, 3, 10, signal) == 0
-    assert eng.get_inprocess_load_tokens("r1", prompt, 3) == 4
+    assert eng.cap_prefill_before_reuse("r1", prompt, 3, 10, signal) == 0
+    assert eng.get_boundary_reuse_load_tokens("r1", prompt, 3) == 4
     eng.update_state_after_alloc("r1", ([0, 1],), num_external_tokens=4)
     requests, probes = eng.build_meta({"r1": 0})
     assert len(requests) == 1
@@ -173,9 +173,9 @@ def test_probe_fsm_pass_then_load() -> None:
         }
     }
     # Prefix up to span start (2).
-    assert eng.cap_num_new_tokens("r1", prompt, 0, 10, signal) == 2
+    assert eng.cap_prefill_before_reuse("r1", prompt, 0, 10, signal) == 2
     # Probe prefix: only probe_tokens (2) allowed [2,4).
-    assert eng.cap_num_new_tokens("r1", prompt, 2, 10, signal) == 2
+    assert eng.cap_prefill_before_reuse("r1", prompt, 2, 10, signal) == 2
     state = eng._probe_states["r1"]
     assert state.pending_capture == "probe"
     # The probe span is normal prefill, so vLLM allocates blocks for it
@@ -190,7 +190,7 @@ def test_probe_fsm_pass_then_load() -> None:
     passed = CSKProbeDecision("r1", "skill", True, 0.15, metrics)
     eng.on_worker_decisions([passed])
     assert state.phase == CSKProbePhase.NEED_LOAD
-    assert eng.get_inprocess_load_tokens("r1", prompt, 4) == 4  # [4,8)
+    assert eng.get_boundary_reuse_load_tokens("r1", prompt, 4) == 4  # [4,8)
     eng.update_state_after_alloc("r1", ([0],), num_external_tokens=4)
     requests, _ = eng.build_meta({"r1": 0})
     assert requests[0].plan.start == 4 and requests[0].plan.source_offset == 2
@@ -224,8 +224,8 @@ def test_probe_fsm_fail_needs_anchor() -> None:
             "target_end": 8,
         }
     }
-    eng.cap_num_new_tokens("r1", prompt, 0, 10, signal)
-    eng.cap_num_new_tokens("r1", prompt, 2, 10, signal)
+    eng.cap_prefill_before_reuse("r1", prompt, 0, 10, signal)
+    eng.cap_prefill_before_reuse("r1", prompt, 2, 10, signal)
     eng.update_state_after_alloc("r1", ([0],), num_external_tokens=0)
     eng.build_meta({"r1": 2})
     metrics = CSKProbeMetrics(1, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, "max", ())
@@ -233,7 +233,7 @@ def test_probe_fsm_fail_needs_anchor() -> None:
     eng.on_worker_decisions([failed])
     assert eng._probe_states["r1"].phase == CSKProbePhase.NEED_ANCHOR
     # Anchor recompute up to anchor_end (2 + 4 = 6).
-    assert eng.cap_num_new_tokens("r1", prompt, 4, 10, signal) == 2
+    assert eng.cap_prefill_before_reuse("r1", prompt, 4, 10, signal) == 2
 
 
 if __name__ == "__main__":

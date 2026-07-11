@@ -81,8 +81,8 @@ def test_explicit_span_reuse_signal_caps_then_loads_mid_prompt() -> None:
 
     matched, load_async = impl.get_num_new_matched_tokens(request, 0)
     assert (matched, load_async) == (0, False)
-    assert impl.cap_num_new_tokens(request, 0, 32) == 2
-    assert impl.get_inprocess_load_tokens(request, 2) == entry.length
+    assert impl.cap_prefill_before_reuse(request, 0, 32) == 2
+    assert impl.get_boundary_reuse_load_tokens(request, 2) == entry.length
     plan = impl._engine._plans[request.request_id]
     assert (plan.cache_id, plan.start, plan.end, plan.source_offset) == (
         entry.cache_id,
@@ -131,8 +131,8 @@ def test_reuse_signal_stale_token_slice_still_builds_plan() -> None:
 
     matched, _ = impl.get_num_new_matched_tokens(request, 0)
     assert matched == 0
-    assert impl.cap_num_new_tokens(request, 0, 32) == 2
-    assert impl.get_inprocess_load_tokens(request, 2) == entry.length
+    assert impl.cap_prefill_before_reuse(request, 0, 32) == 2
+    assert impl.get_boundary_reuse_load_tokens(request, 2) == entry.length
     assert impl._engine._plans[request.request_id].token_ids == (
         10,
         11,

@@ -132,13 +132,13 @@ class CSKCacheConnectorV1Impl:
             getattr(request, "kv_transfer_params", None),
         )
 
-    def cap_num_new_tokens(
+    def cap_prefill_before_reuse(
         self,
         request: "Request",
         base_num_computed_tokens: int,
         num_new_tokens: int,
     ) -> int:
-        return self._engine.cap_num_new_tokens(
+        return self._engine.cap_prefill_before_reuse(
             request.request_id,
             self._request_token_ids(request),
             base_num_computed_tokens,
@@ -146,12 +146,12 @@ class CSKCacheConnectorV1Impl:
             getattr(request, "kv_transfer_params", None),
         )
 
-    def get_inprocess_load_tokens(
+    def get_boundary_reuse_load_tokens(
         self,
         request: "Request",
         num_computed_tokens: int,
     ) -> int:
-        return self._engine.get_inprocess_load_tokens(
+        return self._engine.get_boundary_reuse_load_tokens(
             request.request_id,
             self._request_token_ids(request),
             num_computed_tokens,

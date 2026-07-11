@@ -114,21 +114,23 @@ class CSKCacheConnectorV1(KVConnectorBase_V1):
     ) -> KVConnectorMetadata:
         return self._engine.build_connector_meta(scheduler_output)
 
-    def cap_num_new_tokens(
+    def cap_prefill_before_reuse(
         self,
         request: "Request",
         base_num_computed_tokens: int,
         num_new_tokens: int,
     ) -> int:
-        return self._engine.cap_num_new_tokens(
+        return self._engine.cap_prefill_before_reuse(
             request,
             base_num_computed_tokens,
             num_new_tokens,
         )
 
-    def get_inprocess_load_tokens(
+    def get_boundary_reuse_load_tokens(
         self,
         request: "Request",
         num_computed_tokens: int,
     ) -> int:
-        return self._engine.get_inprocess_load_tokens(request, num_computed_tokens)
+        return self._engine.get_boundary_reuse_load_tokens(
+            request, num_computed_tokens
+        )

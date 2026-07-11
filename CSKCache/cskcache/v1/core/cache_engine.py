@@ -45,9 +45,10 @@ logger = logging.getLogger(__name__)
 class CSKCacheEngine:
     """Orchestrates lookup, probe-gated reuse, load, and gating.
 
-    Scheduler-side methods (``get_num_new_matched_tokens``, ``cap_num_new_tokens``,
-    ``get_inprocess_load_tokens``, ``update_state_after_alloc``, ``build_meta``,
-    ``on_worker_decisions``) run in the scheduler process. Worker-side methods
+    Scheduler-side methods (``get_num_new_matched_tokens``,
+    ``cap_prefill_before_reuse``, ``get_boundary_reuse_load_tokens``,
+    ``update_state_after_alloc``, ``build_meta``, ``on_worker_decisions``) run
+    in the scheduler process. Worker-side methods
     (``register_kv_caches``, ``load``, ``capture_probes``, ``decide_probes``) run
     around model forward. Both sides share only plain per-request state held here.
     """
@@ -131,7 +132,7 @@ class CSKCacheEngine:
         self._plans[req_id] = self._make_load_plan(req_id, reuse, token_ids)
         return reuse.length, False
 
-    def cap_num_new_tokens(
+    def cap_prefill_before_reuse(
         self,
         req_id: str,
         token_ids: list[int],
@@ -139,7 +140,7 @@ class CSKCacheEngine:
         num_new_tokens: int,
         kv_transfer_params: Mapping | None = None,
     ) -> int:
-        """Cap a scheduler chunk so it stops exactly before a skill span."""
+        """Cap normal prefill so it stops at the next reuse boundary."""
 
         if num_new_tokens <= 0:
             return num_new_tokens
@@ -195,13 +196,13 @@ class CSKCacheEngine:
 
         return num_new_tokens
 
-    def get_inprocess_load_tokens(
+    def get_boundary_reuse_load_tokens(
         self,
         req_id: str,
         token_ids: list[int],
         num_computed_tokens: int,
     ) -> int:
-        """Return how many tokens should be loaded in-process without forward."""
+        """Return how many boundary tokens should be loaded without forward."""
 
         boundary = self._pending_reuses.get(req_id)
         if boundary is not None and num_computed_tokens == boundary.start:

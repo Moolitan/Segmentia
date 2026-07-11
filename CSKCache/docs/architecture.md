@@ -58,8 +58,8 @@ cskcache/integration/vllm/v1_adapter.py   # vLLM 翻译层
 - `probe_state.py`：`CSKProbePhase`（`NEED_PROBE→WAIT_PROBE→NEED_ANCHOR/NEED_LOAD→DONE`）
   与 `CSKProbeState`。
 - `cache_engine.py`：`CSKCacheEngine`，承载全部决策：
-  - 调度侧：`get_num_new_matched_tokens / cap_num_new_tokens /
-    get_inprocess_load_tokens / update_state_after_alloc / build_meta /
+  - 调度侧：`get_num_new_matched_tokens / cap_prefill_before_reuse /
+    get_boundary_reuse_load_tokens / update_state_after_alloc / build_meta /
     on_worker_decisions / on_finished`
   - worker 侧：`register_kv_caches / load / capture_probes / decide_probes`
     （device 活委托 kv_transfer；gate 累积留在引擎）
@@ -94,8 +94,8 @@ cskcache/integration/vllm/v1_adapter.py   # vLLM 翻译层
 
 ```
 调度进程：
-  cap_num_new_tokens()      # 把 prefill chunk 截到技能段起点 / probe_end / anchor_end
-  get_inprocess_load_tokens # 到边界时声明「就地加载，不 forward」，生成 CSKLoadPlan
+  cap_prefill_before_reuse()      # 把 prefill chunk 截到技能段起点 / probe_end / anchor_end
+  get_boundary_reuse_load_tokens # 到边界时声明「就地加载，不 forward」，生成 CSKLoadPlan
   update_state_after_alloc  # 记录 vLLM 分配的物理 block_ids
   build_meta()              # 打包 CSKReqMeta（load） / CSKProbeMeta（probe）发往 worker
 

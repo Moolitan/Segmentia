@@ -481,10 +481,14 @@ def main():
     parser.add_argument("--log-dir", default=os.path.join(ROOT, "log", "03_14B_anthropic"),
                         help="日志目录")
     parser.add_argument("--dry-run", action="store_true", help="仅打印序列信息,不实际运行")
+    parser.add_argument("--max-turns", type=int, default=None,
+                        help="只运行序列的前 N 个 turn(调试/局部实验用)")
     args = parser.parse_args()
 
     # ── 加载序列 ────────────────────────────────────────────────────────
     template = load_benchmark_sequence(args.benchmark_repo, bench_root=args.bench_root)
+    if args.max_turns is not None:
+        template.turns = template.turns[:args.max_turns]
 
     seq_workspace = os.path.abspath(args.workspace)
     seq_log_path = os.path.join(args.log_dir, f"{args.benchmark_repo}.log")

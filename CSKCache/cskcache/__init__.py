@@ -9,7 +9,7 @@ The package is layered like a standalone cache middleware and is importable
 without vLLM:
 
 - ``core``        engine + config + probe state machine (the brain)
-- ``token``       token-sequence -> reusable segment occurrence
+- ``token``       token-sequence -> reusable span diagnostics
 - ``kv_transfer`` scatter/gather against paged KV cache
 - ``storage``     CPU + disk tiers with LRU eviction
 - ``compute``     probe-gate residual + decision (the signature mechanism)

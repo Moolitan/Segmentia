@@ -1,22 +1,20 @@
-from cskcache.v1.token.token_database import SegmentCatalog, find_best_occurrence
+from cskcache.v1.token.token_database import SegmentCatalog, find_best_reuse
 from cskcache.v1.metadata import (
-    CSKCacheDirectivePlacement,
     CSKCacheEntry,
     CSKCacheMode,
-    CSKCacheRequestDirective,
+    CSKCacheReuseSignal,
     CSKCacheSegment,
-    SegmentOccurrence,
+    ReuseSpan,
 )
 from cskcache.v1.registry import CSKCacheRegistry
 
 __all__ = [
-    "CSKCacheDirectivePlacement",
     "CSKCacheEntry",
     "CSKCacheMode",
-    "CSKCacheRequestDirective",
     "CSKCacheRegistry",
+    "CSKCacheReuseSignal",
     "CSKCacheSegment",
+    "ReuseSpan",
     "SegmentCatalog",
-    "SegmentOccurrence",
-    "find_best_occurrence",
+    "find_best_reuse",
 ]

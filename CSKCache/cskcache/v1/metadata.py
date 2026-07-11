@@ -13,48 +13,24 @@ class CSKCacheMode(str, Enum):
     REUSE = "reuse"
 
 
-class CSKCacheDirectivePlacement(str, Enum):
-    """How an agent-provided request directive locates the current skill span.
-
-    EXPLICIT_SPAN:
-        The agent or prompt builder already tokenized the final prompt and
-        passes the exact target [start, end) token offsets for the current
-        skill. This is the preferred path when the caller can observe token
-        boundaries.
-
-    SUFFIX_BEFORE_TRAILING:
-        The skill is the final semantic payload added by the agent, but the
-        chat template adds a few trailing tokens after it, such as an assistant
-        marker, separator, or tool wrapper. The caller passes only how many
-        trailing tokens exist; CSKCache derives the span from the loaded entry
-        length and then verifies the token slice exactly.
-    """
-
-    EXPLICIT_SPAN = "explicit_span"
-    SUFFIX_BEFORE_TRAILING = "suffix_before_trailing"
-
-
 @dataclass(frozen=True)
-class CSKCacheRequestDirective:
-    """Per-request instruction sent by the agent through vLLM extra args.
+class CSKCacheReuseSignal:
+    """Per-request reuse control signal sent through vLLM extra args.
 
     The OpenAI-compatible request carries this under
-    kv_transfer_params["cskcache"]. It is intentionally about the *current*
-    skill only. Historical skill spans in a multi-turn prompt should be
-    inherited through vLLM prefix cache if they were computed in prior requests;
-    CSKCache should not scan for and explicitly inject them again.
+    kv_transfer_params["cskcache"]. It is intentionally about the current skill
+    only. Historical skill spans in a multi-turn prompt should be inherited
+    through vLLM prefix cache if they were computed in prior requests; CSKCache
+    should not scan for and explicitly inject them again.
 
     enabled=False means "do not use CSKCache for this request". It is not the
-    same as omitting the directive: omission falls back to token matching,
-    while enabled=False suppresses that fallback.
+    same as omitting the signal: both cases simply continue normal prefill.
     """
 
     enabled: bool
     cache_id: str
-    placement: CSKCacheDirectivePlacement = CSKCacheDirectivePlacement.EXPLICIT_SPAN
     target_start: int | None = None
     target_end: int | None = None
-    trailing_token_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -63,13 +39,9 @@ class CSKCacheSegment:
 
     These are lightweight index records derived from loaded CSKCacheEntry
     objects. They do not contain tensors; they only say "cache_id X represents
-    this exact token sequence". When a request has no explicit directive,
-    SegmentCatalog uses these records to find exact token-subsequence matches.
-
-    With request directives, this catalog is no longer the primary discovery
-    source for the current skill, but the same token identity still matters:
-    CSKCache only reuses KV when the target request span exactly matches the
-    cached entry token IDs.
+    this exact token sequence". The engine no longer scans prompts with this
+    catalog to decide reuse; current reuse decisions come from explicit
+    per-request reuse signals.
     """
 
     cache_id: str
@@ -82,8 +54,8 @@ class CSKCacheSegment:
 
 
 @dataclass(frozen=True)
-class SegmentOccurrence:
-    """A concrete occurrence of a cached segment inside one request prompt.
+class ReuseSpan:
+    """A concrete request-local span selected for KV reuse.
 
     start/end are target token offsets in the *current request*, not source
     offsets inside the offline cache entry. For a full-entry reuse they usually

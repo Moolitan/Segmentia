@@ -20,24 +20,24 @@ CSKCache 的**招牌机制**是 **probe 门控**：先只重算技能开头几�
 cskcache/
   v1/
     core/          ② 引擎（大脑，vLLM 无关）
-    token/         ② token 序列 → 可复用技能段的定位
+    token/         ② token exact-match 离线诊断工具
     kv_transfer/   ③ KV 在「离线条目 ↔ 显存分页缓存」之间搬运
     storage/       ④ CPU + 磁盘两级存储 + LRU 淘汰
     compute/       ⑤ probe 门控残差 + 决策（招牌机制）
-    metadata.py    共享数据结构（entry / load plan / directive / 搬运载体）
+    metadata.py    共享数据结构（entry / reuse signal / load plan / 搬运载体）
   integration/
     vllm/          ① 唯一 import vLLM 的地方：把 vLLM 调用翻译给引擎
 ```
 
-设计原则：**引擎只吃普通 Python 数据**（`list[int]` token、`int` 帧位置、`dict` directive）
-和 torch 张量，**不 import vLLM**。因此整个中间件可以脱离 vLLM 构造和单元测试；vLLM 只是
-它的一个前端。
+设计原则：**引擎只吃普通 Python 数据**（`list[int]` token、`int` 帧位置、
+`dict` reuse signal）和 torch 张量，**不 import vLLM**。因此整个中间件可以脱离
+vLLM 构造和单元测试；vLLM 只是它的一个前端。
 
 只想快速理解主流程，按此顺序读：
 
 ```
 cskcache/v1/core/cache_engine.py          # 所有决策
-cskcache/v1/token/token_database.py       # 命中判定（KMP 精确匹配 / fallback）
+cskcache/v1/token/token_database.py       # 离线 exact-match 诊断工具
 cskcache/v1/storage/storage_manager.py    # 多级存储路由 + 淘汰
 cskcache/v1/kv_transfer/gpu_connector.py  # scatter/gather + RoPE 校正
 cskcache/v1/compute/gate.py               # probe 门控决策
@@ -66,8 +66,9 @@ cskcache/integration/vllm/v1_adapter.py   # vLLM 翻译层
 
 ### ② 令牌层 `token/`
 - `token_database.py`：`SegmentCatalog`（用 KMP 做精确 token 子序列匹配）+
-  `find_best_occurrence`。这是**无 directive 时的 fallback** 命中路径；有 agent directive
-  时引擎走 directive，直接定位当前技能段。（`v1/matcher.py` 是指向这里的兼容 shim。）
+  `find_best_reuse`。这是离线诊断工具，不是 production 复用路径。线上请求没有
+  `kv_transfer_params["cskcache"]` reuse signal 时，引擎不扫描 prompt，直接让 vLLM
+  正常 prefill。
 
 ### ③ KV 搬运层 `kv_transfer/`
 - `gpu_connector.py`：`KVConnectorInterface` + `VLLMPagedGPUConnector`。包装
@@ -114,7 +115,7 @@ worker 进程（围绕 forward）：
 
 ## 4. 按目标改代码
 
-- 改「命中/定位」：`core/cache_engine.py` 的 directive 解析 + `token/token_database.py`。
+- 改「命中/定位」：`core/cache_engine.py` 的 reuse signal 解析与调度边界。
 - 改「probe 门控算法」：`compute/gate.py`（残差/阈值/指标）。
 - 改「KV 搬运性能」：`kv_transfer/gpu_connector.py` + `slot_ops.py`。
 - 改「存储层级/淘汰」：`storage/storage_manager.py` + `storage/cache_policy/`。

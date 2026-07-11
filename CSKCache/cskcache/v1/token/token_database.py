@@ -7,7 +7,7 @@ from cskcache.v1.metadata import (
     CSKCacheEntry,
     CSKCacheMode,
     CSKCacheSegment,
-    SegmentOccurrence,
+    ReuseSpan,
 )
 
 
@@ -16,10 +16,9 @@ class SegmentCatalog:
     """In-memory exact-token index over loaded CSKCache entries.
 
     This catalog is deliberately simple: it only knows token IDs and cache IDs.
-    It does not inspect text, skill names, or agent state. The preferred current
-    path is an agent-provided request directive, but the catalog remains useful
-    as a fallback when older callers do not pass directive metadata and as a
-    readable reference for token-level cache-hit semantics.
+    It does not inspect text, skill names, or agent state. The engine does not
+    use this catalog to decide production reuse; it remains a readable
+    token-level utility for offline tests and diagnostics.
     """
 
     segments: list[CSKCacheSegment]
@@ -47,24 +46,18 @@ class SegmentCatalog:
             )
         return cls(segments)
 
-    def occurrences(self, token_ids: list[int] | tuple[int, ...]) -> list[SegmentOccurrence]:
+    def reuse_spans(self, token_ids: list[int] | tuple[int, ...]) -> list[ReuseSpan]:
         """Return every exact catalog segment match in the request tokens.
 
-        This is a fallback discovery mechanism, not the main agent-directed
-        path. It scans the full prompt because, without directive metadata, the
-        connector only receives token IDs from vLLM and has no structured way
-        to know which span came from the current skill.
-
         The function intentionally performs exact token matching. KV tensors
-        are tied to token identity and position; a semantically similar text
-        span is not safe to reuse unless it tokenizes to the same sequence.
+        are tied to token IDs and position; a semantically similar text span is
+        not a match unless it tokenizes to the same sequence.
         """
-
-        matches: list[SegmentOccurrence] = []
+        matches: list[ReuseSpan] = []
         for segment in self.segments:
             for start in find_subsequence(token_ids, segment.token_ids):
                 matches.append(
-                    SegmentOccurrence(
+                    ReuseSpan(
                         cache_id=segment.cache_id,
                         start=start,
                         end=start + segment.length,
@@ -86,8 +79,7 @@ def find_subsequence(
 
     KMP avoids rechecking token prefixes after a mismatch, which matters when a
     long prompt contains repeated skill-like substrings. It still returns every
-    occurrence, including overlapping ones, because later selection logic needs
-    to decide which occurrence is relevant to the current scheduler position.
+    reuse span, including overlapping ones, for offline diagnostics.
     """
 
     if not needle or len(needle) > len(haystack):
@@ -112,25 +104,24 @@ def find_subsequence(
                 j = failure[j - 1]
 
 
-def find_best_occurrence(
+def find_best_reuse(
     catalog: SegmentCatalog,
     token_ids: list[int] | tuple[int, ...],
     num_computed_tokens: int,
-) -> SegmentOccurrence | None:
-    """Pick the next occurrence relevant to the current scheduler state.
+) -> ReuseSpan | None:
+    """Pick the next reusable span relevant to a scheduler frontier.
 
     num_computed_tokens is vLLM's current frontier for this request. The
-    returned occurrence is interpreted as follows:
+    returned span is interpreted as follows:
 
     - ready: start == num_computed_tokens, so CSKCache can load immediately.
     - upcoming: start > num_computed_tokens, so scheduler should first prefill
       up to start before loading.
     - covering: start < num_computed_tokens < end, which means the scheduler has
       already entered the span. Current code does not inject from the middle in
-      fallback mode; this is mainly useful for diagnostics.
+      this diagnostic matcher.
     """
-
-    candidates = catalog.occurrences(token_ids)
+    candidates = catalog.reuse_spans(token_ids)
     if not candidates:
         return None
     ready = [

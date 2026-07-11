@@ -12,9 +12,9 @@ reuse decision lives in the engine; this file only:
   :class:`CSKProbeMeta`, :class:`CSKProbeDecision`) into vLLM's serializable
   ``KVConnectorMetadata`` / ``KVConnectorWorkerMetadata`` envelopes.
 
-CSKCache identifies the current skill span either from an agent directive under
-``request.kv_transfer_params["cskcache"]`` or, failing that, by exact token
-matching over loaded cache entries. Both paths are implemented in the engine.
+CSKCache identifies the current skill span only from an explicit reuse signal
+under ``request.kv_transfer_params["cskcache"]``. Without that signal, the
+engine does not scan prompt tokens and lets vLLM perform normal prefill.
 """
 
 from __future__ import annotations

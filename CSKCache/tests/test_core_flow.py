@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT))
 
 from cskcache.v1.compute.gate import CSKProbeAccumulator
 from cskcache.v1.compute.reuse import prepare_reuse_slice
-from cskcache.v1.matcher import SegmentCatalog, find_best_occurrence
+from cskcache.v1.matcher import SegmentCatalog, find_best_reuse
 from cskcache.v1.metadata import CSKCacheEntry
 from cskcache.v1.registry import CSKCacheRegistry
 from cskcache.v1.slot_ops import gather_span, scatter_span
@@ -40,11 +40,11 @@ def test_match_slice_scatter_and_gather_roundtrip() -> None:
     prompt_tokens = [1, 2, *entry.token_ids, 99]
     catalog = SegmentCatalog.from_entries(registry.entries())
 
-    upcoming = find_best_occurrence(catalog, prompt_tokens, num_computed_tokens=0)
+    upcoming = find_best_reuse(catalog, prompt_tokens, num_computed_tokens=0)
     assert upcoming is not None
     assert (upcoming.cache_id, upcoming.start, upcoming.end) == ("skill-demo", 2, 8)
 
-    ready = find_best_occurrence(catalog, prompt_tokens, num_computed_tokens=2)
+    ready = find_best_reuse(catalog, prompt_tokens, num_computed_tokens=2)
     assert ready is not None
     assert ready.start == 2
 

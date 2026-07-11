@@ -1,11 +1,10 @@
 """CSKCache engine: the vLLM-agnostic brain of the middleware.
 
 This module owns every decision that used to live inside the vLLM adapter:
-directive parsing, occurrence selection (directive-first, token-matcher
-fallback), the probe-gated state machine, load-plan construction, KV
-scatter/gather, and gate aggregation. It operates purely on plain Python data
-(token id lists, ints, mappings) and torch tensors, so it can be constructed and
-tested without importing vLLM.
+reuse-signal parsing, reuse span scheduling, the probe-gated state machine,
+load-plan construction, KV scatter/gather, and gate aggregation. It operates
+purely on plain Python data (token id lists, ints, mappings) and torch tensors,
+so it can be constructed and tested without importing vLLM.
 
 The integration layer (``integration/vllm/v1_adapter.py``) is a thin translator:
 it extracts these plain values from vLLM ``Request`` / ``forward_context`` /
@@ -28,15 +27,14 @@ from cskcache.v1.kv_transfer.gpu_connector import (
     KVConnectorInterface,
     VLLMPagedGPUConnector,
 )
-from cskcache.v1.token.token_database import SegmentCatalog, find_best_occurrence
+from cskcache.v1.token.token_database import SegmentCatalog
 from cskcache.v1.metadata import (
-    CSKCacheDirectivePlacement,
     CSKCacheMode,
-    CSKCacheRequestDirective,
+    CSKCacheReuseSignal,
     CSKLoadPlan,
     CSKProbeMeta,
     CSKReqMeta,
-    SegmentOccurrence,
+    ReuseSpan,
 )
 from cskcache.v1.storage.storage_manager import StorageManager
 
@@ -80,8 +78,7 @@ class CSKCacheEngine:
         # Scheduler-side one-shot / per-request state.
         self._plans: dict[str, CSKLoadPlan] = {}
         self._allocated_blocks: dict[str, tuple[list[int], ...]] = {}
-        self._pending_boundaries: dict[str, SegmentOccurrence] = {}
-        self._directive_boundaries: set[str] = set()
+        self._pending_reuses: dict[str, ReuseSpan] = {}
         self._probe_states: dict[str, CSKProbeState] = {}
         # Worker-side gate accumulation (the star mechanism) stays in the engine.
         self._probe_accumulators: dict[str, CSKProbeAccumulator] = {}
@@ -116,42 +113,23 @@ class CSKCacheEngine:
         exactly at the frontier, returns its length so vLLM can treat it as
         externally computed. Otherwise records a boundary and returns 0.
         """
-
         if self._config.probe_enabled:
             return 0, False
 
-        occurrence, directive_seen = self._select_occurrence(
-            token_ids, num_computed_tokens, kv_transfer_params
-        )
+        reuse = self._resolve_reuse(token_ids, kv_transfer_params)
         self._plans.pop(req_id, None)
-        self._pending_boundaries.pop(req_id, None)
-        self._directive_boundaries.discard(req_id)
-        if occurrence is None:
+        self._pending_reuses.pop(req_id, None)
+        if reuse is None:
             return 0, False
-        if occurrence.end <= num_computed_tokens:
+        if reuse.end <= num_computed_tokens:
             return 0, False
-        if occurrence.start > num_computed_tokens:
-            self._pending_boundaries[req_id] = occurrence
-            if directive_seen:
-                self._directive_boundaries.add(req_id)
+        if reuse.start > num_computed_tokens:
+            self._pending_reuses[req_id] = reuse
             return 0, False
-        if occurrence.start < num_computed_tokens:
+        if reuse.start < num_computed_tokens:
             return 0, False
-        entry = self._storage.get(occurrence.cache_id)
-        if entry is None:
-            logger.warning(
-                "CSKCache cache_id=%s matched but no KV entry is loaded",
-                occurrence.cache_id,
-            )
-            return 0, False
-        target_token_ids = tuple(token_ids[occurrence.start : occurrence.end])
-        if tuple(entry.token_ids) != target_token_ids:
-            logger.warning(
-                "CSKCache token mismatch for cache_id=%s; skip load", occurrence.cache_id
-            )
-            return 0, False
-        self._plans[req_id] = self._make_load_plan(req_id, occurrence, token_ids)
-        return occurrence.length, False
+        self._plans[req_id] = self._make_load_plan(req_id, reuse, token_ids)
+        return reuse.length, False
 
     def cap_num_new_tokens(
         self,
@@ -167,15 +145,14 @@ class CSKCacheEngine:
             return num_new_tokens
 
         if not self._config.probe_enabled:
-            boundary = self._pending_boundaries.get(req_id)
-            if boundary is not None and req_id in self._directive_boundaries:
+            boundary = self._pending_reuses.get(req_id)
+            if boundary is not None:
                 base = base_num_computed_tokens
                 if base < boundary.start:
                     return min(num_new_tokens, boundary.start - base)
                 if base < boundary.end:
                     return 0
-                self._pending_boundaries.pop(req_id, None)
-                self._directive_boundaries.discard(req_id)
+                self._pending_reuses.pop(req_id, None)
             return num_new_tokens
 
         state = self._get_or_create_probe_state(
@@ -226,15 +203,10 @@ class CSKCacheEngine:
     ) -> int:
         """Return how many tokens should be loaded in-process without forward."""
 
-        boundary = self._pending_boundaries.get(req_id)
-        if (
-            boundary is not None
-            and req_id in self._directive_boundaries
-            and num_computed_tokens == boundary.start
-        ):
+        boundary = self._pending_reuses.get(req_id)
+        if boundary is not None and num_computed_tokens == boundary.start:
             self._plans[req_id] = self._make_load_plan(req_id, boundary, token_ids)
-            self._pending_boundaries.pop(req_id, None)
-            self._directive_boundaries.discard(req_id)
+            self._pending_reuses.pop(req_id, None)
             return boundary.length
 
         if not self._config.probe_enabled:
@@ -268,7 +240,6 @@ class CSKCacheEngine:
         num_external_tokens: int,
     ) -> None:
         """Record vLLM's physical block allocation for later worker metadata."""
-
         self._allocated_blocks[req_id] = block_ids
         if num_external_tokens <= 0:
             return
@@ -294,7 +265,6 @@ class CSKCacheEngine:
         chunk. The integration layer wraps the returned lists into vLLM's
         serializable ``KVConnectorMetadata``.
         """
-
         requests: list[CSKReqMeta] = []
         probes: list[CSKProbeMeta] = []
         for req_id, scheduled in num_scheduled_tokens.items():
@@ -366,8 +336,7 @@ class CSKCacheEngine:
             self._plans.pop(req_id, None)
             self._allocated_blocks.pop(req_id, None)
             self._probe_accumulators.pop(req_id, None)
-            self._pending_boundaries.pop(req_id, None)
-            self._directive_boundaries.discard(req_id)
+            self._pending_reuses.pop(req_id, None)
 
     # ---- worker side -----------------------------------------------------
 
@@ -381,9 +350,10 @@ class CSKCacheEngine:
     ) -> None:
         """Scatter cached K/V into the paged cache before forward.
 
-        Validates cache correctness here (token identity, slice bounds, blocks)
-        and delegates the actual per-layer scatter to the KV connector. ``model``
-        is only used to locate the rotary embedding for cross-position keys.
+        Validates cache availability, source slice bounds, and block assignment,
+        then delegates the actual per-layer scatter to the KV connector.
+        ``model`` is only used to locate the rotary embedding for
+        cross-position keys.
         """
 
         self._gpu.set_model(model)
@@ -398,14 +368,6 @@ class CSKCacheEngine:
                     f"offset={plan.source_offset}, length={plan.length}, "
                     f"entry={entry.length}"
                 )
-            expected_tokens = tuple(
-                int(value)
-                for value in entry.token_ids[
-                    plan.source_offset : plan.source_offset + plan.length
-                ]
-            )
-            if expected_tokens != plan.token_ids:
-                raise RuntimeError(f"CSKCache token mismatch for {plan.cache_id}")
             if not request.block_ids or request.block_ids[0] is None:
                 raise RuntimeError(f"CSKCache load plan for {plan.req_id} has no blocks")
             self._gpu.to_gpu(entry, plan, request.block_ids[0])
@@ -472,70 +434,45 @@ class CSKCacheEngine:
 
     # ---- internals -------------------------------------------------------
 
-    def _select_occurrence(
+    def _resolve_reuse(
         self,
         token_ids: list[int],
-        num_computed_tokens: int,
         kv_transfer_params: Mapping | None,
-    ) -> tuple[SegmentOccurrence | None, bool]:
-        """Directive-first, matcher-fallback occurrence selection.
+    ) -> ReuseSpan | None:
+        """Resolve the request-local span from an explicit reuse signal only."""
 
-        The boolean indicates whether a directive was seen (directive requests
-        never fall back to full-prompt scanning of historical skill spans).
-        """
+        signal = self._parse_reuse_signal(kv_transfer_params)
+        if signal is None or not signal.enabled:
+            return None
+        return self._reuse_from_signal(token_ids, signal)
 
-        directive = self._parse_request_directive(kv_transfer_params)
-        if directive is not None:
-            if not directive.enabled:
-                return None, True
-            return self._occurrence_from_directive(token_ids, directive), True
-        return (
-            find_best_occurrence(self._catalog, token_ids, num_computed_tokens),
-            False,
-        )
-
-    def _parse_request_directive(
+    def _parse_reuse_signal(
         self,
         kv_transfer_params: Mapping | None,
-    ) -> CSKCacheRequestDirective | None:
+    ) -> CSKCacheReuseSignal | None:
         if not isinstance(kv_transfer_params, Mapping):
             return None
         raw = kv_transfer_params.get("cskcache")
         if raw is None:
             return None
         if not isinstance(raw, Mapping):
-            raise ValueError("CSKCache directive must be a mapping")
+            raise ValueError("CSKCache reuse signal must be a mapping")
 
         enabled_raw = raw.get("enabled", True)
         if not isinstance(enabled_raw, bool):
-            raise ValueError("CSKCache directive enabled must be a bool")
+            raise ValueError("CSKCache reuse signal enabled must be a bool")
         if not enabled_raw:
-            return CSKCacheRequestDirective(enabled=False, cache_id="")
+            return CSKCacheReuseSignal(enabled=False, cache_id="")
 
         cache_id = raw.get("cache_id")
         if not isinstance(cache_id, str) or not cache_id:
-            raise ValueError("CSKCache directive requires a non-empty cache_id")
+            raise ValueError("CSKCache reuse signal requires a non-empty cache_id")
 
-        placement_raw = raw.get(
-            "placement", CSKCacheDirectivePlacement.EXPLICIT_SPAN.value
-        )
-        try:
-            placement = CSKCacheDirectivePlacement(str(placement_raw))
-        except ValueError as exc:
-            raise ValueError(
-                f"Unsupported CSKCache directive placement: {placement_raw!r}"
-            ) from exc
-
-        trailing_token_count = self._parse_nonnegative_int(
-            raw.get("trailing_token_count", 0), "trailing_token_count"
-        )
-        return CSKCacheRequestDirective(
+        return CSKCacheReuseSignal(
             enabled=True,
             cache_id=cache_id,
-            placement=placement,
             target_start=self._parse_optional_int(raw.get("target_start"), "target_start"),
             target_end=self._parse_optional_int(raw.get("target_end"), "target_end"),
-            trailing_token_count=trailing_token_count,
         )
 
     @staticmethod
@@ -543,61 +480,40 @@ class CSKCacheEngine:
         if value is None:
             return None
         if isinstance(value, bool) or not isinstance(value, int):
-            raise ValueError(f"CSKCache directive {name} must be an int")
+            raise ValueError(f"CSKCache reuse signal {name} must be an int")
         return value
 
-    @staticmethod
-    def _parse_nonnegative_int(value: object, name: str) -> int:
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise ValueError(f"CSKCache directive {name} must be an int")
-        if value < 0:
-            raise ValueError(f"CSKCache directive {name} must be non-negative")
-        return value
-
-    def _occurrence_from_directive(
+    def _reuse_from_signal(
         self,
         token_ids: list[int],
-        directive: CSKCacheRequestDirective,
-    ) -> SegmentOccurrence:
-        entry = self._storage.get(directive.cache_id)
+        signal: CSKCacheReuseSignal,
+    ) -> ReuseSpan:
+        entry = self._storage.get(signal.cache_id)
         if entry is None:
             raise RuntimeError(
-                f"CSKCache directive cache_id={directive.cache_id} is not loaded"
+                f"CSKCache reuse signal cache_id={signal.cache_id} is not loaded"
             )
 
-        if directive.placement == CSKCacheDirectivePlacement.EXPLICIT_SPAN:
-            if directive.target_start is None or directive.target_end is None:
-                raise ValueError(
-                    "CSKCache explicit_span directive requires target_start and target_end"
-                )
-            target_start = directive.target_start
-            target_end = directive.target_end
-        elif directive.placement == CSKCacheDirectivePlacement.SUFFIX_BEFORE_TRAILING:
-            target_end = len(token_ids) - directive.trailing_token_count
-            target_start = target_end - entry.length
-        else:
-            raise ValueError(f"Unsupported CSKCache placement: {directive.placement}")
+        if signal.target_start is None or signal.target_end is None:
+            raise ValueError(
+                "CSKCache reuse signal requires target_start and target_end"
+            )
+        target_start = signal.target_start
+        target_end = signal.target_end
 
-        if target_start < 0 or target_end > len(token_ids) or target_start >= target_end:
+        if target_start < 0 or target_start >= target_end:
             raise RuntimeError(
-                f"CSKCache directive span out of bounds for {directive.cache_id}: "
+                f"CSKCache reuse signal provides invalid target_start and target_end "
                 f"target=[{target_start},{target_end}), token_count={len(token_ids)}"
             )
         if target_end - target_start != entry.length:
             raise RuntimeError(
-                f"CSKCache directive span length mismatch for {directive.cache_id}: "
+                f"CSKCache reuse span length mismatch for {signal.cache_id}: "
                 f"target_length={target_end - target_start}, entry_length={entry.length}"
             )
 
-        target_token_ids = tuple(token_ids[target_start:target_end])
-        entry_token_ids = tuple(int(value) for value in entry.token_ids)
-        if target_token_ids != entry_token_ids:
-            raise RuntimeError(
-                f"CSKCache directive token mismatch for {directive.cache_id}: "
-                f"target=[{target_start},{target_end})"
-            )
-        return SegmentOccurrence(
-            cache_id=directive.cache_id,
+        return ReuseSpan(
+            cache_id=signal.cache_id,
             start=target_start,
             end=target_end,
             mode=CSKCacheMode.REUSE,
@@ -606,17 +522,17 @@ class CSKCacheEngine:
     @staticmethod
     def _make_load_plan(
         req_id: str,
-        occurrence: SegmentOccurrence,
+        reuse: ReuseSpan,
         token_ids: list[int],
         source_offset: int = 0,
     ) -> CSKLoadPlan:
         return CSKLoadPlan(
             req_id=req_id,
-            cache_id=occurrence.cache_id,
-            mode=occurrence.mode,
-            start=occurrence.start,
-            end=occurrence.end,
-            token_ids=tuple(token_ids[occurrence.start : occurrence.end]),
+            cache_id=reuse.cache_id,
+            mode=reuse.mode,
+            start=reuse.start,
+            end=reuse.end,
+            token_ids=tuple(token_ids[reuse.start : reuse.end]),
             source_offset=source_offset,
         )
 
@@ -631,35 +547,20 @@ class CSKCacheEngine:
         if state is not None and state.phase != CSKProbePhase.DONE:
             return state
 
-        occurrence, _ = self._select_occurrence(
-            token_ids, num_computed_tokens, kv_transfer_params
-        )
-        if occurrence is None:
+        reuse = self._resolve_reuse(token_ids, kv_transfer_params)
+        if reuse is None:
             return None
-        if occurrence.end <= num_computed_tokens:
+        if reuse.end <= num_computed_tokens:
             return None
-        if occurrence.start < num_computed_tokens:
-            return None
-        entry = self._storage.get(occurrence.cache_id)
-        if entry is None:
-            logger.warning(
-                "CSKCache cache_id=%s matched but no KV entry is loaded",
-                occurrence.cache_id,
-            )
-            return None
-        target_token_ids = tuple(token_ids[occurrence.start : occurrence.end])
-        if tuple(entry.token_ids) != target_token_ids:
-            logger.warning(
-                "CSKCache token mismatch for cache_id=%s; skip probe", occurrence.cache_id
-            )
+        if reuse.start < num_computed_tokens:
             return None
 
-        length = occurrence.length
+        length = reuse.length
         state = CSKProbeState(
             req_id=req_id,
-            cache_id=occurrence.cache_id,
-            start=occurrence.start,
-            end=occurrence.end,
+            cache_id=reuse.cache_id,
+            start=reuse.start,
+            end=reuse.end,
             probe_len=min(self._config.probe_tokens, length),
             anchor_len=min(self._config.anchor_tokens, length),
             tau=self._config.probe_tau,

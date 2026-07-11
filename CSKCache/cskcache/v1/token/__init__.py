@@ -1,14 +1,13 @@
-"""CSKCache token layer: token sequence -> reusable segment occurrence.
+"""CSKCache token layer: token sequence -> reusable span.
 
-Maps request token ids to cached segments. ``SegmentCatalog`` is the exact
-(KMP) token-subsequence index used as the fallback when a request carries no
-agent directive; the engine's directive path is the preferred discovery route.
+Maps request token ids to cached segments for offline diagnostics. Production
+reuse decisions are driven by explicit request reuse signals, not prompt scans.
 """
 
 from cskcache.v1.token.token_database import (
     SegmentCatalog,
-    find_best_occurrence,
+    find_best_reuse,
     find_subsequence,
 )
 
-__all__ = ["SegmentCatalog", "find_best_occurrence", "find_subsequence"]
+__all__ = ["SegmentCatalog", "find_best_reuse", "find_subsequence"]

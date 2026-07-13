@@ -145,6 +145,21 @@ get_boundary_reuse_load_tokens(request, num_computed_tokens)
 These hooks let CSKCache stop chunked prefill at the segment start/probe/anchor
 boundaries and schedule an in-process KV splice for the reused tail.
 
+## Logging
+
+CSKCache installs a process-local stderr handler so connector, scheduler, and
+worker events remain visible when vLLM runs them in child processes. The default
+level is `INFO`; override it with:
+
+```text
+CSKCACHE_LOG_LEVEL=DEBUG|INFO|WARNING|ERROR|CRITICAL
+```
+
+Request lifecycle logs include accepted ordered entries, selected reuse
+boundaries, dispatched load plans, completed KV loads with source/target spans
+and elapsed time, saves, probe decisions, and cleanup. Redirect vLLM stderr to a
+file to retain these records.
+
 ## Old vLLM Patch Status
 
 The old `/home/wsh/vllm/vllm/v1/context_segment_cache/` implementation is kept

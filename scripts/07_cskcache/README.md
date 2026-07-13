@@ -52,6 +52,13 @@ import or dynamic loading from `scripts/03_14B_anthropic`, `05`, or `06`. It
 does not replay `src/traces`: the model chooses tools, OpenHands executes them in
 an isolated workspace, and each real tool result enters the next model request.
 
+OpenHands registers one generic tool named `skill`; individual skill names are
+arguments, not tool names. The agent system suffix therefore makes the protocol
+explicit: load a guide with `skill(name="doc-coauthoring")`, never by calling a
+tool named `doc-coauthoring`. A skill is considered used only after that tool
+returns its guide. The runner does not rewrite an invalid model-generated tool
+name at the transport boundary.
+
 The CSKCache injector wraps the OpenHands LLM `_transport_call`. It normalizes
 Qwen tool messages to string content, renders the exact final prompt with the
 local tokenizer, and searches for complete offline `SKILL.md` token sequences.
@@ -83,6 +90,15 @@ the SDK console output, while `openhands_events.jsonl` contains one immediately
 flushed record per Conversation event, including the current benchmark turn,
 event type, assistant action, tool observation, message, or state event. Events
 already written remain available when a later tool or model request fails.
+
+CSKCache uses its own stderr logger, following LMCache's process-visible logging
+pattern. Scheduler and worker state transitions appear in `vllm_<task>.log`
+with a `CSKCache` prefix: connector initialization, accepted ordered entries,
+selected reuse boundaries, dispatched load plans, completed KV loads and their
+elapsed time, saves, probe decisions, and request cleanup. Set
+`CSKCACHE_LOG_LEVEL=DEBUG|INFO|WARNING|ERROR|CRITICAL` before running the wrapper;
+the default is `INFO`. Polling paths do not emit a line unless the request moves
+to a new state.
 
 The wrapper restarts vLLM at the `(mode=cskcache, task)` boundary. It enables
 prefix caching, runs all benchmark turns for that task in one Conversation, and

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -13,6 +12,10 @@ from vllm.distributed.kv_transfer.kv_connector.v1.base import (
 from vllm.v1.core.sched.output import SchedulerOutput
 
 from cskcache.integration.vllm.v1_adapter import CSKCacheConnectorV1Impl
+from cskcache.logging import init_logger
+
+
+logger = init_logger(__name__)
 
 if TYPE_CHECKING:
     from vllm.attention.backends.abstract import AttentionMetadata
@@ -38,12 +41,11 @@ class CSKCacheConnectorV1(KVConnectorBase_V1):
         role: KVConnectorRole,
         kv_cache_config: "KVCacheConfig | None" = None,
     ) -> None:
-        print(
-            "CSKCacheConnectorV1 __init__ from "
-            f"{__file__} role={role} extra_config="
-            f"{vllm_config.kv_transfer_config.kv_connector_extra_config}",
-            file=sys.stderr,
-            flush=True,
+        logger.info(
+            "connector init role=%s module=%s extra_config=%s",
+            role,
+            __file__,
+            vllm_config.kv_transfer_config.kv_connector_extra_config,
         )
         super().__init__(
             vllm_config=vllm_config,
@@ -51,11 +53,7 @@ class CSKCacheConnectorV1(KVConnectorBase_V1):
             kv_cache_config=kv_cache_config,
         )
         self._engine = CSKCacheConnectorV1Impl(vllm_config, role, self)
-        print(
-            "CSKCacheConnectorV1 engine ready",
-            file=sys.stderr,
-            flush=True,
-        )
+        logger.info("connector ready role=%s", role)
 
     def register_kv_caches(self, kv_caches: dict[str, torch.Tensor]) -> None:
         self._engine.register_kv_caches(kv_caches)

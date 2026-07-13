@@ -30,6 +30,15 @@ DEFAULT_KV_DIR = Path(
     "offline_skill_kv"
 )
 
+SKILL_TOOL_PROTOCOL = (
+    "Skills listed in <SKILLS> are guides, not separately named tools. "
+    "To load any skill, always call the registered `skill` tool with the "
+    "skill name as its `name` argument, for example "
+    "`skill(name=\"doc-coauthoring\")`. Never use a skill name such as "
+    "`doc-coauthoring` as the tool name. Do not claim that you used a skill "
+    "until its `skill` tool call has returned the guide."
+)
+
 
 @dataclass
 class TaskSpec:
@@ -499,6 +508,7 @@ def create_agent_and_llm(
         agent_context=AgentContext(
             skills=list(loaded_skills.values()),
             system_message_suffix=(
+                f"{SKILL_TOOL_PROTOCOL}\n\n"
                 "Always be rigorous. You do not need to execute any code you "
                 "write. Your only responsibility is to produce well-structured "
                 "and complete code files."

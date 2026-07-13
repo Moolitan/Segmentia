@@ -14,7 +14,7 @@ carriers into vLLM's ``KVConnectorMetadata`` envelopes.
 
 from __future__ import annotations
 
-import logging
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Iterable
@@ -22,6 +22,7 @@ from typing import Iterable
 import torch
 
 from cskcache.v1.compute import CSKProbeAccumulator, CSKProbeDecision
+from cskcache.logging import init_logger
 from cskcache.v1.core.config import CSKCacheConfig
 from cskcache.v1.core.probe_state import CSKProbePhase, CSKProbeState
 from cskcache.v1.kv_transfer.gpu_connector import (
@@ -41,8 +42,7 @@ from cskcache.v1.metadata import (
 )
 from cskcache.v1.storage.storage_manager import StorageManager
 
-# Standard logging keeps the engine importable without vLLM.
-logger = logging.getLogger(__name__)
+logger = init_logger(__name__)
 
 
 @dataclass
@@ -141,9 +141,7 @@ class CSKCacheEngine:
         if self._config.probe_enabled:
             return 0, False
 
-        self._reuse_spans[req_id] = self._resolve_reuses(
-            token_ids, kv_transfer_params
-        )
+        self._ensure_reuse_spans(req_id, token_ids, kv_transfer_params)
         reuse = self._next_reuse(req_id, num_computed_tokens)
         self._plans.pop(req_id, None)
         self._pending_reuses.pop(req_id, None)
@@ -157,6 +155,7 @@ class CSKCacheEngine:
         if reuse.start < num_computed_tokens:
             return 0, False
         self._plans[req_id] = self._make_load_plan(req_id, reuse, token_ids)
+        self._log_load_plan(self._plans[req_id], "frontier")
         return reuse.length, False
 
     def cap_prefill_before_reuse(
@@ -174,9 +173,7 @@ class CSKCacheEngine:
 
         if not self._config.probe_enabled:
             if req_id not in self._reuse_spans:
-                self._reuse_spans[req_id] = self._resolve_reuses(
-                    token_ids, kv_transfer_params
-                )
+                self._ensure_reuse_spans(req_id, token_ids, kv_transfer_params)
             boundary = self._pending_reuses.get(req_id)
             base = base_num_computed_tokens
             if boundary is None or boundary.start < base:
@@ -242,6 +239,7 @@ class CSKCacheEngine:
         boundary = self._pending_reuses.get(req_id)
         if boundary is not None and num_computed_tokens == boundary.start:
             self._plans[req_id] = self._make_load_plan(req_id, boundary, token_ids)
+            self._log_load_plan(self._plans[req_id], "boundary")
             self._pending_reuses.pop(req_id, None)
             return boundary.length
 
@@ -267,6 +265,7 @@ class CSKCacheEngine:
             token_ids=target_token_ids,
             source_offset=load_start - state.start,
         )
+        self._log_load_plan(self._plans[req_id], "probe")
         return length
 
     def update_reuse_after_alloc(
@@ -330,6 +329,16 @@ class CSKCacheEngine:
                 if blocks is None:
                     raise RuntimeError(f"CSKCache load plan for {req_id} has no blocks")
                 requests.append(CSKReqMeta(plan=plan, block_ids=blocks))
+                logger.info(
+                    "load dispatched req_id=%s cache_id=%s target=[%d,%d) "
+                    "tokens=%d blocks=%d",
+                    req_id,
+                    plan.cache_id,
+                    plan.start,
+                    plan.end,
+                    plan.length,
+                    len(blocks[0]),
+                )
                 state = self._probe_states.get(req_id)
                 if state is not None:
                     state.phase = CSKProbePhase.DONE
@@ -404,7 +413,7 @@ class CSKCacheEngine:
             else:
                 state.phase = CSKProbePhase.NEED_ANCHOR
             logger.info(
-                "CSKCache probe decision request=%s cache_id=%s passed=%s "
+                "probe decision req_id=%s cache_id=%s passed=%s "
                 "gate=%.6f tau=%.6f metric=%s layers=%d",
                 decision.req_id,
                 decision.cache_id,
@@ -417,6 +426,13 @@ class CSKCacheEngine:
 
     def on_finished(self, req_ids: Iterable[str]) -> None:
         for req_id in req_ids:
+            spans = self._reuse_spans.get(req_id, ())
+            if spans:
+                logger.info(
+                    "request finished req_id=%s reuse_entries=%d",
+                    req_id,
+                    len(spans),
+                )
             self._probe_states.pop(req_id, None)
             self._plans.pop(req_id, None)
             self._allocated_blocks.pop(req_id, None)
@@ -458,7 +474,23 @@ class CSKCacheEngine:
                 )
             if not request.block_ids or request.block_ids[0] is None:
                 raise RuntimeError(f"CSKCache load plan for {plan.req_id} has no blocks")
+            started = time.perf_counter()
             self._gpu.to_gpu(entry, plan, request.block_ids[0])
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            source_start = entry.source_start + plan.source_offset
+            source_end = source_start + plan.length
+            logger.info(
+                "KV load completed req_id=%s cache_id=%s source=[%d,%d) "
+                "target=[%d,%d) tokens=%d elapsed_ms=%.3f",
+                plan.req_id,
+                plan.cache_id,
+                source_start,
+                source_end,
+                plan.start,
+                plan.end,
+                plan.length,
+                elapsed_ms,
+            )
 
     def capture_probes(
         self,
@@ -556,7 +588,7 @@ class CSKCacheEngine:
             self._storage.put(entry, persist=True)
             saved.append(meta.cache_id)
             logger.info(
-                "CSKCache saved cache_id=%s source=[%d,%d) tokens=%d layers=%d",
+                "saved cache_id=%s source=[%d,%d) tokens=%d layers=%d",
                 meta.cache_id,
                 meta.start,
                 meta.end,
@@ -578,12 +610,36 @@ class CSKCacheEngine:
             try:
                 decisions.append(accumulator.decide())
             except RuntimeError as exc:
-                logger.warning("CSKCache probe decision skipped for %s: %s", req_id, exc)
+                logger.warning("probe decision skipped req_id=%s error=%s", req_id, exc)
             finally:
                 self._probe_accumulators.pop(req_id, None)
         return decisions
 
     # ---- internals -------------------------------------------------------
+
+    def _ensure_reuse_spans(
+        self,
+        req_id: str,
+        token_ids: list[int],
+        kv_transfer_params: Mapping | None,
+    ) -> tuple[ReuseSpan, ...]:
+        spans = self._reuse_spans.get(req_id)
+        if spans is not None:
+            return spans
+        spans = self._resolve_reuses(token_ids, kv_transfer_params)
+        self._reuse_spans[req_id] = spans
+        if spans:
+            rendered = ", ".join(
+                f"{span.cache_id}:[{span.start},{span.end})" for span in spans
+            )
+            logger.info(
+                "reuse signal accepted req_id=%s prompt_tokens=%d entries=%d [%s]",
+                req_id,
+                len(token_ids),
+                len(spans),
+                rendered,
+            )
+        return spans
 
     def _parse_save_signal(
         self,
@@ -618,7 +674,7 @@ class CSKCacheEngine:
         if not isinstance(overwrite, bool):
             raise ValueError("CSKCache save signal overwrite must be a bool")
         if self._storage.contains(cache_id) and not overwrite:
-            logger.info("CSKCache save skipped existing cache_id=%s", cache_id)
+            logger.info("save skipped existing cache_id=%s", cache_id)
             return None
 
         return _PendingSave(
@@ -792,6 +848,32 @@ class CSKCacheEngine:
             source_offset=source_offset,
         )
 
+    def _log_load_plan(self, plan: CSKLoadPlan, trigger: str) -> None:
+        spans = self._reuse_spans.get(plan.req_id, ())
+        entry_index = next(
+            (
+                index
+                for index, span in enumerate(spans, start=1)
+                if span.cache_id == plan.cache_id
+                and span.start <= plan.start
+                and span.end == plan.end
+            ),
+            0,
+        )
+        logger.info(
+            "reuse boundary selected req_id=%s cache_id=%s entry=%d/%d trigger=%s "
+            "target=[%d,%d) source_offset=%d tokens=%d",
+            plan.req_id,
+            plan.cache_id,
+            entry_index,
+            len(spans),
+            trigger,
+            plan.start,
+            plan.end,
+            plan.source_offset,
+            plan.length,
+        )
+
     def _get_or_create_probe_state(
         self,
         req_id: str,
@@ -804,9 +886,7 @@ class CSKCacheEngine:
             return state
 
         if req_id not in self._reuse_spans:
-            self._reuse_spans[req_id] = self._resolve_reuses(
-                token_ids, kv_transfer_params
-            )
+            self._ensure_reuse_spans(req_id, token_ids, kv_transfer_params)
         reuse = self._next_reuse(req_id, num_computed_tokens)
         if reuse is None:
             return None

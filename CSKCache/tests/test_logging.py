@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+import io
+import sys
+from contextlib import redirect_stderr
+from pathlib import Path
+
+import torch
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from cskcache.logging import init_logger
+from cskcache.v1.core import cache_engine as cache_engine_module
+from cskcache.v1.core.cache_engine import CSKCacheEngine
+from cskcache.v1.core.config import CSKCacheConfig
+from cskcache.v1.metadata import CSKCacheEntry
+from cskcache.v1.storage.storage_manager import StorageManager
+
+
+class _RecordingGPUConnector:
+    def __init__(self) -> None:
+        self.loaded: list[tuple[str, int, int]] = []
+
+    def bind_kv_caches(self, kv_caches) -> None:
+        return
+
+    def set_model(self, model) -> None:
+        return
+
+    def to_gpu(self, entry, plan, block_ids) -> None:
+        self.loaded.append((entry.cache_id, plan.start, plan.end))
+
+    def reuse_slice(self, *args, **kwargs):
+        raise AssertionError("not used")
+
+    def gather(self, *args, **kwargs):
+        raise AssertionError("not used")
+
+
+def test_owned_logger_writes_cskcache_prefix() -> None:
+    stream = io.StringIO()
+    with redirect_stderr(stream):
+        logger = init_logger("cskcache.tests.owned_logger")
+        logger.info("visible event req_id=r1")
+    output = stream.getvalue()
+    assert "CSKCache INFO: visible event req_id=r1" in output
+
+
+def test_reuse_lifecycle_logs_once_and_includes_worker_completion() -> None:
+    entry = CSKCacheEntry(
+        cache_id="doc-coauthoring",
+        source_start=0,
+        source_end=4,
+        token_ids=[10, 11, 12, 13],
+        kv_by_layer={"layer0": (torch.zeros(4, 1), torch.ones(4, 1))},
+    )
+    storage = StorageManager()
+    storage.put(entry)
+    gpu = _RecordingGPUConnector()
+    engine = CSKCacheEngine(
+        CSKCacheConfig(), storage, block_size=4, gpu_connector=gpu
+    )
+    prompt = [1, 2, *entry.token_ids, 99]
+    signal = {
+        "cskcache": {
+            "cache_id": entry.cache_id,
+            "target_start": 2,
+            "target_end": 6,
+        }
+    }
+
+    stream = io.StringIO()
+    handler = cache_engine_module.logger.handlers[0]
+    original_stream = handler.stream
+    handler.setStream(stream)
+    try:
+        assert engine.get_num_new_matched_tokens("r1", prompt, 0, signal) == (
+            0,
+            False,
+        )
+        assert engine.cap_prefill_before_reuse("r1", prompt, 0, 32, signal) == 2
+        assert engine.get_boundary_reuse_load_tokens("r1", prompt, 2) == 4
+        engine.update_reuse_after_alloc("r1", ([0, 1],), 4)
+        requests, _, _ = engine.build_meta({"r1": 0})
+        engine.load(requests)
+        engine.on_finished(["r1"])
+    finally:
+        handler.setStream(original_stream)
+
+    output = stream.getvalue()
+    assert output.count("reuse signal accepted req_id=r1") == 1
+    assert "cache_id=doc-coauthoring entry=1/1" in output
+    assert "load dispatched req_id=r1 cache_id=doc-coauthoring" in output
+    assert "KV load completed req_id=r1 cache_id=doc-coauthoring" in output
+    assert "source=[0,4) target=[2,6) tokens=4 elapsed_ms=" in output
+    assert gpu.loaded == [("doc-coauthoring", 2, 6)]
+
+
+if __name__ == "__main__":
+    test_owned_logger_writes_cskcache_prefix()
+    test_reuse_lifecycle_logs_once_and_includes_worker_completion()
+    print("CSKCache logging tests passed")

@@ -28,10 +28,10 @@ from vllm.distributed.kv_transfer.kv_connector.v1.base import (
     KVConnectorMetadata,
     KVConnectorWorkerMetadata,
 )
-from vllm.logger import init_logger
 from vllm.v1.outputs import KVConnectorOutput
 
 from cskcache.integration.vllm.utils import load_vllm_config
+from cskcache.logging import init_logger
 from cskcache.v1.compute import CSKProbeDecision
 from cskcache.v1.core.cache_engine import CSKCacheEngine
 from cskcache.v1.metadata import CSKProbeMeta, CSKReqMeta, CSKSaveMeta
@@ -100,15 +100,15 @@ class CSKCacheConnectorV1Impl:
 
         if config.kv_dir is not None and not config.capture_only:
             loaded = self._registry.load_dir(config.kv_dir)
-            logger.warning(
-                "CSKCache loaded %d KV entries from %s", len(loaded), config.kv_dir
+            logger.info(
+                "loaded %d KV entries from %s", len(loaded), config.kv_dir
             )
 
         # The engine builds its matcher catalog from whatever storage now holds.
         self._engine = CSKCacheEngine(config, storage, block_size)
         self._kv_caches_bound = False
-        logger.warning(
-            "CSKCache connector initialized: role=%s catalog_segments=%d probe_enabled=%s",
+        logger.info(
+            "connector initialized role=%s catalog_segments=%d probe_enabled=%s",
             role,
             len(self._engine.catalog.segments),
             config.probe_enabled,

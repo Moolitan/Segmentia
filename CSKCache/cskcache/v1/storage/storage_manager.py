@@ -82,7 +82,15 @@ class StorageManager:
         self._enforce_cpu_budget()
         return entry
 
-    def put(self, entry: CSKCacheEntry) -> None:
+    def put(self, entry: CSKCacheEntry, *, persist: bool = False) -> None:
+        if persist:
+            if self._disk is None:
+                raise RuntimeError(
+                    "CSKCache persist=True requires a configured disk backend"
+                )
+            self._disk.put(entry)
+            if self._cpu_max_bytes == 0:
+                return
         self._cpu.put(entry)
         self._policy.record_insert(entry.cache_id)
         self._enforce_cpu_budget()

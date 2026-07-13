@@ -69,13 +69,10 @@ def test_direct_reuse_ready_at_frontier() -> None:
         }
     }
     n, load_async = eng.get_num_new_matched_tokens("r1", skill, 0, signal)
-    print(f"n={n}, load_async={load_async}")
     assert n == 4 and load_async is False
-    eng.update_state_after_alloc("r1", ([0, 1],), num_external_tokens=4)
-    requests, probes = eng.build_meta({"r1": 0})
-    print(f"requests={requests}")
-    print(f"probes={probes}")
-    assert len(requests) == 1 and not probes
+    eng.update_reuse_after_alloc("r1", ([0, 1],), num_external_tokens=4)
+    requests, probes, saves = eng.build_meta({"r1": 0})
+    assert len(requests) == 1 and not probes and not saves
     assert requests[0].plan.cache_id == "skill"
     assert requests[0].plan.start == 0 and requests[0].plan.end == 4
  
@@ -103,17 +100,17 @@ def test_reuse_signal_middle_injection() -> None:
         }
     }
     # At the frontier 0 the span is ahead -> recorded as a boundary, 0 matched now.
-    n, _ = eng.get_num_new_matched_tokens("r1", prompt, 2, signal)
-    print(f"n={n}")
+    n, _ = eng.get_num_new_matched_tokens("r1", prompt, 0, signal)
     assert n == 0
     # Prefix chunk is capped to stop exactly at span start (3).
     assert eng.cap_prefill_before_reuse("r1", prompt, 0, 10, signal) == 3
     # At the boundary, the chunk is held (0) so the next pass loads in-process.
     assert eng.cap_prefill_before_reuse("r1", prompt, 3, 10, signal) == 0
     assert eng.get_boundary_reuse_load_tokens("r1", prompt, 3) == 4
-    eng.update_state_after_alloc("r1", ([0, 1],), num_external_tokens=4)
-    requests, probes = eng.build_meta({"r1": 0})
+    eng.update_reuse_after_alloc("r1", ([0, 1],), num_external_tokens=4)
+    requests, probes, saves = eng.build_meta({"r1": 0})
     assert len(requests) == 1
+    assert not probes and not saves
     assert requests[0].plan.start == 3 and requests[0].plan.end == 7
 
 
@@ -180,10 +177,10 @@ def test_probe_fsm_pass_then_load() -> None:
     assert state.pending_capture == "probe"
     # The probe span is normal prefill, so vLLM allocates blocks for it
     # (num_external_tokens=0 since nothing is loaded yet).
-    eng.update_state_after_alloc("r1", ([0],), num_external_tokens=0)
-    # Scheduling the probe chunk emits a probe capture and moves to WAIT_PROBE.
-    _, probes = eng.build_meta({"r1": 2})
+    eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=0)
+    _, probes, saves = eng.build_meta({"r1": 2})
     assert len(probes) == 1 and probes[0].start == 2 and probes[0].end == 4
+    assert not saves
     assert state.phase == CSKProbePhase.WAIT_PROBE
     # Worker says the cached KV matches -> load the tail from probe_end (4).
     metrics = CSKProbeMetrics(1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, "max", ())
@@ -191,9 +188,10 @@ def test_probe_fsm_pass_then_load() -> None:
     eng.on_worker_decisions([passed])
     assert state.phase == CSKProbePhase.NEED_LOAD
     assert eng.get_boundary_reuse_load_tokens("r1", prompt, 4) == 4  # [4,8)
-    eng.update_state_after_alloc("r1", ([0],), num_external_tokens=4)
-    requests, _ = eng.build_meta({"r1": 0})
+    eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=4)
+    requests, _, saves = eng.build_meta({"r1": 0})
     assert requests[0].plan.start == 4 and requests[0].plan.source_offset == 2
+    assert not saves
 
 
 def test_probe_fsm_fail_needs_anchor() -> None:
@@ -226,7 +224,7 @@ def test_probe_fsm_fail_needs_anchor() -> None:
     }
     eng.cap_prefill_before_reuse("r1", prompt, 0, 10, signal)
     eng.cap_prefill_before_reuse("r1", prompt, 2, 10, signal)
-    eng.update_state_after_alloc("r1", ([0],), num_external_tokens=0)
+    eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=0)
     eng.build_meta({"r1": 2})
     metrics = CSKProbeMetrics(1, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, "max", ())
     failed = CSKProbeDecision("r1", "skill", False, 0.15, metrics)
@@ -251,16 +249,16 @@ if __name__ == "__main__":
     test_reuse_signal_middle_injection()
     print("PASS test_reuse_signal_middle_injection")
     
-    # print("---------------------- test 4: test reuse signal disabled suppresses reuse ------------------------------")
-    # test_reuse_signal_disabled_suppresses_reuse()
-    # print("PASS test_reuse_signal_disabled_suppresses_reuse")
+    print("---------------------- test 4: test reuse signal disabled suppresses reuse ------------------------------")
+    test_reuse_signal_disabled_suppresses_reuse()
+    print("PASS test_reuse_signal_disabled_suppresses_reuse")
     
-    # print("---------------------- test 5: test probe FSM pass then load ------------------------------")
-    # test_probe_fsm_pass_then_load()
-    # print("PASS test_probe_fsm_pass_then_load")
+    print("---------------------- test 5: test probe FSM pass then load ------------------------------")
+    test_probe_fsm_pass_then_load()
+    print("PASS test_probe_fsm_pass_then_load")
     
-    # print("---------------------- test 6: test probe FSM fail needs anchor ------------------------------")
-    # test_probe_fsm_fail_needs_anchor()
-    # print("PASS test_probe_fsm_fail_needs_anchor")
+    print("---------------------- test 6: test probe FSM fail needs anchor ------------------------------")
+    test_probe_fsm_fail_needs_anchor()
+    print("PASS test_probe_fsm_fail_needs_anchor")
 
-    # print("ALL ENGINE TESTS PASSED")
+    print("ALL ENGINE TESTS PASSED")

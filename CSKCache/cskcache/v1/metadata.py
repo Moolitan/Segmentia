@@ -157,3 +157,20 @@ class CSKProbeMeta:
     @property
     def length(self) -> int:
         return self.end - self.start
+
+
+@dataclass(frozen=True)
+class CSKSaveMeta:
+    """Worker instruction for persisting a freshly-prefilled token span."""
+
+    req_id: str
+    cache_id: str
+    start: int
+    end: int
+    token_ids: tuple[int, ...]
+    block_ids: tuple[list[int], ...]
+    overwrite: bool = False
+
+    @property
+    def length(self) -> int:
+        return self.end - self.start

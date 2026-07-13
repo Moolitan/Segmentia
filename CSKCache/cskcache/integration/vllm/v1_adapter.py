@@ -33,7 +33,7 @@ from vllm.v1.outputs import KVConnectorOutput
 from cskcache.integration.vllm.utils import load_vllm_config
 from cskcache.v1.compute import CSKProbeDecision
 from cskcache.v1.core.cache_engine import CSKCacheEngine
-from cskcache.v1.metadata import CSKProbeMeta, CSKReqMeta
+from cskcache.v1.metadata import CSKProbeMeta, CSKReqMeta, CSKSaveMeta
 from cskcache.v1.registry import CSKCacheRegistry, get_global_registry
 from cskcache.v1.storage.storage_manager import StorageManager
 
@@ -58,6 +58,7 @@ class CSKConnectorMetadata(KVConnectorMetadata):
 
     requests: list[CSKReqMeta] = field(default_factory=list)
     probes: list[CSKProbeMeta] = field(default_factory=list)
+    saves: list[CSKSaveMeta] = field(default_factory=list)
 
 
 @dataclass
@@ -163,20 +164,28 @@ class CSKCacheConnectorV1Impl:
         blocks: "KVCacheBlocks",
         num_external_tokens: int,
     ) -> None:
-        self._engine.update_state_after_alloc(
+        block_ids = blocks.get_block_ids(allow_none=True)
+        self._engine.update_reuse_after_alloc(
             request.request_id,
-            blocks.get_block_ids(allow_none=True),
+            block_ids,
             num_external_tokens,
+        )
+        self._engine.update_save_after_alloc(
+            request.request_id,
+            self._request_token_ids(request),
+            request.num_computed_tokens,
+            block_ids,
+            getattr(request, "kv_transfer_params", None),
         )
 
     def build_connector_meta(
         self,
         scheduler_output: "SchedulerOutput",
     ) -> KVConnectorMetadata:
-        requests, probes = self._engine.build_meta(
+        requests, probes, saves = self._engine.build_meta(
             scheduler_output.num_scheduled_tokens
         )
-        return CSKConnectorMetadata(requests=requests, probes=probes)
+        return CSKConnectorMetadata(requests=requests, probes=probes, saves=saves)
 
     def update_connector_output(self, connector_output: KVConnectorOutput) -> None:
         worker_meta = connector_output.kv_connector_worker_meta
@@ -217,9 +226,11 @@ class CSKCacheConnectorV1Impl:
         assert isinstance(metadata, CSKConnectorMetadata)
         if metadata.probes:
             self._engine.capture_probes(metadata.probes, layer_name, kv_layer)
+        if metadata.saves:
+            self._engine.capture_saves(metadata.saves, layer_name, kv_layer)
 
     def wait_for_save(self) -> None:
-        return
+        self._engine.finalize_saves()
 
     def build_connector_worker_meta(self) -> CSKProbeWorkerMetadata | None:
         decisions = self._engine.decide_probes()

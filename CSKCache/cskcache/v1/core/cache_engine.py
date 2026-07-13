@@ -447,6 +447,12 @@ class CSKCacheEngine:
     def register_kv_caches(self, kv_caches: dict[str, torch.Tensor]) -> None:
         self._gpu.bind_kv_caches(kv_caches)
 
+    def register_model(self, model: object) -> None:
+        """Register model state used to correct keys across positions."""
+
+        self._gpu.set_model(model)
+        logger.info("worker model registered model_type=%s", type(model).__name__)
+
     def load(
         self,
         requests: Iterable[CSKReqMeta],
@@ -460,7 +466,10 @@ class CSKCacheEngine:
         cross-position keys.
         """
 
-        self._gpu.set_model(model)
+        # KV-only loads run outside model forward and receive no model in their
+        # ForwardContext. Do not erase the RoPE object bound during worker init.
+        if model is not None:
+            self._gpu.set_model(model)
         for request in requests:
             plan = request.plan
             entry = self._storage.get(plan.cache_id)

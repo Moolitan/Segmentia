@@ -120,6 +120,9 @@ class CSKCacheConnectorV1Impl:
         self._engine.register_kv_caches(kv_caches)
         self._kv_caches_bound = True
 
+    def register_model(self, model: torch.nn.Module) -> None:
+        self._engine.register_model(model)
+
     # ---- scheduler side --------------------------------------------------
 
     def get_num_new_matched_tokens(
@@ -210,6 +213,8 @@ class CSKCacheConnectorV1Impl:
                 self._kv_caches_bound = True
         metadata = self._parent._get_connector_metadata()
         assert isinstance(metadata, CSKConnectorMetadata)
+        # kv_connector_no_forward supplies no model in ForwardContext. The
+        # engine therefore falls back to the model registered at worker init.
         model = getattr(forward_context, "model", None)
         self._engine.load(metadata.requests, model=model)
 

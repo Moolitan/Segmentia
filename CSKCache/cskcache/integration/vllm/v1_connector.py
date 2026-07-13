@@ -58,6 +58,11 @@ class CSKCacheConnectorV1(KVConnectorBase_V1):
     def register_kv_caches(self, kv_caches: dict[str, torch.Tensor]) -> None:
         self._engine.register_kv_caches(kv_caches)
 
+    def register_model(self, model: torch.nn.Module) -> None:
+        """Bind model-owned state needed by KV-only connector operations."""
+
+        self._engine.register_model(model)
+
     def start_load_kv(self, forward_context: "ForwardContext", **kwargs: Any) -> None:
         self._engine.start_load_kv(forward_context, **kwargs)
 

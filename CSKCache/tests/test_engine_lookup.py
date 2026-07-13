@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sys
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 import torch
 
@@ -14,6 +16,16 @@ from cskcache.v1.core.probe_state import CSKProbePhase
 from cskcache.v1.compute.gate import CSKProbeDecision, CSKProbeMetrics
 from cskcache.v1.metadata import CSKCacheEntry
 from cskcache.v1.storage.storage_manager import StorageManager
+
+
+@contextmanager
+def _raises(error_type: type[Exception], message: str) -> Iterator[None]:
+    try:
+        yield
+    except error_type as exc:
+        assert message in str(exc)
+    else:
+        raise AssertionError(f"Expected {error_type.__name__}: {message}")
 
 
 def _make_entry(cache_id: str, token_ids: list[int]) -> CSKCacheEntry:
@@ -29,8 +41,13 @@ def _make_entry(cache_id: str, token_ids: list[int]) -> CSKCacheEntry:
 
 
 def _engine(entry: CSKCacheEntry, **cfg) -> CSKCacheEngine:
+    return _engine_many([entry], **cfg)
+
+
+def _engine_many(entries: list[CSKCacheEntry], **cfg) -> CSKCacheEngine:
     storage = StorageManager()
-    storage.put(entry)
+    for entry in entries:
+        storage.put(entry)
 
     # LocalCPUBackend.put(entry) 里面是按 entry.cache_id 存的
     # print(f"STORAGE KEYS: storage.keys()={storage.keys()}")
@@ -112,6 +129,94 @@ def test_reuse_signal_middle_injection() -> None:
     assert len(requests) == 1
     assert not probes and not saves
     assert requests[0].plan.start == 3 and requests[0].plan.end == 7
+
+
+def test_multiple_reuse_entries_load_in_prompt_order() -> None:
+    """Load two request-local entries with normal prefill between their spans."""
+
+    first = _make_entry("first", [10, 11, 12, 13])
+    second = _make_entry("second", [20, 21, 22])
+    prompt = [1, 2, *first.token_ids, 90, 91, *second.token_ids, 99]
+    eng = _engine_many([first, second])
+    signal = {
+        "cskcache": {
+            "operation": "reuse",
+            # Deliberately reversed: the core must order entries by target span.
+            "entries": [
+                {
+                    "cache_id": "second",
+                    "target_start": 8,
+                    "target_end": 11,
+                },
+                {
+                    "cache_id": "first",
+                    "target_start": 2,
+                    "target_end": 6,
+                },
+            ],
+        }
+    }
+
+    matched, _ = eng.get_num_new_matched_tokens("r1", prompt, 0, signal)
+    assert matched == 0
+    assert eng.cap_prefill_before_reuse("r1", prompt, 0, 20, signal) == 2
+    assert eng.get_boundary_reuse_load_tokens("r1", prompt, 2) == 4
+    eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=4)
+    requests, _, _ = eng.build_meta({"r1": 0})
+    assert [(item.plan.cache_id, item.plan.start, item.plan.end) for item in requests] == [
+        ("first", 2, 6)
+    ]
+
+    assert eng.cap_prefill_before_reuse("r1", prompt, 6, 20, signal) == 2
+    assert eng.get_boundary_reuse_load_tokens("r1", prompt, 8) == 3
+    eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=3)
+    requests, _, _ = eng.build_meta({"r1": 0})
+    assert [(item.plan.cache_id, item.plan.start, item.plan.end) for item in requests] == [
+        ("second", 8, 11)
+    ]
+    assert eng.cap_prefill_before_reuse("r1", prompt, 11, 20, signal) == 20
+
+    eng.on_finished(["r1"])
+    assert "r1" not in eng._reuse_spans
+
+
+def test_multiple_reuse_entries_reject_ambiguous_or_invalid_spans() -> None:
+    first = _make_entry("first", [10, 11, 12, 13])
+    second = _make_entry("second", [20, 21, 22])
+    eng = _engine_many([first, second])
+    prompt = [0] * 12
+
+    mixed = {
+        "cskcache": {
+            "cache_id": "first",
+            "target_start": 0,
+            "target_end": 4,
+            "entries": [],
+        }
+    }
+    with _raises(ValueError, "both cache_id and entries"):
+        eng.get_num_new_matched_tokens("mixed", prompt, 0, mixed)
+
+    overlapping = {
+        "cskcache": {
+            "entries": [
+                {"cache_id": "first", "target_start": 2, "target_end": 6},
+                {"cache_id": "second", "target_start": 5, "target_end": 8},
+            ]
+        }
+    }
+    with _raises(ValueError, "must not overlap"):
+        eng.get_num_new_matched_tokens("overlap", prompt, 0, overlapping)
+
+    out_of_bounds = {
+        "cskcache": {
+            "entries": [
+                {"cache_id": "first", "target_start": 9, "target_end": 13}
+            ]
+        }
+    }
+    with _raises(RuntimeError, "invalid target_start"):
+        eng.get_num_new_matched_tokens("bounds", prompt, 0, out_of_bounds)
 
 
 def test_reuse_signal_disabled_suppresses_reuse() -> None:
@@ -232,6 +337,46 @@ def test_probe_fsm_fail_needs_anchor() -> None:
     assert eng._probe_states["r1"].phase == CSKProbePhase.NEED_ANCHOR
     # Anchor recompute up to anchor_end (2 + 4 = 6).
     assert eng.cap_prefill_before_reuse("r1", prompt, 4, 10, signal) == 2
+
+
+def test_probe_fsm_advances_to_second_reuse_entry() -> None:
+    first = _make_entry("first", [10, 11, 12, 13])
+    second = _make_entry("second", [20, 21, 22, 23])
+    prompt = [1, *first.token_ids, 90, *second.token_ids]
+    eng = _engine_many(
+        [first, second],
+        probe_enabled=True,
+        probe_tokens=1,
+        anchor_tokens=2,
+    )
+    signal = {
+        "cskcache": {
+            "entries": [
+                {"cache_id": "first", "target_start": 1, "target_end": 5},
+                {"cache_id": "second", "target_start": 6, "target_end": 10},
+            ]
+        }
+    }
+
+    assert eng.cap_prefill_before_reuse("r1", prompt, 0, 20, signal) == 1
+    assert eng.cap_prefill_before_reuse("r1", prompt, 1, 20, signal) == 1
+    eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=0)
+    _, probes, _ = eng.build_meta({"r1": 1})
+    assert [(probe.cache_id, probe.start, probe.end) for probe in probes] == [
+        ("first", 1, 2)
+    ]
+    metrics = CSKProbeMetrics(1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, "max", ())
+    eng.on_worker_decisions(
+        [CSKProbeDecision("r1", "first", True, 0.15, metrics)]
+    )
+    assert eng.get_boundary_reuse_load_tokens("r1", prompt, 2) == 3
+    eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=3)
+    requests, _, _ = eng.build_meta({"r1": 0})
+    assert requests[0].plan.cache_id == "first"
+
+    assert eng.cap_prefill_before_reuse("r1", prompt, 5, 20, signal) == 1
+    assert eng.cap_prefill_before_reuse("r1", prompt, 6, 20, signal) == 1
+    assert eng._probe_states["r1"].cache_id == "second"
 
 
 if __name__ == "__main__":

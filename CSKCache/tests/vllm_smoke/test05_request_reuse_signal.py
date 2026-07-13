@@ -34,14 +34,14 @@ class _Request:
         )
 
 
-def _make_entry() -> CSKCacheEntry:
+def _make_entry(cache_id: str = "skill-demo") -> CSKCacheEntry:
     """Build one cached skill entry with deterministic token IDs."""
 
     length = 6
     key = torch.zeros(length, 1, 2)
     value = torch.ones(length, 1, 2)
     return CSKCacheEntry(
-        cache_id="skill-demo",
+        cache_id=cache_id,
         source_start=0,
         source_end=length,
         token_ids=[10, 11, 12, 13, 14, 15],
@@ -50,10 +50,15 @@ def _make_entry() -> CSKCacheEntry:
 
 
 def _make_impl(entry: CSKCacheEntry) -> CSKCacheConnectorV1Impl:
+    return _make_impl_many([entry])
+
+
+def _make_impl_many(entries: list[CSKCacheEntry]) -> CSKCacheConnectorV1Impl:
     """Construct only the adapter fields needed by reuse scheduling tests."""
 
     storage = StorageManager()
-    storage.put(entry)
+    for entry in entries:
+        storage.put(entry)
     impl = CSKCacheConnectorV1Impl.__new__(CSKCacheConnectorV1Impl)
     impl._engine = CSKCacheEngine(CSKCacheConfig(), storage, block_size=4)
     return impl
@@ -139,6 +144,45 @@ def test_reuse_signal_stale_token_slice_still_builds_plan() -> None:
         999,
         13,
         14,
+        15,
+    )
+
+
+def test_multiple_reuse_entries_advance_through_adapter_hooks() -> None:
+    first = _make_entry("first")
+    second = _make_entry("second")
+    request = _Request(
+        [1, *first.token_ids, 90, 91, *second.token_ids, 99],
+        {
+            "operation": "reuse",
+            "entries": [
+                {"cache_id": "first", "target_start": 1, "target_end": 7},
+                {"cache_id": "second", "target_start": 9, "target_end": 15},
+            ],
+        },
+    )
+    impl = _make_impl_many([first, second])
+
+    assert impl.get_num_new_matched_tokens(request, 0) == (0, False)
+    assert impl.cap_prefill_before_reuse(request, 0, 32) == 1
+    assert impl.get_boundary_reuse_load_tokens(request, 1) == 6
+    first_plan = impl._engine._plans[request.request_id]
+    assert (first_plan.cache_id, first_plan.start, first_plan.end) == (
+        "first",
+        1,
+        7,
+    )
+    impl._engine.update_reuse_after_alloc(
+        request.request_id, ([0],), num_external_tokens=6
+    )
+    impl._engine.build_meta({request.request_id: 0})
+
+    assert impl.cap_prefill_before_reuse(request, 7, 32) == 2
+    assert impl.get_boundary_reuse_load_tokens(request, 9) == 6
+    second_plan = impl._engine._plans[request.request_id]
+    assert (second_plan.cache_id, second_plan.start, second_plan.end) == (
+        "second",
+        9,
         15,
     )
 

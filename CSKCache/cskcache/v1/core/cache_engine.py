@@ -98,6 +98,7 @@ class CSKCacheEngine:
         # Scheduler-side one-shot / per-request state.
         self._plans: dict[str, CSKLoadPlan] = {}
         self._allocated_blocks: dict[str, tuple[list[int], ...]] = {}
+        self._reuse_spans: dict[str, tuple[ReuseSpan, ...]] = {}
         self._pending_reuses: dict[str, ReuseSpan] = {}
         self._probe_states: dict[str, CSKProbeState] = {}
         self._pending_saves: dict[str, _PendingSave] = {}
@@ -140,7 +141,10 @@ class CSKCacheEngine:
         if self._config.probe_enabled:
             return 0, False
 
-        reuse = self._resolve_reuse(token_ids, kv_transfer_params)
+        self._reuse_spans[req_id] = self._resolve_reuses(
+            token_ids, kv_transfer_params
+        )
+        reuse = self._next_reuse(req_id, num_computed_tokens)
         self._plans.pop(req_id, None)
         self._pending_reuses.pop(req_id, None)
         if reuse is None:
@@ -169,14 +173,22 @@ class CSKCacheEngine:
             return num_new_tokens
 
         if not self._config.probe_enabled:
+            if req_id not in self._reuse_spans:
+                self._reuse_spans[req_id] = self._resolve_reuses(
+                    token_ids, kv_transfer_params
+                )
             boundary = self._pending_reuses.get(req_id)
-            if boundary is not None:
-                base = base_num_computed_tokens
-                if base < boundary.start:
-                    return min(num_new_tokens, boundary.start - base)
-                if base < boundary.end:
-                    return 0
+            base = base_num_computed_tokens
+            if boundary is None or boundary.start < base:
                 self._pending_reuses.pop(req_id, None)
+                boundary = self._next_reuse(req_id, base)
+                if boundary is None:
+                    return num_new_tokens
+                self._pending_reuses[req_id] = boundary
+            if base < boundary.start:
+                return min(num_new_tokens, boundary.start - base)
+            if base < boundary.end:
+                return 0
             return num_new_tokens
 
         state = self._get_or_create_probe_state(
@@ -409,6 +421,7 @@ class CSKCacheEngine:
             self._plans.pop(req_id, None)
             self._allocated_blocks.pop(req_id, None)
             self._probe_accumulators.pop(req_id, None)
+            self._reuse_spans.pop(req_id, None)
             self._pending_reuses.pop(req_id, None)
             self._pending_saves.pop(req_id, None)
             self._save_accumulators.pop(req_id, None)
@@ -616,47 +629,92 @@ class CSKCacheEngine:
             overwrite=overwrite,
         )
 
-    def _resolve_reuse(
+    def _resolve_reuses(
         self,
         token_ids: list[int],
         kv_transfer_params: Mapping | None,
-    ) -> ReuseSpan | None:
-        """Resolve the request-local span from an explicit reuse signal only."""
+    ) -> tuple[ReuseSpan, ...]:
+        """Resolve and order request-local spans from explicit signals only."""
 
-        signal = self._parse_reuse_signal(kv_transfer_params)
-        if signal is None or not signal.enabled:
-            return None
-        return self._reuse_from_signal(token_ids, signal)
+        signals = self._parse_reuse_signals(kv_transfer_params)
+        spans = sorted(
+            (
+                self._reuse_from_signal(token_ids, signal)
+                for signal in signals
+                if signal.enabled
+            ),
+            key=lambda span: (span.start, span.end, span.cache_id),
+        )
+        for previous, current in zip(spans, spans[1:]):
+            if current.start < previous.end:
+                raise ValueError(
+                    "CSKCache reuse spans must not overlap: "
+                    f"{previous.cache_id}=[{previous.start},{previous.end}) and "
+                    f"{current.cache_id}=[{current.start},{current.end})"
+                )
+        return tuple(spans)
 
-    def _parse_reuse_signal(
+    def _parse_reuse_signals(
         self,
         kv_transfer_params: Mapping | None,
-    ) -> CSKCacheReuseSignal | None:
+    ) -> tuple[CSKCacheReuseSignal, ...]:
         if not isinstance(kv_transfer_params, Mapping):
-            return None
+            return ()
         raw = kv_transfer_params.get("cskcache")
         if raw is None:
-            return None
+            return ()
         if not isinstance(raw, Mapping):
             raise ValueError("CSKCache reuse signal must be a mapping")
         if raw.get("operation", "reuse") == "save":
-            return None
+            return ()
 
         enabled_raw = raw.get("enabled", True)
         if not isinstance(enabled_raw, bool):
             raise ValueError("CSKCache reuse signal enabled must be a bool")
         if not enabled_raw:
-            return CSKCacheReuseSignal(enabled=False, cache_id="")
+            return ()
 
+        has_entries = "entries" in raw
+        has_single = "cache_id" in raw
+        if has_entries and has_single:
+            raise ValueError(
+                "CSKCache reuse signal cannot contain both cache_id and entries"
+            )
+        if has_entries:
+            entries = raw.get("entries")
+            if not isinstance(entries, list) or not entries:
+                raise ValueError(
+                    "CSKCache reuse signal entries must be a non-empty list"
+                )
+            signals: list[CSKCacheReuseSignal] = []
+            for index, entry in enumerate(entries):
+                if not isinstance(entry, Mapping):
+                    raise ValueError(
+                        f"CSKCache reuse signal entries[{index}] must be a mapping"
+                    )
+                signals.append(self._parse_reuse_entry(entry, f"entries[{index}]"))
+            return tuple(signals)
+
+        return (self._parse_reuse_entry(raw, "reuse signal"),)
+
+    def _parse_reuse_entry(
+        self,
+        raw: Mapping,
+        label: str,
+    ) -> CSKCacheReuseSignal:
         cache_id = raw.get("cache_id")
         if not isinstance(cache_id, str) or not cache_id:
-            raise ValueError("CSKCache reuse signal requires a non-empty cache_id")
+            raise ValueError(f"CSKCache {label} requires a non-empty cache_id")
 
         return CSKCacheReuseSignal(
             enabled=True,
             cache_id=cache_id,
-            target_start=self._parse_optional_int(raw.get("target_start"), "target_start"),
-            target_end=self._parse_optional_int(raw.get("target_end"), "target_end"),
+            target_start=self._parse_optional_int(
+                raw.get("target_start"), f"{label}.target_start"
+            ),
+            target_end=self._parse_optional_int(
+                raw.get("target_end"), f"{label}.target_end"
+            ),
         )
 
     @staticmethod
@@ -685,7 +743,11 @@ class CSKCacheEngine:
         target_start = signal.target_start
         target_end = signal.target_end
 
-        if target_start < 0 or target_start >= target_end:
+        if (
+            target_start < 0
+            or target_start >= target_end
+            or target_end > len(token_ids)
+        ):
             raise RuntimeError(
                 f"CSKCache reuse signal provides invalid target_start and target_end "
                 f"target=[{target_start},{target_end}), token_count={len(token_ids)}"
@@ -702,6 +764,16 @@ class CSKCacheEngine:
             end=target_end,
             mode=CSKCacheMode.REUSE,
         )
+
+    def _next_reuse(
+        self,
+        req_id: str,
+        num_computed_tokens: int,
+    ) -> ReuseSpan | None:
+        for reuse in self._reuse_spans.get(req_id, ()):
+            if reuse.start >= num_computed_tokens:
+                return reuse
+        return None
 
     @staticmethod
     def _make_load_plan(
@@ -731,12 +803,12 @@ class CSKCacheEngine:
         if state is not None and state.phase != CSKProbePhase.DONE:
             return state
 
-        reuse = self._resolve_reuse(token_ids, kv_transfer_params)
+        if req_id not in self._reuse_spans:
+            self._reuse_spans[req_id] = self._resolve_reuses(
+                token_ids, kv_transfer_params
+            )
+        reuse = self._next_reuse(req_id, num_computed_tokens)
         if reuse is None:
-            return None
-        if reuse.end <= num_computed_tokens:
-            return None
-        if reuse.start < num_computed_tokens:
             return None
 
         length = reuse.length

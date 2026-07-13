@@ -18,10 +18,11 @@ class CSKCacheReuseSignal:
     """Per-request reuse control signal sent through vLLM extra args.
 
     The OpenAI-compatible request carries this under
-    kv_transfer_params["cskcache"]. It is intentionally about the current skill
-    only. Historical skill spans in a multi-turn prompt should be inherited
-    through vLLM prefix cache if they were computed in prior requests; CSKCache
-    should not scan for and explicitly inject them again.
+    kv_transfer_params["cskcache"]. One request may carry multiple instances of
+    this per-entry signal under ``entries``. Historical skill spans in a
+    multi-turn prompt should be inherited through vLLM prefix cache if they were
+    computed in prior requests; CSKCache should not scan for and explicitly
+    inject them again.
 
     enabled=False means "do not use CSKCache for this request". It is not the
     same as omitting the signal: both cases simply continue normal prefill.

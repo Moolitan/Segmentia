@@ -1,0 +1,26 @@
+<think>
+Okay, let's tackle this step by step. The user wants to tighten everything according to the brand notes and ensure consistency in wording, colors, and style. They also want a final launch-pack summary.
+
+First, I need to recall the brand notes: simple, clear, trustworthy, technical tone, calm colors, simple shapes, no hype. The previous steps have already aligned the GIF and announcement with these notes, but now I need to make sure everything is even more consistent.
+
+Looking at the announcement, the Slack message uses a gear emoji and a concise bullet list. The colors are calm, with the warm accent. The GIF concept uses the specified palette. But maybe the wording can be more aligned with the technical tone. For example, "stumbles" might be too casual; perhaps "experiences a transient failure" is more formal. However, the user mentioned keeping it light, so a balance is needed.
+
+The brand guidelines emphasize avoiding flashy elements. The current announcement uses a gear emoji, which is acceptable. The GIF's palette is already calm. I should check if there's any excess in the description. The final summary needs to encapsulate the key points: the feature, benefits, audience, and visual style.
+
+I should also ensure that the colors mentioned in the GIF and announcement match exactly as per the brand notes. The main colors are #1d1d1b, #e8e6dc, #d97757, and #faf9f5. The announcement uses these correctly.
+
+Now, tightening the wording: make sure the language is clear and concise without unnecessary words. The final summary should be a brief overview, highlighting the feature, its benefits, and the visual elements. It should align with the brand's technical and trustworthy tone.
+
+I'll review the existing files, adjust any wording that's too casual, ensure color references are consistent, and compile the summary. Then, use the appropriate skills to update the files and generate the summary.
+</think>
+
+Finalizing with brand-aligned consistency across text, colors, and style.
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/slack_launch_pack/launch_announcement.md", "content": ":gear: Retry-on-failure is now live in the experiment task dashboard.\n\n- Transient failures retry automatically (bounded budget).\n- Retry history is visible on each task.\n- Non-retryable failures surface immediately.\n\nWorth a look if you maintain long-running tasks. A few task types are excluded for now while we tune the classifier.\n"}}
+</tool_call>
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/slack_launch_pack/launch_gif.md", "content": "# Launch GIF — final (brand-aligned)\n\n## Theme\n\"A failed task gets back up and tries again.\"\n\n## Visual\n- 128×128, 12 frames, 10 fps.\n- Small ink-square sprite with calm motion.\n- 4-frame stumble (down), 2-frame pause, 6-frame rise back to baseline.\n\n## Palette\n- `#1d1d1b` ink\n- `#e8e6dc` baseline\n- `#d97757` warm accent on rise frame\n- `#faf9f5` background\n\n## Why this works for Slack\n- Loops cleanly under 3 s\n- Reads clearly at 32 px in chat lists\n- No text frames or excitement marks\n- Matches brand palette exactly\n"}}
+</tool_call>
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/slack_launch_pack/launch_summary.md", "content": "# Launch Pack Summary\n\n**Feature:** Retry-on-failure for experiment tasks\n**Benefits:**\n- Reduces manual reruns for transient failures\n- Improves long-running task success rates\n- Clarifies retryable vs non-retryable failures\n**Audience:** Research and platform engineering teams\n**Visuals:**\n- Calm palette: `#1d1d1b`, `#e8e6dc`, `#d97757`, `#faf9f5`\n- 12-frame animated square sprite (128×128)\n- No text, no hype, technical clarity\n**Tone:** Simple, clear, trustworthy"}}
+</tool_call><|im_end|>

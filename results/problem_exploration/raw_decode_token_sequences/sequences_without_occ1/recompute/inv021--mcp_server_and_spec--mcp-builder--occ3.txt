@@ -1,0 +1,15 @@
+<think>
+Okay, the user wants me to provide three things: the final concise spec, a compact implementation checklist, and the top 3 design decisions. Let me start by recalling what's been discussed so far.
+
+First, the spec has evolved from the initial tool definitions to include parameters, error handling, pagination, and filtering. The latest version is an implementation note tailored for future developers. I need to condense that into a final spec.
+
+The implementation checklist should cover the key steps needed to build the server, like setting up the project, implementing tools, handling errors, and testing. It should be a quick reference for developers.
+
+For the top design decisions, the user mentioned three critical areas: pagination with limits and cursors, error handling principles, and the tool surface design. These were highlighted as points where agents might face issues, so they're crucial for the server's usability and reliability.
+
+I need to make sure the final spec is clear and concise, the checklist is actionable, and the design decisions are justified based on the previous discussions. Also, using the doc-coauthoring and mcp-builder skills as instructed, I should structure the response in a way that's easy for teammates to follow and implement.
+</think>
+
+<tool_call>
+{"name": "Read", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv/internal_comms_incident_update/.agents/skills/doc-coauthoring/SKILL.md"}}
+</tool_call><|im_end|>

@@ -1,0 +1,20 @@
+<think>
+Okay, let's tackle this request. The user wants to co-write a design doc about adding automatic retry for failed benchmark tasks. They mentioned using the "doc-coauthoring" skill, so I should start by referencing that.
+
+First, I need to read the seed files they provided: system_background.md and failure_examples.md. These probably give context on the current system and examples of failures. I'll use the read_file function for both.
+
+Once I have that info, I can structure the design doc. The user wants the structure and thinking process first. So, I should outline sections like Problem Statement, Proposed Solution, Retry Logic, Error Handling, etc. Also, considering the failure examples, maybe include how retries handle different error types.
+
+I should check if there are existing patterns in the seed files that the design doc should follow. Maybe the system_background.md explains the current benchmarking process, so the problem statement would highlight its limitations. The failure_examples.md might list specific errors that need retrying, which would inform the retry conditions.
+
+I need to make sure the design doc is concise but covers all necessary aspects. The user might want to discuss trade-offs, like retry limits to prevent infinite loops, or backoff strategies. Also, integration with existing monitoring systems could be a point.
+
+After outlining the structure, I should present it to the user for feedback before diving into detailed sections. That way, we align on the approach and ensure all critical points are addressed.
+</think>
+
+<tool_call>
+{"name": "read_file", "arguments": {"file_path": "seed_files/system_background.md", "summary": "Read system background document for context on current benchmarking architecture"}}
+</tool_call>
+<tool_call>
+{"name": "read_file", "arguments": {"file_path": "seed_files/failure_examples.md", "summary": "Read failure examples document to understand common error patterns in benchmarks"}}
+</tool_call>

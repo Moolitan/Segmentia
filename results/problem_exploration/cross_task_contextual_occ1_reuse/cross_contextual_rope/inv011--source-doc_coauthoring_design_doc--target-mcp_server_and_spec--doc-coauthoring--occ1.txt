@@ -1,0 +1,27 @@
+<think>
+Okay, the user wants me to use the "doc-coauthoring" skill to write a short spec that includes the goal, tool surface, and error handling principles based on the plan so far. Let me start by recalling the previous steps.
+
+First, the user has already outlined the minimum tools: issue_query, issue_create, and issue_comment_add. The parameter designs for each have been specified. The project structure in Python was sketched with server.py, client.py, schemas.py, and errors.py. Now, the task is to structure this into a spec document.
+
+The "doc-coauthoring" skill's workflow involves three stages: Context Gathering, Refinement & Structure, and Reader Testing. But since the user is asking for a short spec, maybe I can jump to the Refinement stage, as some context is already provided.
+
+The spec needs three sections: goal, tool surface, error handling principles. Let me start with the goal. The goal is to build an MCP server for the issue-tracking API as per the brief. It should enable agents to query, create issues, and add comments.
+
+Next, the tool surface. The tools are issue_query, issue_create, issue_comment_add. Each has parameters as previously defined. I need to present them clearly, maybe in a table or bullet points.
+
+Error handling principles: The user mentioned actionable error messages. So, errors should be specific, guide the agent, and map HTTP errors to MCP tool errors. Also, include examples like invalid parameters or authentication issues.
+
+Wait, the user also mentioned the Python project structure. Should that be part of the spec? The current request is for the spec content, not the project layout. So focus on the tools and error handling.
+
+I need to make sure the spec is concise. Maybe start with the goal, then list each tool with parameters, then outline error handling principles. Use the structure from the previous mcp_server_spec.md but condense it.
+
+Check if there's any missing info. The error handling in the Python code would be in errors.py, mapping HTTP errors to MCP errors. Also, the client.py handles REST API calls, so errors from the API should be translated into the MCP error format.
+
+Include examples of error messages, like "Invalid issue ID format" or "Authentication required". Also mention that errors should suggest next steps, like checking credentials or validating input.
+
+Putting it all together: a clear goal, tool descriptions with parameters, and error handling guidelines. Make sure it's structured and easy to read, using markdown as per the previous spec.
+</think>
+
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/mcp_server_and_spec/mcp_server_spec.md", "content": "# MCP Server for Issue Tracker — Spec (working draft)\n\n## Goal\nBuild an MCP server that enables agents to interact with a simple issue-tracking API. The server must support querying issues, creating new issues, and adding comments to existing issues, adhering to the constraints outlined in the brief.\n\n## Tool Surface\n\n### `issue_query`\n**Purpose**: Fetch issues by ID or filter by status/assignee.\n**Parameters**:\n- `id` (str, optional): Specific issue ID to fetch.\n- `status` (str, optional): Filter issues by status (e.g., \"open\", \"closed\").\n- `assignee` (str, optional): Filter issues by assignee username.\n- `limit` (int, default 20): Maximum number of results to return.\n- `cursor` (str, optional): Pagination token for paginated results.\n**Returns**: List of issues matching the criteria, with pagination support.\n\n### `issue_create`\n**Purpose**: Create a new issue.\n**Parameters**:\n- `title` (str, required): Title of the issue.\n- `body` (str, required): Detailed description of the issue.\n- `labels` (list[str], optional): List of labels to apply to the issue.\n- `assignee` (str, optional): Username of the assignee.\n**Returns**: The created issue object, including its unique ID.\n\n### `issue_comment_add`\n**Purpose**: Add a comment to an existing issue.\n**Parameters**:\n- `issue_id` (str, required): ID of the issue to comment on.\n- `body` (str, required): Content of the comment.\n**Returns**: The comment object, including its timestamp and author.\n\n## Error Handling Principles\n1. **Actionable Messages**: Errors must include specific guidance (e.g., \"Invalid issue ID format. Ensure the ID is a non-empty string.\").\n2. **HTTP to MCP Mapping**: Translate HTTP errors (e.g., 404, 401) into MCP-specific error codes with descriptive messages.\n3. **Validation Feedback**: For invalid inputs (e.g., missing required fields), suggest corrections (e.g., \"Title is required. Please provide a title for the issue.\").\n4. **Authentication Errors**: Clearly indicate when authentication is required or invalid (e.g., \"Authentication required. Please provide valid credentials.\").\n5. **Pagination Errors**: Handle invalid cursor values gracefully (e.g., \"Invalid pagination token. Use the cursor from the previous response.\")."}}
+</tool_call><|im_end|>

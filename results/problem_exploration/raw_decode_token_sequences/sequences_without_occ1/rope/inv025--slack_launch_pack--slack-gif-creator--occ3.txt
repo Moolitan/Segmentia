@@ -1,0 +1,18 @@
+<think>
+Okay, the user wants a polished final version of the internal launch pack for Slack, including the main announcement, a shorter fallback version, the GIF concept, and a note on how everything fits together. Let me start by recalling the previous steps.
+
+First, the main announcement was refined to be more technical, explaining what the feature does, why it's needed, and what's excluded. The fallback version needs to be shorter, so I'll condense that into a concise message without losing key points. 
+
+Next, the GIF concept has been polished with specific details like ease-out rise and a single accent flick. I need to present that clearly, maybe referencing the file where the concept is detailed. 
+
+The note on how the pieces fit together should tie the announcement and GIF into the brand guidelines, ensuring consistency in tone, colors, and purpose. Also, check that all elements align with the brand's calm and technical style. 
+
+I should make sure to use the correct skills: brand-guidelines for consistency, internal-comms for the announcement structure, and slack-gif-creator for the GIF specs. No need for extra tools here since the user just wants the final compilation. 
+
+Let me structure the final answer with each component clearly separated, using the appropriate file paths and references. Double-check that the fallback is a brief version of the main announcement and that the GIF concept is accurately described. The note should highlight the alignment with brand notes and the purpose of each component. Alright, that should cover it.
+</think>
+
+Finalizing with brand-guidelines, internal-comms, and slack-gif-creator.
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/slack_launch_pack/final_launch_pack.md", "content": "# Final Launch Pack\n\n## 1. Main Announcement\n:gear: *Retry-on-failure is now live in the experiment task dashboard.*\n\n*What it does*\n- Detects transient failures (timeouts, transient I/O, rate-limit signals) and retries within a bounded budget per task.\n- Records each retry attempt against the original task id so history stays linked.\n- Leaves non-retryable failures (logic bugs, validation errors) to surface immediately, unchanged.\n\n*Why now*\nManual reruns were dominating operator time for failure shapes that are deterministically recoverable. The classifier was dark-launched for a week and matched our prior manual triage on 94% of failed runs.\n\n*What it doesn't do yet*\n- It does not retry across worker restarts; that lands next.\n- A handful of task types are still excluded while we tune the classifier.\n\n## 2. Fallback Version\n:warning: *New retry-on-failure behavior in experiment task dashboard*\n- Auto-retries transient failures (timeouts, I/O issues)\n- Preserves non-retryable failures\n- Excludes some task types temporarily\n\n## 3. GIF Concept\nSee `launch_gif.md` for:\n- 128×128 ink-square sprite with ease-out rise\n- Single `#d97757` accent flick at recovery apex\n- Faint baseline shadow that thickens during rise\n\n## 4. Alignment Note\nAll components use:\n- Brand colors: `#1d1d1b` (ink), `#d97757` (accent), `#e8e6dc` (baseline)\n- Technical tone with no hype language\n- Slack-optimized dimensions (128×128) and duration (<3s)\n- Consistent visual language: calm motion, no gradients, no text frames"}}
+</tool_call><|im_end|>

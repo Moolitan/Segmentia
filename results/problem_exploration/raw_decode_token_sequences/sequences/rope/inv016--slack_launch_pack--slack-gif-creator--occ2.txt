@@ -1,0 +1,25 @@
+<think>
+Okay, let's see. The user wants me to tighten everything according to the brand notes and output a final launch-pack summary. They mentioned using the brand-guidelines, internal-comms, and slack-gif-creator skills.
+
+First, I need to make sure the announcement and GIF concept align with the brand notes. The brand notes emphasize a simple, clear, trustworthy, and technical tone without being flashy. The colors should be calm, and avoid excessive exclamation marks.
+
+Looking at the previous announcement, it's already pretty concise. Maybe I can make it even more straightforward. The GIF concept uses a calm palette with #1d1d1b, #e8e6dc, #d97757, and #faf9f5. That aligns with the brand's calm colors. I should ensure the wording in both the announcement and GIF description is consistent, using the same color references and avoiding any hype language.
+
+I should check the internal-comms guidelines again to confirm the structure of the announcement. The previous version was a Slack message with a gear emoji, bullet points, and a note about excluded task types. Maybe simplify the bullet points further and remove any unnecessary details like the exclusion note unless it's critical.
+
+For the GIF, the description mentions "calm motion, no exaggerated squash-and-stretch" which fits the brand. The palette is already aligned. I should ensure the final summary reflects these adjustments and ties both the announcement and GIF together under the same brand guidelines.
+
+Now, the final summary needs to be short, highlighting the key elements: the announcement's tone, the GIF's visual elements, and their alignment with the brand. Mention the use of the brand's color palette, the technical tone, and the absence of flashy elements. Also, note the consistency between the two components of the launch pack.
+
+I need to make sure there are no markdown formats and the response is in plain text. Let me piece this together concisely.
+</think>
+
+Final launch pack summary:
+
+**Announcement:**  
+Technical tone with calm, straightforward language. No exclamation marks. Uses brand-aligned colors (#d97757 accent) and focuses on functional benefits.
+
+**GIF:**  
+128×128 px with calm motion, single warm accent (#d97757), and no flashy effects. Palette matches brand notes: #1d1d1b (ink), #e8e6dc (baseline), #faf9f5 (background).
+
+Both components share consistent visual language, technical clarity, and adherence to Slack's emoji-size constraints.<|im_end|>

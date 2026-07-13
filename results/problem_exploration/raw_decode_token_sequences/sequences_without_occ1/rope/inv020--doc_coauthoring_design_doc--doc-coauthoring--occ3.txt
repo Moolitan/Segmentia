@@ -1,0 +1,83 @@
+<think>
+Okay, let's see. The user wants the final concise design doc and a 5-bullet summary for teammates. I need to make sure I follow the structured workflow they've been using.
+
+First, I should check the previous steps. They've gone through Context Gathering, Refinement & Structure, and Reader Testing. The last step was the Reviewer pass where three issues were identified: classifier rules not enumerated, retry ownership across worker restarts undefined, and dashboard signal not defined. But the user now wants the final version, so maybe those issues are addressed or they're okay with them for now.
+
+The final document should include all the sections they've worked on: Background, Goals, Proposed Approach, Risks, Concrete Retry Policy, Rollout, and the Reviewer's notes. But the user wants it concise, so I need to trim any redundant parts and ensure clarity.
+
+For the 5-bullet summary, it should capture the essence of the doc without details. Key points are automatic retry for transient failures, bounded retries with backoff, linkage between original and retried runs, rollout phases, and risks like masking bugs.
+
+I need to make sure the final doc is within 1.5 pages and the summary is succinct. Also, check that the rollout plan is clear and the risks are properly mitigated. Maybe the classifier rules are still not fully detailed, but the user might accept that as part of the doc's current state.
+
+Alright, compiling the final version and the summary now.
+</think>
+
+# Final Design Doc: Automatic Retry for Failed Benchmark Tasks
+
+## Audience & Length  
+Teammates working on agent infrastructure. ~1.5 pages.
+
+---
+
+## Background  
+The experiment platform currently requires manual reruns for failed tasks, which is inefficient for transient failures (e.g., timeouts, I/O errors). Three failure patterns observed:  
+- **Retryable**: Web retrieval timeout (manual rerun → success)  
+- **Retryable**: Transient I/O error (manual rerun → success)  
+- **Non-retryable**: Logic bug (manual rerun → still fails)  
+
+---
+
+## Goals  
+1. Automate retries for transient failures to reduce manual operator intervention.  
+2. Maintain traceability between original and retried runs via `retry_of` linkage.  
+3. Avoid masking real bugs by limiting retries (max 3 for `retryable_transient`, 1 for `retryable_with_caution`).  
+
+---
+
+## Proposed Approach  
+- **Classifier**: Workers tag failures as `retryable_transient`, `retryable_with_caution`, or `non_retryable`.  
+- **Retry Policy**:  
+  - Max retries: 3 (transient), 1 (caution).  
+  - Delay: Exponential backoff (30s → 5min max).  
+  - Logs: `retry_of`, `attempt_number`, `failure_class`, `delay_before_attempt`, `final_status_after_retries`.  
+- **Linkage**: Retried runs share the original task ID and record `retry_of` pointers.  
+
+---
+
+## Risks & Mitigations  
+1. **Masking bugs**: Conservative classifier rules + dashboard signal ("retried N times before final failure").  
+2. **Resource amplification**: Per-tenant retry budgets + global circuit breaker.  
+3. **Ambiguity in "transient"**: Define classifier rules (e.g., specific exception types, timeout thresholds).  
+
+---
+
+## Rollout Plan  
+1. **Phase 1**: Dark-launch classifier (log decisions, no retries) for 1 week.  
+2. **Phase 2**: Enable retries for `web_retrieval` task type, one tenant at a time.  
+3. **Phase 3**: Expand to all `retryable_transient` tasks after stable retry-success rate.  
+4. **Kill switch**: Global circuit breaker active across all phases.  
+
+---
+
+## Open Questions  
+1. Where to implement the retry decision (scheduler vs. worker)?  
+2. How to surface "retried run" status in the UI?  
+3. How to define "transient" in classifier rules (e.g., specific exceptions, timeout thresholds)?  
+
+---
+
+## Final Notes  
+- **Classifier rules** need explicit enumeration (e.g., "HTTP 5xx errors", "I/O timeouts < 10s").  
+- **Worker restarts**: Clarify ownership of retries if a worker dies mid-retry.  
+- **Dashboard signal**: Define where "retried N times" is displayed (e.g., task detail page).  
+
+---
+
+### 5-Bullet Summary for Teammates  
+1. **Automatic retries** for transient failures (e.g., timeouts, I/O errors) to reduce manual work.  
+2. **Bounded retries**: Max 3 attempts for transient errors, 1 for cautionary cases, with exponential backoff.  
+3. **Traceability**: Retried runs link back to original task via `retry_of` pointers.  
+4. **Rollout**: Phased enablement starting with `web_retrieval` tasks, with a global circuit breaker as a kill switch.  
+5. **Risks**: Masking bugs (mitigated by conservative classifier rules) and resource overload (mitigated by per-tenant budgets).  
+
+Let me know if you'd like to refine any section further!<|im_end|>

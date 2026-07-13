@@ -1,0 +1,45 @@
+<think>
+Okay, the user wants me to sketch a minimal project structure for a Python-based MCP server for their issue-tracking API. Let me start by recalling the MCP Builder guidelines, especially the Python-specific parts.
+
+First, the project structure. The MCP Python guide mentions using FastMCP, so I should include that in the dependencies. The main files would be the server entry point, tools implementation, and configuration files. 
+
+I need to set up a directory structure that's standard for Python projects. Typically, there's a main directory with an __init__.py, a server.py for the entry point, a tools directory for each tool, and a config directory for settings. Also, including a requirements.txt for dependencies like fastmcp and pydantic.
+
+For the tools, each tool (issue_query, issue_create, issue_comment_add) should be in separate files under the tools directory. Each tool would use Pydantic models for input and output schemas. The server.py would initialize the MCP server, register the tools, and set up the transport (probably streamable HTTP).
+
+I should also mention the use of async functions for I/O operations, error handling with actionable messages, and including pagination support as per the spec. The MCP Best Practices suggest using clear tool names and including annotations like readOnlyHint and destructiveHint.
+
+Wait, the user's spec has the tools with specific parameters. Each tool's input and output schemas need to be defined. For example, issue_query might have parameters like id, status, assignee, limit, cursor, and return a list of issues with pagination info.
+
+Also, the project should have a tests directory for unit tests, following the Python guide's testing recommendations. Including a README.md with setup instructions and usage examples would be helpful.
+
+I need to make sure the structure is minimal but covers all necessary parts: dependencies, server setup, tool implementations, configuration, tests, and documentation. Let me outline this step by step, referencing the MCP Builder's Python guide and best practices.
+</think>
+
+Sketching a minimal Python project structure based on MCP best practices and the Python SDK guide.
+
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/mcp_server_and_spec/mcp_server_spec.md", "content": "# MCP Server for Issue Tracker — Spec (working draft)\n\n## Tools to expose (Turn 1 plan)\nStart from the minimum requirements in the brief:\n1. `issue_query` — fetch by id or filter by status/assignee.\n2. `issue_create` — create a new issue.\n3. `issue_comment_add` — add a comment to an existing issue.\n\nOut of scope (per brief): attachments, bulk modification, user\npermission integration.\n\n## Tool parameter design (Turn 2)\n\n### `issue_query`\n- `id` (str, optional) — single-issue path.\n- `status` (str, optional) — filter, e.g. \"open\" / \"closed\".\n- `assignee` (str, optional) — filter by username.\n- `limit` (int, default 20) — bound the response size.\n- `cursor` (str, optional) — pagination token.\n\n### `issue_create`\n- `title` (str, required)\n- `body` (str, required)\n- `labels` (list[str], optional)\n- `assignee` (str, optional)\n\n### `issue_comment_add`\n- `issue_id` (str, required)\n- `body` (str, required)\n\n## Project structure (Python, Turn 3)\n\n```
+mcp_issue_server/
+├── mcp_issue_server/
+│   ├── __init__.py
+│   ├── server.py              # MCP server entry point
+│   ├── tools/
+│   │   ├── issue_query.py     # Query issues tool
+│   │   ├── issue_create.py    # Create issue tool
+│   │   └── issue_comment_add.py  # Add comment tool
+│   └── config.py              # Configuration (auth, API URLs)
+├── requirements.txt           # FastMCP, pydantic, etc.
+├── README.md
+└── tests/
+    └── test_tools.py          # Unit tests for tools
+```
+
+Key considerations:
+- Use `fastmcp` as the framework (pip install fastmcp)
+- Pydantic models for input/output schemas
+- Async tool implementations with proper error handling
+- Pagination support in `issue_query` via `limit`/`cursor`
+- Tool annotations: `readOnlyHint`, `destructiveHint`, etc.
+- Follow MCP Best Practices for response formatting and naming"}}
+</tool_call><|im_end|>

@@ -1,0 +1,13 @@
+<think>
+Okay, let's see what the problem is here. The user tried to edit the design document but got an error because there were two occurrences of the section header "### 4. Considerations". The error message said that the expected number of replacements was 1, but 2 were found. 
+
+Looking at the file content provided, the document has duplicate sections. The original content up to line 31 ends with "### 4. Considerations" and then the content from line 33 onwards repeats the same sections again, including "### 4. Considerations" again at line 57. So, the edit command was trying to replace the first occurrence of "### 4. Considerations" but there were two instances, leading to the error.
+
+The solution here is to first remove the duplicate sections. The user needs to ensure that each section header is unique. So, the first step is to delete the duplicate sections starting from line 33 to line 61. Once the duplicates are removed, the edit command can be safely applied to the single occurrence of "### 4. Considerations" to add the new content without causing a conflict.
+
+Therefore, the correct approach is to first edit the file to remove the duplicate sections and then proceed with adding the error classification, database schema, and API changes as intended.
+</think>
+
+<tool_call>
+{"name": "edit", "arguments": {"file_path": "design_docs/automatic_retry_design.md", "old_string": "### 4. Considerations\n\n- Implement exponential backoff between retries\n- Set hard limits (e.g., max 3 retries per task)\n- Create alerting for persistent failures\n- Add UI indicators for retry status", "new_string": "### 4. Considerations\n\n#### Error Classification Criteria\n- **Transient Errors** (automatically retry):\n  - Network timeouts (HTTP 5xx, connection errors)\n  - I/O errors with retryable status codes (e.g., 503 Service Unavailable)\n  - Tool call failures marked as 'transient' in diagnostics\n- **Permanent Errors** (no retry):\n  - Logic bugs (e.g., Example 3 in failure examples)\n  - Authentication failures\n  - Resource exhaustion errors\n\n#### Database Schema Changes\n- Add `retry_count` integer field to task metadata\n- Add `failure_diagnostics` JSON field to store error details per attempt\n- Add `parent_task_id` to link retry attempts to original task\n\n#### API Changes\n- Add `/api/tasks/{task_id}/retry` endpoint to manually trigger retry\n- Update task status API to include `retry_status` (e.g., 'pending', 'in_progress')\n- Add webhook for retry success/failure notifications", "expected_replacements": 1, "security_risk": "LOW", "summary": "Fix duplicate content and add detailed considerations section"}}
+</tool_call>

@@ -1,0 +1,5 @@
+artifact,type,sources,notes
+summary.md,summary,"recompute/manifest.jsonl;cross_contextual_rope/manifest.jsonl;recompute/*.txt;cross_contextual_rope/*.txt","Three paired greedy occurrence-1 runs."
+tables/think_comparison.csv,table,"recompute/*.txt;cross_contextual_rope/*.txt;recompute/manifest.jsonl;cross_contextual_rope/manifest.jsonl","Lexical counts and paired qualitative classification."
+data/think_analysis_metadata.json,data,"tables/think_comparison.csv;recompute/*.txt;cross_contextual_rope/*.txt","Metric definitions and aggregate integrity counts."
+figures/README.md,figure_note,"tables/think_comparison.csv","Documents why no aggregate figure was generated for n=3 heterogeneous cases."

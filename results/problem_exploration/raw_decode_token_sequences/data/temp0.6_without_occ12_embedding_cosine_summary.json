@@ -1,0 +1,70 @@
+{
+  "input_dir": "results/problem_exploration/raw_decode_token_sequences/temp0.6/without_occ12",
+  "model_path": "/mnt/Large_Language_Model_Lab_1/llm_models/BAAI/bge-large-en-v1.5/BAAI/bge-large-en-v1.5",
+  "pooling": "CLS",
+  "normalization": "L2",
+  "max_length": 512,
+  "truncation": true,
+  "device": "cuda",
+  "case_count": 12,
+  "pairings": {
+    "sampling_baseline": {
+      "left_arm": "recompute_run1",
+      "right_arm": "recompute_run2",
+      "case_count": 12,
+      "thinking_cosine": {
+        "mean": 0.9470463842153549,
+        "median": 0.9515495300292969,
+        "std_population": 0.019212740382896557,
+        "min": 0.9146942496299744,
+        "max": 0.971790075302124
+      },
+      "action_cosine": {
+        "mean": 0.9077777862548828,
+        "median": 0.9537206888198853,
+        "std_population": 0.12214802010846496,
+        "min": 0.5524470806121826,
+        "max": 1.0
+      }
+    },
+    "same_seed_recompute_vs_rope": {
+      "left_arm": "recompute_run1",
+      "right_arm": "rope",
+      "case_count": 12,
+      "thinking_cosine": {
+        "mean": 0.9534945537646612,
+        "median": 0.9597066640853882,
+        "std_population": 0.016631522880006317,
+        "min": 0.9164999723434448,
+        "max": 0.9702757596969604
+      },
+      "action_cosine": {
+        "mean": 0.9386481096347173,
+        "median": 0.9706559777259827,
+        "std_population": 0.0726990534849346,
+        "min": 0.7746099233627319,
+        "max": 1.0
+      }
+    },
+    "cross_seed_recompute_vs_rope": {
+      "left_arm": "recompute_run2",
+      "right_arm": "rope",
+      "case_count": 12,
+      "thinking_cosine": {
+        "mean": 0.9548696527878443,
+        "median": 0.9541522860527039,
+        "std_population": 0.01052328448663961,
+        "min": 0.9347115755081177,
+        "max": 0.9700784087181091
+      },
+      "action_cosine": {
+        "mean": 0.9013537019491196,
+        "median": 0.9437278509140015,
+        "std_population": 0.11716781694669494,
+        "min": 0.5524470806121826,
+        "max": 1.0
+      }
+    }
+  },
+  "per_case_csv": "results/problem_exploration/raw_decode_token_sequences/tables/temp0.6_without_occ12_embedding_cosine.csv"
+}

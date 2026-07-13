@@ -1,0 +1,15 @@
+<think>
+Okay, let's tackle this. The user wants three versions of the incident update: leadership-facing, internal chat, and a very short 3-sentence summary. I need to use the internal-comms skill again to ensure consistency.
+
+First, the leadership version should be concise, high-level, and avoid technical jargon. Focus on the impact, resolution, and next steps without getting into implementation details. I'll structure it with a clear summary and bullet points for clarity.
+
+Next, the internal chat version needs to be more casual but still informative. Maybe use a friendly tone, mention the incident briefly, and include key points like the cause, impact, and actions taken. It should be easy to read in a chat environment.
+
+For the 3-sentence summary, I need to capture the essence: what happened, the outcome, and the next steps. Keep it extremely brief but informative.
+
+I should check the existing content to ensure all necessary information is included and formatted correctly. Also, make sure each version adheres to the guidelines from the internal-comms skill, like using appropriate sections and maintaining a calm, objective tone.
+</think>
+
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/internal_comms_incident_update/incident_update.md", "content": "# Service Incident Update — 2026-05-30\n\n## Leadership-facing version\nA brief internal incident this morning delayed 12 experiment tasks for up to 25 minutes. The service has fully recovered with no data loss or external impact. The team is reviewing auto-scaling triggers and alert thresholds to prevent recurrence.\n\n## Internal chat version\nQuick heads-up: Experiment service had a 25-minute queue buildup this morning (09:20–09:45) that delayed 12 internal tasks. No data loss, no external impact. Team is reviewing auto-scaling triggers and will tighten alert thresholds to avoid similar issues.\n\n## 3-sentence summary\n- Internal experiment service had a 25-minute queue buildup this morning.\n- No data loss or external impact; service fully recovered by 09:45.\n- Team reviewing auto-scaling triggers and alert thresholds to prevent recurrence.\n\n## Daily digest version\nExperiment service had a brief queue buildup this morning (09:20–09:45) that delayed 12 internal tasks. Fully recovered, no data loss, no external impact. Team is reviewing auto-scaling triggers.\n\n## Next steps\n- Reproduce the auto-scaling miss in a staging load test.\n- Tighten the queue-depth alert so on-call is paged earlier.\n- Add a runbook entry for manual scale-up while the fix lands.\n\n## FAQ\n**Could this happen again?** Possible until the scaling-trigger fix lands; mitigations are in place to detect recurrence quickly.\n\n**Was any data lost?** No.\n\n**Is everything recovered now?** Yes — service is healthy.\n\n**What will we do to prevent this next time?** Tighten the auto-scaling trigger and the alert threshold so similar load patterns page on-call earlier."}}
+</tool_call><|im_end|>

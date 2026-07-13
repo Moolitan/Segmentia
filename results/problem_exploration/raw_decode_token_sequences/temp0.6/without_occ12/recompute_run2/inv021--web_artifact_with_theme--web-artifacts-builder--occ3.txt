@@ -1,0 +1,143 @@
+<think>
+Okay, the user wants the final landing page along with a summary note. Let me check what's been done so far.
+
+First, the landing page has the title, time, location, agenda, speakers, FAQ, and a registration CTA with a hint. The theme was adjusted to be warmer and more welcoming while keeping professionalism. The colors were tweaked to a cream background and a warmer teal accent.
+
+Now, I need to use both the theme-factory and web-artifacts-builder skills. The theme-factory was already used to adjust the colors and typography. The web-artifacts-builder might be needed to bundle the HTML into a single file, but the user hasn't mentioned that yet. However, the final step in the web-artifacts-builder process is to bundle the HTML using the script. But since the user hasn't provided the script, maybe I should just present the current HTML as the final artifact.
+
+The summary note should include main sections: title, time, location, agenda, speakers, FAQ, registration. The theme direction is a warm, professional look with a cream background and teal accent. Key design choices are the color palette, typography hierarchy, and the registration hint.
+
+I should make sure to mention that the page is ready and provide the HTML content. Also, note that the theme balances warmth with technical professionalism. The design choices focus on clarity and user guidance, like the registration flow explanation.
+</think>
+
+Here's the final landing page with a summary of key aspects:
+
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Lab Tech Sharing Night</title>
+    <style>
+      :root {
+        --bg: #faf6ec;
+        --ink: #1d1d1b;
+        --muted: #5b5b58;
+        --accent: #2c6585;
+        --rule: #ece4d2;
+      }
+      body {
+        background: var(--bg);
+        color: var(--ink);
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        line-height: 1.55;
+        margin: 0;
+        padding: 4rem 6rem;
+      }
+      header {
+        border-bottom: 1px solid var(--rule);
+        padding-bottom: 2rem;
+        margin-bottom: 2rem;
+      }
+      h1 { font-weight: 800; letter-spacing: -0.02em; margin: 0 0 0.5rem; }
+      h2 { font-weight: 700; font-size: 1.6rem; margin-top: 3rem; border-top: 1px solid var(--rule); padding-top: 2rem; }
+      h3 { margin: 0.2rem 0 0.3rem; font-size: 1.1rem; }
+      p { color: var(--muted); }
+      .cta {
+        display: inline-block;
+        background: var(--accent);
+        color: var(--bg);
+        padding: 0.8rem 1.6rem;
+        text-decoration: none;
+        font-weight: 700;
+        margin-top: 1rem;
+      }
+      article { margin: 1.5rem 0; }
+      .avatar {
+        width: 56px; height: 56px; border-radius: 50%;
+        background: var(--rule); display: inline-block; vertical-align: middle;
+        margin-right: 1rem;
+      }
+      details { margin: 0.6rem 0; }
+      summary { font-weight: 600; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Lab Tech Sharing Night</h1>
+      <p><strong>Next Friday · 18:30 – 20:30</strong></p>
+      <p>Engineering Building, Room 301</p>
+      <a href="#register" class="cta">Register</a>
+      <p style="font-size:0.9rem; margin-top:0.8rem;">
+        After you register you'll get a calendar invite and a
+        one-line reminder the morning of the event.
+      </p>
+    </header>
+    <section>
+      <h2>Agenda</h2>
+      <ol>
+        <li>18:30 — Doors open, coffee</li>
+        <li>18:50 — Talk 1</li>
+        <li>19:20 — Talk 2</li>
+        <li>19:50 — Open Q&A and hangout</li>
+      </ol>
+    </section>
+    <section>
+      <h2>Speakers</h2>
+      <article>
+        <div class="avatar"></div>
+        <h3>Speaker A</h3>
+        <p>Short bio about Speaker A's recent work and why they're talking tonight.</p>
+      </article>
+      <article>
+        <div class="avatar"></div>
+        <h3>Speaker B</h3>
+        <p>Short bio about Speaker B's recent work and why they're talking tonight.</p>
+      </article>
+      <article>
+        <div class="avatar"></div>
+        <h3>Speaker C</h3>
+        <p>Short bio about Speaker C's recent work and why they're talking tonight.</p>
+      </article>
+    </section>
+    <section>
+      <h2>FAQ</h2>
+      <details><summary>Is it open to people outside the lab?</summary>
+        <p>Yes — anyone in the engineering school is welcome.</p>
+      </details>
+      <details><summary>Do I need to register?</summary>
+        <p>Yes, please — the room seats about 50.</p>
+      </details>
+      <details><summary>Will the talks be recorded?</summary>
+        <p>No recordings; the Q&A stays in the room.</p>
+      </details>
+      <details><summary>What about food?</summary>
+        <p>Coffee and snacks. Don't come hungry.</p>
+      </details>
+    </section>
+  </body>
+</html>
+```
+
+**Summary of Key Aspects:**
+
+1. **Main Sections:**
+   - Event title, time, and location
+   - Agenda with time-stamped activities
+   - Speaker section with placeholder avatars and bios
+   - FAQ section with collapsible answers
+   - Registration CTA with post-registration flow explanation
+
+2. **Theme Direction:**
+   - Warm, professional, and technical aesthetic
+   - Cream background (`#faf6ec`) with warm teal accent (`#2c6585`)
+   - Subtle rule lines (`#ece4d2`) for visual separation
+   - Clean sans-serif typography with clear hierarchy
+
+3. **Key Design Choices:**
+   - Balanced warmth through color palette while maintaining technical professionalism
+   - Clear visual hierarchy with weighted headings and section dividers
+   - Registration flow explanation to reduce user uncertainty
+   - Minimalist approach avoiding excessive ornamentation or gradients
+
+The page is now ready for bundling using `scripts/bundle-artifact.sh` to create a single HTML file for sharing.<|im_end|>

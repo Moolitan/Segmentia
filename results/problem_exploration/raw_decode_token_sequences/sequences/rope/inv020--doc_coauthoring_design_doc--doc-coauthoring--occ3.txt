@@ -1,0 +1,54 @@
+<think>
+Okay, let's see. The user wants the final concise design doc and a 5-bullet summary for teammates. I need to make sure I follow the workflow they've been using. They've already gone through the stages of context gathering, refinement, and reader testing. The last step was the reviewer pass where three issues were identified. Now, I need to present the final document and the summary.
+
+First, the final design doc should include all the sections they've worked on: Background, Goals, Proposed Approach, Risks, Concrete Retry Policy, Rollout, and the Reviewer Pass notes. But since the user wants it concise, I should trim any redundant parts and ensure clarity. The three unclear points from the reviewer pass need to be addressed or at least noted, even if they're not fully resolved yet.
+
+For the 5-bullet summary, it should capture the essence of the document without going into too much detail. The key points are the problem with manual reruns, the retry policy (max retries, backoff), the rollout plan, the risks, and the testing approach. I need to make sure each bullet is a standalone point that a teammate can quickly grasp.
+
+I should also check if there are any remaining gaps from the reviewer's feedback. The classifier rules, retry ownership across worker restarts, and the dashboard signal were mentioned. Since the user might not have time to address all of them now, I should note that these are areas for further clarification but keep the summary focused on the main aspects.
+
+Finally, ensure that the final document is structured properly, with clear headings and concise content. The summary should be brief, using bullet points that highlight the most important aspects for someone who doesn't have time to read the full doc.
+</think>
+
+# Final Design Doc: Automatic Retry for Failed Benchmark Tasks
+
+## Summary for Teammates
+- **Problem**: Manual reruns of transient failures are time-consuming and error-prone.
+- **Solution**: Bounded retries (3 for transient, 1 for cautionary) with exponential backoff.
+- **Rollout**: Phased launch starting with dark-launch, then limited task types.
+- **Risks**: Masking real bugs, resource spikes, and UI clarity challenges.
+- **Validation**: Reader testing with Claude to ensure clarity and correctness.
+
+## Full Document
+
+### Background
+The experiment platform currently requires manual reruns for failed tasks, leading to operator overhead. Three common failure patterns—transient timeouts, I/O errors, and logic bugs—highlight the need for automated retries that avoid masking real issues.
+
+### Goals
+- Automate retries for transient failures.
+- Maintain traceability between original and retried runs.
+- Prevent infinite retries for non-transient issues.
+
+### Proposed Approach
+- **Classifier**: Tag failures as `retryable_transient`, `retryable_with_caution`, or `non_retryable`.
+- **Retries**: 3 attempts for transient errors (30s–5min backoff), 1 for cautionary errors.
+- **Traceability**: Retries share the original task ID and log `retry_of`, `attempt_number`, and `failure_class`.
+
+### Risks & Mitigations
+- **Masked Bugs**: Conservative classifier rules + dashboard visibility of retry counts.
+- **Resource Amplification**: Per-tenant retry budgets + global circuit breaker.
+- **UI Clarity**: Explicit indicators for retried runs in dashboards.
+
+### Rollout Plan
+1. **Dark-launch** classifier for 1 week.
+2. **Phase 2**: Enable retries for `web_retrieval` tasks, one tenant at a time.
+3. **Phase 3**: Expand to all `retryable_transient` tasks after stability checks.
+
+### Open Questions
+- Classifier rule specifics (e.g., exception types for "transient").
+- Ownership of retries if a worker restarts mid-retry.
+- Dashboard integration for "retried N times" metrics.
+
+---
+
+**Next Steps**: Final review by the author, followed by Reader Testing with Claude to validate clarity.<|im_end|>

@@ -1,0 +1,60 @@
+<think>
+Okay, let's see. The user wants me to provide the final concise design doc and a 5-bullet summary for teammates who won't read the full document. I need to make sure I follow the structured workflow they've been using.
+
+First, I should check the previous steps to ensure all sections are covered. The design doc has Background, Goals, Proposed Approach, Risks, Concrete Retry Policy, Rollout, and the Reviewer Pass with clarifications. The user mentioned three unclear points: classifier rules, retry ownership across worker restarts, and the dashboard signal. I need to address those in the final version.
+
+For the final doc, I'll need to make sure the sections are clear and the three issues are resolved. Maybe add more details on the classifier rules, explain how retries are handled if a worker restarts, and define where the dashboard signal is located.
+
+Then, the 5-bullet summary should capture the essence of the doc without going into too much detail. It should highlight the main goals, approach, risks, rollout plan, and the key metrics. I'll need to keep it concise and easy to digest for teammates who might not have time to read the full document.
+
+I should also ensure that the final document is within the 1.5-page limit and that the summary is bullet-pointed with clear, actionable points. Let me structure the final doc with the necessary additions and then create the summary accordingly.
+</think>
+
+# Final Design Doc: Automatic Retry for Failed Benchmark Tasks
+
+## Audience & Length
+Teammates working on agent infrastructure. ~1.5 pages.
+
+## Key Components
+
+### **Background**
+- Current system requires manual reruns for failed tasks, creating operational overhead.
+- Three failure patterns observed: transient timeouts (retryable), transient I/O errors (retryable), and logic bugs (non-retryable).
+
+### **Goals**
+- Automate retries for transient failures to reduce manual intervention.
+- Maintain traceability between original and retried runs.
+- Prevent masking of real bugs via bounded retries.
+
+### **Proposed Approach**
+- **Classifier Rules**: 
+  - `retryable_transient`: Timeouts, network errors, I/O errors (e.g., `requests.exceptions.Timeout`, `OSError`).
+  - `retryable_with_caution`: Rate-limiting responses (e.g., HTTP 429).
+  - `non_retryable`: Logic errors, assertion failures, or deterministic failures (e.g., `ValueError`, `AssertionError`).
+- **Retry Policy**: 
+  - Max 3 retries for `retryable_transient`, 1 for `retryable_with_caution`.
+  - Exponential backoff (30s → 60s → 120s, capped at 5 min).
+- **Retry Ownership**: 
+  - If a worker dies mid-retry, the scheduler reassigns the task to a new worker, preserving the retry count and `retry_of` linkage.
+- **Dashboard Signal**: 
+  - The "Task History" view will show "Retried N times before final failure" as a first-class metric.
+
+### **Risks & Mitigations**
+- **Masking bugs**: Conservative classifier rules + explicit dashboard signals.
+- **Resource overload**: Per-tenant retry budgets + global circuit breaker.
+- **UI confusion**: "Retried run" flag in task metadata and UI filters.
+
+### **Rollout Plan**
+1. **Dark Launch**: Classifier logs decisions (no retries) for 1 week.
+2. **Phase 2**: Enable retries for `web_retrieval` tasks, one tenant at a time.
+3. **Phase 3**: Expand to all `retryable_transient` tasks after stable success rates.
+
+---
+
+## 5-Bullet Summary for Teammates
+
+1. **Problem**: Manual reruns for transient failures create operational overhead and risk masking real bugs.  
+2. **Solution**: Bounded retries (max 3) for transient errors, with exponential backoff and traceability to original runs.  
+3. **Classifier Rules**: Timeouts/I/O errors retryable; logic errors not. Dashboard shows retry history for transparency.  
+4. **Rollout**: Gradual enablement starting with `web_retrieval` tasks, with safety guards (budgets, circuit breaker).  
+5. **Risks**: Potential resource spikes and UI complexity, mitigated by strict policies and monitoring.<|im_end|>

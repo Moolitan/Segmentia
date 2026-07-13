@@ -1,0 +1,13 @@
+task,skill,token_count,delta_pos,n_layers,v_cos_mean,v_cos_min,v_cos_min_layer,k_cos_mean,k_raw_cos_mean,v_rel_l2_mean,k_rel_l2_mean
+internal_comms_incident_update,internal-comms,338,4099,40,0.9343,0.8662,25,0.9557,0.6407,0.3076,0.2608
+doc_coauthoring_design_doc,doc-coauthoring,3313,4121,40,0.9792,0.9551,25,0.9848,0.6854,0.157,0.1381
+mcp_server_and_spec,mcp-builder,1918,4118,40,0.9653,0.9298,25,0.9783,0.6692,0.2009,0.166
+mcp_server_and_spec,doc-coauthoring,3313,9512,40,0.9722,0.9386,22,0.9727,0.6069,0.1893,0.1891
+web_artifact_with_theme,web-artifacts-builder,719,4124,40,0.9561,0.9107,25,0.9677,0.6924,0.2368,0.2144
+web_artifact_with_theme,theme-factory,669,7558,40,0.9373,0.866,22,0.9529,0.6339,0.2857,0.2611
+launch_poster_page_pack,canvas-design,2356,4097,40,0.9778,0.9536,22,0.9802,0.6479,0.1675,0.165
+launch_poster_page_pack,web-artifacts-builder,719,7009,40,0.9422,0.8813,22,0.9559,0.6378,0.2768,0.2549
+launch_poster_page_pack,theme-factory,669,9166,40,0.9339,0.8585,22,0.9501,0.6062,0.2931,0.2728
+slack_launch_pack,internal-comms,338,4105,40,0.9336,0.8635,25,0.9522,0.6514,0.3074,0.2696
+slack_launch_pack,slack-gif-creator,2090,5147,40,0.9607,0.9228,25,0.9688,0.6598,0.2105,0.1976
+slack_launch_pack,brand-guidelines,540,7632,40,0.9368,0.868,22,0.9518,0.6446,0.285,0.2647

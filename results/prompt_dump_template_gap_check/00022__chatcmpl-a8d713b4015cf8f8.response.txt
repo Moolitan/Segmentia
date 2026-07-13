@@ -1,0 +1,23 @@
+<think>
+Okay, let's tackle this. The user wants an outline for a design document about adding automatic retry for failed benchmark tasks. The target readers are teammates working on agent infrastructure, so the document needs to be technical but concise, around 1.5 pages.
+
+First, I need to recall the previous interactions. The user already has a draft design doc with sections like Problem Statement, Proposed Solution, Implementation Details, and Considerations. However, there were issues with duplicate content and formatting. Now, they want a new outline with specific sections: Background, Goals, Proposed Approach, Risks, Open Questions.
+
+The doc-coauthoring skill should guide the structure. Let me make sure each section is clear and addresses the right points. 
+
+Starting with Background: This should summarize the current system's failure handling, referencing the system_background.md and failure_examples.md they read earlier. It needs to highlight the problem of manual retries and their inefficiencies.
+
+Goals should state what the automatic retry system aims to achieve. Based on the previous content, goals include reducing manual intervention, improving reliability, and providing better failure diagnostics.
+
+Proposed Approach needs to detail the technical implementation. From the earlier draft, this includes error classification, retry policies, state tracking, and API changes. I should structure this into subsections like Error Classification, Retry Policy, State Tracking, and Integration Points.
+
+Risks section should address potential issues like infinite loops, resource waste, and complexity. The previous considerations mentioned hard limits and alerting, which can be part of risk mitigation.
+
+Open Questions might include how to classify errors automatically, handling retries for different task types, and UI/notifications. These are points that need further discussion with the team.
+
+I need to ensure the outline is concise, each section is focused, and it aligns with the existing draft while addressing the user's request. Also, check that the total length stays within 1.5 pages by keeping each section brief but informative.
+</think>
+
+<tool_call>
+{"name": "write_file", "arguments": {"file_path": "design_docs/automatic_retry_outline.md", "content": "## Automatic Retry System Design Outline\n\n### 1. Background\n- Current manual failure handling process\n- Common failure patterns from benchmark tasks\n- Limitations of existing system (no retries, weak linkage between runs)\n\n### 2. Goals\n- Reduce manual intervention for transient failures\n- Improve task reliability through smart retries\n- Enable audit trails for failure diagnostics\n- Maintain system stability with retry limits\n\n### 3. Proposed Approach\n**Error Classification:**\n- Transient vs permanent failure detection\n- Automatic classification rules\n\n**Retry Policy:**\n- Configurable retry limits (e.g., 3 attempts for network errors)\n- Exponential backoff algorithm\n- Retry trigger conditions\n\n**State Tracking:**\n- Task metadata updates (retry_count, failure_diagnostics)\n- Parent/child task linkage\n\n**Integration Points:**\n- Scheduler modifications\n- Database schema changes\n- API endpoint additions\n\n### 4. Risks\n- Potential for infinite retry loops\n- Resource consumption with failed retries\n- Complexity in error classification\n- Impact on task auditability\n\n### 5. Open Questions\n- How to automatically classify errors as transient/permanent?\n- Should retry limits vary by task type?\n- How to notify users of persistent failures?\n- What UI changes are needed for retry status visibility?", "security_risk": "LOW", "summary": "Create structured outline for automatic retry system design document"}}
+</tool_call>

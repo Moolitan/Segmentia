@@ -1,0 +1,17 @@
+<think>
+Okay, let's tackle this. The user wants a polished final version for internal rollout, including the main announcement, a shorter fallback, the GIF concept, and a note on how they fit together. 
+
+First, I need to make sure I use the correct skills: brand-guidelines, internal-comms, and slack-gif-creator. I'll start by checking the latest versions of the announcement and GIF concept to ensure they align with the brand guidelines.
+
+The main announcement was refined to be clearer for platform engineers, so I'll include that. The fallback version should be shorter, maybe just the key points without the detailed explanation. 
+
+For the GIF, the latest concept includes the polish pass with ease-out rise and a single accent flick. I'll reference that in the final pack. 
+
+The note on how the pieces fit together should highlight consistency in branding, the purpose of each component, and how they work together for the launch. I'll make sure to mention the color scheme, typography, and the animation's alignment with the brand's visual identity.
+
+I need to structure the final document clearly, maybe using sections for each component. Also, ensure that the file paths are correct and that the content adheres to the brand guidelines' color and typography specifications. Let me double-check the color codes and font usage to avoid any discrepancies.
+</think>
+
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/slack_launch_pack/final_launch_pack.md", "content": "# Final Launch Pack — Retry-on-Failure\n\n## Main Announcement\n:gear: *Retry-on-failure is now live in the experiment task dashboard.*\n\n*What it does*\n- Detects transient failures (timeouts, transient I/O, rate-limit signals) and retries within a bounded budget per task.\n- Records each retry attempt against the original task id so history stays linked.\n- Leaves non-retryable failures (logic bugs, validation errors) to surface immediately, unchanged.\n\n*Why now*\nManual reruns were dominating operator time for failure shapes that are deterministically recoverable. The classifier was dark-launched for a week and matched our prior manual triage on 94% of failed runs.\n\n*What it doesn't do yet*\n- It does not retry across worker restarts; that lands next.\n- A handful of task types are still excluded while we tune the classifier.\n\n## Fallback Version\n:arrow_forward: *Retry-on-failure now handles transient failures in the experiment task dashboard. Non-retryable failures remain unchanged. See the full announcement for details.*\n\n## GIF Concept\n**File:** `launch_gif.md` (128×128, 12 frames @10fps)\n- Ink-square sprite stumbles (4 frames), pauses (2 frames), rises with ease-out (6 frames)\n- Single warm accent (`#d97757`) at the rise apex (frame 11)\n- Subtle baseline shadow that softens during stumble and re-thickens on rise\n\n## Assembly Note\nAll components use the brand-aligned palette (`#1d1d1b`, `#e8e6dc`, `#d97757` on `#faf9f5`) with Poppins/Lora typography. The GIF's calm motion and single accent align with the announcement's technical tone, creating a cohesive launch experience without excessive visual flair."}}
+</tool_call><|im_end|>

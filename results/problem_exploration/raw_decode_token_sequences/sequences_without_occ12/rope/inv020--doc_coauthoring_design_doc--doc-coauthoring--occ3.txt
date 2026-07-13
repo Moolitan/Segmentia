@@ -1,0 +1,57 @@
+<think>
+Okay, let's see. The user wants me to provide the final concise design doc and a 5-bullet summary for teammates who won't read the full document. They also mentioned using the "doc-coauthoring" skill again.
+
+First, I need to make sure the design doc is finalized based on the previous iterations. The last changes included adding the reviewer's feedback about the three unclear points: classifier rules, retry ownership across worker restarts, and the dashboard signal. I should check if those have been addressed in the latest version of the document.
+
+Looking at the latest content, the classifier rules are still not enumerated, so maybe I should mention that in the final doc as a note or a to-do. The retry ownership across worker restarts wasn't addressed, so perhaps that's a gap. The dashboard signal is mentioned but not defined, so I need to clarify that.
+
+Wait, the user might expect the final doc to have those points resolved. But since the reviewer pass highlighted them as unclear, maybe they are left as open questions or notes for further discussion. The user might want the final doc to include those as unresolved issues or areas needing more detail.
+
+For the 5-bullet summary, it should capture the main points: the problem, the solution (retry policy), rollout plan, risks, and key metrics. I need to ensure the summary is concise and highlights the critical aspects without going into too much detail.
+
+I should also check if the final document includes all the sections: Background, Goals, Proposed Approach, Risks, Concrete Retry Policy, Rollout, and the Reviewer's notes. The user might want the final version to have the Reviewer's notes as part of the document or as a separate section.
+
+Since the user is asking for the final version, I should present the design doc as is, with the three reviewer points noted, and then provide the summary. The summary should be clear and actionable for teammates who can't read the full doc.
+</think>
+
+# Final Design Doc: Automatic Retry for Failed Benchmark Tasks
+
+## Summary
+This document proposes a structured retry system for the experiment platform to reduce manual intervention for transient failures while avoiding masking real bugs.
+
+## Key Components
+1. **Failure Classification**  
+   - `retryable_transient`: Timeouts, transient I/O errors  
+   - `retryable_with_caution`: Rate-limit signals, backoff responses  
+   - `non_retryable`: Logic errors, deterministic failures  
+
+2. **Retry Policy**  
+   - Max 3 retries for `retryable_transient` (exponential backoff: 30s → 60s → 120s → 5min cap)  
+   - Max 1 retry for `retryable_with_caution` (30s delay)  
+   - Logs: `retry_of`, `attempt_number`, `failure_class`, `delay_before_attempt`, `final_status_after_retries`  
+
+3. **Rollout Plan**  
+   - Phase 1: Dark-launch classifier (log-only) for 1 week  
+   - Phase 2: Enable retries for `web_retrieval` task type, one tenant at a time  
+   - Phase 3: Expand to all `retryable_transient` tasks after dashboard stability  
+
+4. **Risks & Mitigations**  
+   - **Masked bugs**: Conservative classifier rules + "retried N times" dashboard signal  
+   - **Resource spikes**: Per-tenant retry budgets + global circuit breaker  
+   - **Ambiguity**: Explicitly document classifier rules (TODO: finalize list)  
+
+5. **Open Questions**  
+   - How to handle retries across worker restarts?  
+   - Where to surface "retried N times" metric in dashboard?  
+   - What exact exception patterns define "transient" failures?  
+
+---
+
+## 5-Bullet Summary for Teammates
+1. **Problem**: Manual reruns for transient failures are time-consuming and error-prone.  
+2. **Solution**: Bounded retries (3x for transient, 1x for cautionary) with exponential backoff and failure classification.  
+3. **Rollout**: Phased enablement starting with `web_retrieval` tasks, with safety guards (budgets, circuit breaker).  
+4. **Risks**: Masked bugs (mitigated by conservative rules) and resource spikes (mitigated by budgets).  
+5. **Next Steps**: Finalize classifier rules, define dashboard signals, and resolve retry ownership across worker restarts.  
+
+Document ready for final review. Would you like me to generate a version with the three unresolved questions explicitly marked as TODOs?<|im_end|>

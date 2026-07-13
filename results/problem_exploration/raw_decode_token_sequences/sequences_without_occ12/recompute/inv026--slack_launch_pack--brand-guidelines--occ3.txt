@@ -1,0 +1,19 @@
+<think>
+Okay, let's tackle this final step. The user wants a polished final version for internal rollout, including the main Slack announcement, a shorter fallback version, the GIF concept, and a note on how the pieces fit together. 
+
+First, I need to ensure that the announcement is clear for platform engineers. The previous version added substance about what the feature does, so I should check if that's sufficient. The main points are detecting transient failures, retrying within a budget, and not affecting non-retryable failures. Also, the 'why now' section mentions the classifier's performance and what's not included yet.
+
+Next, the fallback version needs to be shorter. Maybe condense the main points into a bullet list without the detailed explanations. Use the same emoji and keep the key benefits.
+
+For the GIF, the latest version has the polished motion with ease-out rise and a single accent flick. I should reference the file path and note the technical specs like dimensions and frame rate. Also, mention the brand-aligned colors to ensure consistency.
+
+The brief note on how the pieces fit together should tie the announcement and GIF to the brand guidelines. Highlight the calm palette, technical tone, and the purpose of each component (announcement for info, GIF for visual reinforcement).
+
+I need to make sure all elements are aligned with the brand guidelines, using the correct colors and typography. Check that the Slack announcement is formatted correctly with the emoji and concise points. Also, confirm that the GIF meets Slack's size and duration requirements for emoji GIFs.
+
+Finally, structure everything in a clear, organized way so the user can easily review and deploy the launch pack. Use the skills mentioned to ensure compliance with internal comms, brand guidelines, and Slack GIF standards.
+</think>
+
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/slack_launch_pack/final_launch_pack.md", "content": "# Final Launch Pack — Retry for Failed Tasks\n\n## Main Slack Announcement\n:gear: *Retry-on-failure is now live in the experiment task dashboard.*\n\n*What it does*\n- Detects transient failures (timeouts, transient I/O, rate-limit signals) and retries within a bounded budget per task.\n- Records each retry attempt against the original task id so history stays linked.\n- Leaves non-retryable failures (logic bugs, validation errors) to surface immediately, unchanged.\n\n*Why now*\nManual reruns were dominating operator time for failure shapes that are deterministically recoverable. The classifier was dark-launched for a week and matched our prior manual triage on 94% of failed runs.\n\n*What it doesn't do yet*\n- It does not retry across worker restarts; that lands next.\n- A handful of task types are still excluded while we tune the classifier.\n\n## Fallback Version (Shorter)\n:arrow_up: *Retry-on-failure now handles transient failures in the experiment task dashboard.*\n- Automatic retries for timeouts/I/O issues\n- Retry history linked to original task\n- Non-retryable failures remain unchanged\n- Excludes some task types temporarily\n\n## GIF Concept (Ready for Output)\n**File:** `launch_gif.md` (128×128, 12 frames @10fps)\n- Calm ink-square sprite stumbles, pauses, then rises with ease-out motion\n- Single warm accent (`#d97757`) flicks at the apex of the rise\n- Subtle baseline shadow thickens during recovery\n- Brand-aligned palette: `#1d1d1b` (ink), `#e8e6dc` (baseline), `#faf9f5` (background)\n\n## 🔗 How the Pieces Fit\n- **Announcement** provides technical substance for engineers while avoiding hype\n- **GIF** visually reinforces the \"recovery\" concept with minimal motion and brand-aligned colors\n- Both use the same calm palette and avoid excessive exclamation marks\n- Fallback version ensures readability in constrained Slack contexts"}}
+</tool_call><|im_end|>

@@ -1,0 +1,13 @@
+<think>
+Okay, let's tackle this. The user wants an internal announcement about the new retry feature for failed tasks in the experiment task dashboard. They mentioned using the "internal-comms" skill, so I need to follow the guidelines from the provided SKILL.md.
+
+First, I should check the examples directory to see which template fits. Since it's an announcement about a feature launch, the general-comms.md might be the right choice. But the user also provided a seed file, feature_launch_brief.md, which I need to read first. Wait, the user already told me to read that, but in the previous step, I tried to read the SKILL.md. Maybe I should start by reading the seed file to get the details.
+
+Wait, the user's initial request was to read seed_files/feature_launch_brief.md. Let me make sure I do that first. The path might be /home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv/internal_comms_incident_update/seed_files/feature_launch_brief.md. Once I have that content, I can use the internal-comms skill to draft the announcement based on the guidelines.
+
+So, the next step is to call the Read tool on the feature_launch_brief.md file. Then, use the information from that file along with the internal-comms guidelines to create the announcement. The user probably expects a concise message highlighting the new feature, its benefits, and maybe a call to action for users to try it out.
+</think>
+
+<tool_call>
+{"name": "Read", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv/internal_comms_incident_update/seed_files/feature_launch_brief.md"}}
+</tool_call><|im_end|>

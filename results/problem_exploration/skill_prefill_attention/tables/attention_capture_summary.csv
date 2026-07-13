@@ -1,0 +1,13 @@
+case_id,skill_length,skill_matrix_rows,skill_matrix_columns,skill_attention_window_mass_mean,assistant_matrix_rows,assistant_matrix_columns,assistant_context_and_skill_mass_mean
+doc_coauthoring_design_doc/doc-coauthoring/occ3,3313,30,512,0.16356688875309583,40,3825,0.31332806965358195
+internal_comms_incident_update/internal-comms/occ3,338,30,512,0.19349520618833052,40,850,0.3105643635426117
+launch_poster_page_pack/canvas-design/occ3,2356,30,512,0.1289375854554368,40,2868,0.18381020318007885
+launch_poster_page_pack/theme-factory/occ3,669,30,512,0.09454511004049333,40,1181,0.18103561583713856
+launch_poster_page_pack/web-artifacts-builder/occ3,719,30,512,0.1119714014249682,40,1231,0.23432556820947173
+mcp_server_and_spec/doc-coauthoring/occ3,3313,30,512,0.10696744896778874,40,3825,0.25101293780567757
+mcp_server_and_spec/mcp-builder/occ3,1918,30,512,0.13442323815654172,40,2430,0.30972249284732384
+slack_launch_pack/brand-guidelines/occ3,540,30,512,0.10116952080919685,40,1052,0.20313315725286474
+slack_launch_pack/internal-comms/occ3,338,30,512,0.15195850480471082,40,850,0.29928253741528443
+slack_launch_pack/slack-gif-creator/occ3,2090,30,512,0.14875430742172643,40,2602,0.2973452209573111
+web_artifact_with_theme/theme-factory/occ3,669,30,512,0.11134146649810493,40,1181,0.21475651763089526
+web_artifact_with_theme/web-artifacts-builder/occ3,719,30,512,0.13793867387071726,40,1231,0.3005278500261717

@@ -1,0 +1,15 @@
+<think>
+Okay, the user wants me to provide three things: the final concise spec, a compact implementation checklist, and the top three design decisions. They also mentioned using both the "doc-coauthoring" and "mcp-builder" skills. Let me start by recalling the previous steps.
+
+First, the spec has been evolving through several iterations. The latest version is an implementation note focused on future developers. I need to make sure it's concise and captures all the essential points without fluff. The tool surface, behaviors, and open choices are already outlined, so I can structure that into the final spec.
+
+Next, the implementation checklist. The user probably wants a quick reference for developers to ensure all aspects are covered. Based on the previous discussions, the checklist should include setting up the project structure, implementing the core tools with proper error handling, pagination, and filtering, as well as testing and documentation.
+
+For the top three design decisions, I need to highlight what's most critical. From the earlier trouble spots and discussions, the key points are the limit cap on pagination, the visibility of the cursor for pagination, and the explicit error messages for validation. These decisions directly impact usability and reliability of the MCP server.
+
+I should also ensure that the final spec is clear and actionable, the checklist is comprehensive but not overwhelming, and the design decisions are justified based on the problem constraints and user needs. Let me structure each section accordingly, making sure to reference the skills as required.
+</think>
+
+<tool_call>
+{"name": "Read", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv/internal_comms_incident_update/.agents/skills/doc-coauthoring/SKILL.md"}}
+</tool_call><|im_end|>

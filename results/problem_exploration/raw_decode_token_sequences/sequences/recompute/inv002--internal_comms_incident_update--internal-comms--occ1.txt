@@ -1,0 +1,9 @@
+<think>
+Okay, the user wants me to help write an internal incident update using the "internal-comms" skill. First, I need to read the seed_files/incident_facts.md to get the details of the incident. Then, I should use the internal-comms skill to structure the update properly.
+
+Wait, the user already mentioned using the internal-comms skill, so I should make sure to reference that. The incident facts file will provide the necessary information like what happened, impact, resolution steps, and next steps. Once I have that data, I can format it according to the guidelines in the internal-comms examples, probably using the incident report template. I need to maintain a calm and objective tone as requested. Let me check if there are any specific sections required, like summary, details, resolution, and next steps. Also, ensure that the update follows the company's preferred format for incident reports.
+</think>
+
+<tool_call>
+{"name": "Read", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv/internal_comms_incident_update/seed_files/incident_facts.md"}}
+</tool_call><|im_end|>

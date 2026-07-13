@@ -1,0 +1,13 @@
+label,first_div_idx,rc_chosen,rp_chosen,rc_prob,rc_in_rp,margin,jsd_at_branch,regime
+inv026--slack_launch_pack--brand-guidelines--occ3,4, let, the,0.474735,0.476098,0.001363000000000003,0.008409,near-tie flip
+inv024--launch_poster_page_pack--web-artifacts-builder--occ3,34, also,ve,0.383345,0.306971,0.076374,0.007725,near-tie flip
+inv020--doc_coauthoring_design_doc--doc-coauthoring--occ3,4, the, let,0.521504,0.418366,0.10313799999999995,0.022681,near-tie flip
+inv021--mcp_server_and_spec--mcp-builder--occ3,26, , three,0.5,0.377541,0.12245899999999998,0.007633,near-tie flip
+inv024--slack_launch_pack--internal-comms--occ3,25, Slack, announcement,0.562172,0.43782,0.12435200000000002,0.007752,near-tie flip
+inv022--mcp_server_and_spec--doc-coauthoring--occ3,4, the, let,0.586122,0.450326,0.13579600000000003,0.013678,near-tie flip
+inv025--launch_poster_page_pack--theme-factory--occ3,6, see, tackle,0.563949,0.373235,0.19071400000000005,0.084411,near-tie flip
+inv023--launch_poster_page_pack--canvas-design--occ3,35, been, already,0.677279,0.377085,0.30019399999999996,0.04663,distribution shift
+inv022--web_artifact_with_theme--theme-factory--occ3,6, wrap, see,0.579473,0.23074,0.348733,0.06756,distribution shift
+inv025--slack_launch_pack--slack-gif-creator--occ3,11, for, of,0.622245,0.148041,0.47420400000000007,0.125548,distribution shift
+inv021--web_artifact_with_theme--web-artifacts-builder--occ3,15, note, of,0.862877,0.181947,0.68093,0.271657,distribution shift
+inv019--internal_comms_incident_update--internal-comms--occ3,36, previous, internal,0.903794,0.144905,0.7588889999999999,0.365363,distribution shift

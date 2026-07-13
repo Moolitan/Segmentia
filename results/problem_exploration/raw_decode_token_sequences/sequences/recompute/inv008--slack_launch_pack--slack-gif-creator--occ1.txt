@@ -1,0 +1,21 @@
+<think>
+Okay, the user wants a Slack GIF for the new feature launch where failed tasks retry. The theme is "a failed task gets back up and tries again," and it should be playful but professional. Let me think about how to approach this.
+
+First, I need to use the slack-gif-creator skill. The requirements mention specific dimensions: 128x128 for emoji GIFs. The FPS should be between 10-30, but since it's a short animation, maybe 10-15 FPS would be good. Colors should be limited to 48-128, so 48 might be sufficient for a simple animation.
+
+The animation concept should show a task failing and then retrying. Maybe a simple character or symbol representing a task, like a robot or a checkmark, that falls down and then bounces back up. Using a bounce animation with easing functions would make it look smooth. Also, adding a retry indicator, like a small arrow or a "retry" label, could emphasize the feature.
+
+I'll need to create frames where the task is in a failed state (maybe red color), then it bounces back up (green or blue), and shows a retry action. Using the GIFBuilder from the slack-gif-creator, I can generate these frames. Each frame would be a PIL image with the appropriate drawing.
+
+I should also consider the color scheme. Vibrant colors that stand out but are professional. Maybe start with a red failure, transition to green for success, and use a blue for the retry action. Adding some easing to the bounce motion will make it look more natural.
+
+I need to make sure the GIF is under 3 seconds. With 12 frames at 10 FPS, that's 1.2 seconds, which is good. Each frame will show the progression of the task failing and retrying. Maybe include a small sparkle or a checkmark on the final frame to indicate success.
+
+Also, the user mentioned keeping it playful, so maybe adding a small animation like a star or a sparkle when the task retries. Using the draw_star function from the frame_composer could help here. Ensuring the lines are thick enough as per the guidelines to avoid looking choppy.
+
+Finally, save the GIF with optimization for Slack, using the parameters like num_colors=48 and optimize_for_emoji=True. That should keep the file size small and meet Slack's requirements.
+</think>
+
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/slack_launch_pack/retry_gif.py", "content": "from core.gif_builder import GIFBuilder\nfrom PIL import Image, ImageDraw\nfrom core.frame_composer import create_blank_frame, draw_circle, draw_star\nfrom core.easing import interpolate\nimport math\n\n# 1. Create builder\nbuilder = GIFBuilder(width=128, height=128, fps=12)\n\n# 2. Generate frames\nfor i in range(12):\n    frame = create_blank_frame(128, 128, (240, 248, 255))\n    draw = ImageDraw.Draw(frame)\n\n    # Task failure (red circle falling)\n    if i < 6:\n        y = interpolate(start=20, end=80, t=i/5, easing='ease_out')\n        draw_circle(draw, 64, y, 20, fill=(255, 80, 80), outline=(255, 80, 80), width=3)\n        # Retry indicator\n        draw.line([(60, y+25), (68, y+25)], fill=(80, 150, 255), width=3)\n    \n    # Task retry (green circle bouncing back)\n    else:\n        # Bounce animation\n        t = (i-6)/6\n        y = interpolate(start=80, end=20, t=t, easing='bounce_out')\n        draw_circle(draw, 64, y, 20, fill=(80, 255, 80), outline=(80, 255, 80), width=3)\n        \n        # Add sparkle effect\n        if i == 6:\n            draw_star(draw, 64, y-10, 5, fill=(255, 255, 255), outline=(255, 255, 255), width=2)\n        elif i == 7:\n            draw_star(draw, 64, y-10, 5, fill=(255, 255, 255), outline=(255, 255, 255), width=2)\n\n    builder.add_frame(frame)\n\n# 3. Save with optimization\nbuilder.save('retry.gif', num_colors=48, optimize_for_emoji=True, remove_duplicates=True)"}}
+</tool_call><|im_end|>

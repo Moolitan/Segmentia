@@ -1,0 +1,23 @@
+<think>
+Okay, let's see. The user wants me to help co-write a design document about adding automatic retry for failed benchmark tasks. They've already gone through some steps, but there were issues with duplicate content and replacing sections. Now, they want an outline with specific sections: Background, Goals, Proposed approach, Risks, Open questions.
+
+First, I need to recall the previous steps. They read the system background and failure examples, then created a design doc but had duplicates. Now, they need an outline. The "doc-coauthoring" skill should guide the structure.
+
+The target readers are teammates working on agent infrastructure, so the document needs to be technical but clear. The length should be around 1.5 pages, so the outline needs to be concise but comprehensive.
+
+Starting with the Background section. It should summarize the current system's failure handling, referencing the system_background.md they read earlier. Mention the lack of automatic retries and the issues with manual reruns.
+
+Next, Goals. The main goal is to implement automatic retries for transient failures. Also, ensure that the system can distinguish between transient and permanent errors, track retries, and link attempts for audit purposes.
+
+Proposed approach would include error classification, retry policies (like limits and backoff), state tracking in the database, API changes for retry triggers, and UI updates. This aligns with what they tried to add earlier but need to structure it properly.
+
+Risks section should address potential issues like infinite loops if retries aren't capped, masking real bugs, and the complexity of error classification. Also, resource usage with too many retries.
+
+Open questions might involve how to classify errors automatically, determining retry limits for different task types, and how to integrate with existing monitoring systems.
+
+I need to make sure each section is clear and follows the doc-coauthoring guidelines. Avoid technical jargon where possible, but since the audience is infrastructure teammates, some technical details are necessary. Keep each section brief to fit the page limit. Check for any duplicates or overlaps between sections to maintain clarity.
+</think>
+
+<tool_call>
+{"name": "think", "arguments": {"thought": "Using the doc-coauthoring skill, I'll structure the design doc with the requested outline. The document should be concise for infrastructure teammates, focusing on technical implementation details and risk mitigation. I'll ensure each section addresses system integration points and operational considerations.", "summary": "Plan outline structure for automatic retry system design document"}}
+</tool_call>

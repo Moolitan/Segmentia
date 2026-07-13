@@ -1,0 +1,20 @@
+<think>
+Okay, the user wants a polished final version for internal rollout that includes the main Slack announcement, a shorter fallback version, the GIF concept, and a note on how the pieces fit together. Let me start by recalling the previous steps.
+
+First, the main announcement was refined to be clearer for platform engineers, explaining what the feature does, why it's implemented, and what's excluded. The fallback version needs to be shorter, so I'll condense the key points without the technical details. 
+
+For the GIF, the concept has been polished with ease-out rise and a single accent flick. I need to ensure the description aligns with the brand guidelines, using the specified colors and maintaining a calm, professional look. 
+
+The note on how the pieces fit together should highlight consistency in branding, the purpose of each component (announcement, GIF), and their alignment with the brand's visual and tonal guidelines. 
+
+I'll check the brand guidelines again to confirm color codes and typography. The main colors are dark, light, mid gray, and light gray, with accent colors like orange. The GIF uses #d97757 as the warm accent, which is correct. 
+
+The internal-comms skill suggests using the general-comms.md guidelines for the announcement, ensuring it's concise and professional. The fallback version should be a brief summary suitable for quick reads. 
+
+Finally, I'll structure the final output with clear sections for each component, ensuring everything is aligned and ready for internal rollout.
+</think>
+
+Finalizing the launch pack — reloaded brand guidelines, internal comms, and GIF creator tools.  
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/slack_launch_pack/final_launch_pack.md", "content": "# Final Launch Pack — Retry for Failed Tasks\n\n## Main Slack Announcement\n:gear: *Retry-on-failure is now live in the experiment task dashboard.*\n\n*What it does*\n- Detects transient failures (timeouts, transient I/O, rate-limit signals) and retries within a bounded budget per task.\n- Records each retry attempt against the original task id so history stays linked.\n- Leaves non-retryable failures (logic bugs, validation errors) to surface immediately, unchanged.\n\n*Why now*\nManual reruns were dominating operator time for failure shapes that are deterministically recoverable. The classifier was dark-launched for a week and matched our prior manual triage on 94% of failed runs.\n\n*What it doesn't do yet*\n- It does not retry across worker restarts; that lands next.\n- A handful of task types are still excluded while we tune the classifier.\n\n---\n\n## Fallback Version (Short)\n*Retry-on-failure now live in the experiment task dashboard.*\n- Auto-retries transient failures (timeouts, I/O issues) within a bounded budget.\n- Non-retryable failures surface immediately.\n- Excludes some task types temporarily.\n\n---\n\n## GIF Concept (128×128, 12 frames @10fps)\n**Visual:**\n- Small ink-square sprite stumbles down (4 frames), pauses (2 frames), rises back to baseline (6 frames) with ease-out motion.\n- Single warm accent (`#d97757`) flicks at the apex of the rise (frame 11).\n- Baseline shadow softens during stumble, re-thickens on rise.\n\n**Palette:**\n- `#1d1d1b` (ink), `#e8e6dc` (baseline), `#d97757` (accent), `#faf9f5` (background).\n\n**Why it works for Slack:**\n- Loops cleanly under 3s, reads at 32px in chat lists, no text frames, no hype language.\n\n---\n\n## How the Pieces Fit Together\n- **Tone:** Technical clarity with no promotional language, aligned to brand notes (calm, trustworthy, simple).\n- **Visuals:** GIF uses brand-approved colors and motion principles (ease-out recovery, single accent). Announcement mirrors GIF's calm palette and avoids exclamation marks.\n- **Functionality:** Announcement explains what the feature does (transient retries) and what it doesn't (worker restarts, excluded tasks), ensuring engineers can act on the details without overpromising."}}
+</tool_call><|im_end|>

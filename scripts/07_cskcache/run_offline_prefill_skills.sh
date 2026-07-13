@@ -36,15 +36,30 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 OVERWRITE=0
-for arg in "$@"; do
-  if [[ "$arg" == "--overwrite" ]]; then
-    OVERWRITE=1
-  fi
+SELECTED_SKILL=""
+args=("$@")
+for ((arg_index = 0; arg_index < ${#args[@]}; arg_index++)); do
+  case "${args[$arg_index]}" in
+    --overwrite)
+      OVERWRITE=1
+      ;;
+    --skill)
+      next_index=$((arg_index + 1))
+      if ((next_index >= ${#args[@]})); then
+        echo "--skill requires a skill name" >&2
+        exit 2
+      fi
+      SELECTED_SKILL="${args[$next_index]}"
+      ;;
+  esac
 done
 
 failures=0
 for skill_file in "$ROOT"/skills/*/SKILL.md; do
   skill="$(basename "$(dirname "$skill_file")")"
+  if [[ -n "$SELECTED_SKILL" && "$skill" != "$SELECTED_SKILL" ]]; then
+    continue
+  fi
   digest="$(printf '%s' "$skill" | sha256sum | cut -c1-32)"
   if [[ "$OVERWRITE" == "0" && -f "$OUTPUT_DIR/$digest.pt" && -f "$OUTPUT_DIR/$digest.json" ]]; then
     echo "[skipped_existing] $skill"

@@ -1,0 +1,13 @@
+label,rc1_type,rc2_type,rope_type,rc1_rc2_type_match,rc1_rope_type_match,baseline_first_div,kv_first_div,baseline_jsd_at_branch,kv_jsd_at_branch,baseline_overall_jsd_mean,kv_overall_jsd_mean,baseline_branch_tokens,kv_branch_tokens
+inv019--internal_comms_incident_update--internal-comms--occ3,tool_call,tool_call,tool_call,True,True,4,35,0.0,0.239093,0.68198,0.64423,' let'/' the',' I'/' They'
+inv020--doc_coauthoring_design_doc--doc-coauthoring--occ3,text,tool_call,text,False,True,4,11,0.0,0.088745,0.684104,0.677494,' let'/' the',' the'/' me'
+inv021--mcp_server_and_spec--mcp-builder--occ3,tool_call,tool_call,tool_call,True,True,4,70,0.0,0.640601,0.658965,0.495088,' let'/' the',' iterations'/' phases'
+inv021--web_artifact_with_theme--web-artifacts-builder--occ3,tool_call,text,tool_call,False,True,4,19,0.0,0.125848,0.674239,0.632351,' let'/' the',' note'/' of'
+inv022--mcp_server_and_spec--doc-coauthoring--occ3,tool_call,tool_call,text,True,False,4,12,0.0,0.023267,0.674336,0.676251,' let'/' the',' the'/' me'
+inv022--web_artifact_with_theme--theme-factory--occ3,text,text,tool_call,True,False,4,6,0.0,0.06756,0.676797,0.675036,' let'/' the',' wrap'/' see'
+inv023--launch_poster_page_pack--canvas-design--occ3,text,tool_call,tool_call,False,False,4,69,0.0,0.066849,0.678481,0.613504,' let'/' the',' exported'/' a'
+inv024--launch_poster_page_pack--web-artifacts-builder--occ3,text,text,text,True,True,28,34,0.0,0.007725,0.654982,0.647973,' that'/' tying',' also'/'ve
+inv024--slack_launch_pack--internal-comms--occ3,tool_call,tool_call,tool_call,True,True,4,25,0.0,0.007752,0.680368,0.654888,' let'/' the',' Slack'/' announcement'
+inv025--launch_poster_page_pack--theme-factory--occ3,text,text,text,True,True,28,6,0.0,0.084411,0.652505,0.674599,' that'/' tying',' see'/' tackle'
+inv025--slack_launch_pack--slack-gif-creator--occ3,tool_call,tool_call,tool_call,True,True,4,8,0.0,0.078891,0.674088,0.675324,' let'/' the',' final'/'.'
+inv026--slack_launch_pack--brand-guidelines--occ3,tool_call,tool_call,tool_call,True,True,4,8,0.0,0.037759,0.667618,0.670702,' let'/' the',' final'/'.'

@@ -1,0 +1,23 @@
+<think>
+Okay, the user wants a polished final version for internal rollout using the specified skills. Let me start by recalling the previous steps. They've already drafted the announcement and GIF concept, aligning with brand guidelines. Now, they need the main announcement, a shorter fallback, the GIF concept, and a note on how they fit together.
+
+First, I need to ensure the main Slack announcement is clear and technical, as per the brand notes. The previous version included sections like "What it does," "Why now," and "What it doesn't do yet." That's good, but maybe I can make it even more concise while keeping the substance.
+
+Next, the shorter fallback version. It should be a condensed version of the main announcement, maybe using bullet points or a more succinct structure. The user mentioned it's for situations where the full version isn't suitable, so it needs to capture the essence without details.
+
+For the GIF concept, the latest version includes polish passes like ease-out rise and a single accent flick. I need to present this clearly, ensuring it aligns with the brand's calm colors and technical tone. Also, mention the technical specs like dimensions and frame rate.
+
+The brief note on how the pieces fit together should explain the synergy between the announcement and the GIF. Highlighting consistency in brand alignment, clarity for engineers, and the visual metaphor of the GIF reinforcing the feature's purpose.
+
+I should check the brand guidelines again to ensure colors and fonts are correctly applied. The main announcement uses the calm palette with the single warm accent. The GIF's description should reference the same colors and avoid any flashy elements.
+
+Also, make sure the fallback version is short enough for quick reads, maybe using a bullet list. The final note should tie everything together, showing that both the text and visual elements are cohesive and meet the brand's requirements.
+
+Finally, verify that all components are included and formatted correctly, using the appropriate skills as specified. No markdown, just clear, concise text with the necessary details.
+</think>
+
+Finalizing with brand-guidelines, internal-comms, and slack-gif-creator — ensuring consistency across all materials.
+
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/slack_launch_pack/final_launch_pack.md", "content": "# Final Launch Pack — Retry-on-failure for Experiment Tasks\n\n## 1. Main Slack Announcement\n:gear: *Retry-on-failure is now live in the experiment task dashboard.*\n\n*What it does*\n- Detects transient failures (timeouts, transient I/O, rate-limit signals) and retries within a bounded budget per task.\n- Records each retry attempt against the original task id so history stays linked.\n- Leaves non-retryable failures (logic bugs, validation errors) to surface immediately, unchanged.\n\n*Why now*\nManual reruns were dominating operator time for failure shapes that are deterministically recoverable. The classifier was dark-launched for a week and matched our prior manual triage on 94% of failed runs.\n\n*What it doesn't do yet*\n- It does not retry across worker restarts; that lands next.\n- A handful of task types are still excluded while we tune the classifier.\n\n## 2. Fallback Version (for constrained spaces)\n:arrow_up: *Retry-on-failure now handles transient failures in experiment tasks.*\n- Detects timeouts, I/O issues, and rate limits\n- Retries within budget, preserves non-retryable errors\n- Excludes some task types while classifier tunes\n\n## 3. GIF Concept\n**Visual:** 128×128px, 12 frames @10fps\n- Ink-square sprite stumbles (4 frames), pauses (2 frames), rises with ease-out (6 frames)\n- Single warm accent (`#d97757`) flicks at the rise apex (frame 11)\n- Baseline shadow softens during stumble, re-thickens on rise\n\n**Palette:**\n- `#1d1d1b` (ink), `#e8e6dc` (baseline), `#d97757` (accent), `#faf9f5` (background)\n\n## 4. Integration Note\nThe announcement's technical specificity matches the GIF's克制 visual metaphor — both avoid hype language, use single warm accent, and focus on what the feature actually does. The GIF's ease-out rise mirrors the \"bounded budget\" constraint described in the announcement."}}
+</tool_call><|im_end|>

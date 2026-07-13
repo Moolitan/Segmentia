@@ -1,0 +1,110 @@
+<think>
+Okay, the user wants me to sketch a minimal project structure for a Python-based MCP server. Let me start by recalling the MCP Builder guidelines. The user mentioned using the "mcp-builder" skill, so I should refer back to the documentation they provided earlier.
+
+First, the project structure for Python. The MCP Best Practices mention using FastMCP, which is the Python SDK. The Python Implementation Guide from the reference files would have the necessary structure. Let me check the key points from the MCP Builder documentation.
+
+The Python guide suggests a specific project layout. The main components would be the server entry point, tools, and possibly a config file. The server file, maybe called mcp_server.py, would handle initializing the server and registering tools. Each tool would be in its own module, perhaps under a tools directory. Also, there's the need for API client setup, error handling, and response formatting.
+
+Wait, the user wants a minimal structure. So I should keep it simple. The core files would be:
+
+- mcp_server.py: The main server file that sets up the MCP server, registers tools, and starts the server.
+- tools/issue_query.py: Implementation of the issue_query tool.
+- tools/issue_create.py: Implementation of the issue_create tool.
+- tools/issue_comment_add.py: Implementation of the issue_comment_add tool.
+- Maybe a config.py for any configuration settings, but that's optional for minimal.
+
+Also, the MCP Best Practices mention using Pydantic for input and output schemas. So each tool would have Pydantic models for validation. The error handling should be consistent, using the MCP error format with actionable messages.
+
+The project structure should include a setup.py or requirements.txt if dependencies are needed. But since it's minimal, maybe just the server and tool files. Also, the MCP Inspector can be used for testing, so including a note on how to run tests would be helpful.
+
+I need to make sure that the server uses the FastMCP library, imports the necessary modules, and registers each tool with the server. Each tool function would handle the specific API calls, like querying issues, creating issues, or adding comments. The parameters for each tool are defined in the spec, so the input schemas should match those.
+
+I should also mention the use of async functions for I/O operations, as per the MCP guidelines. Pagination support in issue_query would involve handling limit and cursor parameters. Error handling should include specific messages to guide the LLM.
+
+Putting it all together, the minimal project structure would have the server file, tool modules, and any necessary configuration. The answer should outline this structure clearly, referencing the Python guide from the MCP Builder documentation.
+</think>
+
+Here's a minimal Python project structure for your MCP server, following MCP best practices and the Python SDK guide:
+
+```bash
+mcp_issue_server/
+├── mcp_server.py              # Main server entry point
+├── tools/
+│   ├── issue_query.py         # GET /issues endpoint implementation
+│   ├── issue_create.py        # POST /issues endpoint implementation
+│   └── issue_comment_add.py   # POST /issues/{id}/comments implementation
+├── config.py                  # Optional: API keys/configurations
+└── requirements.txt           # FastMCP and Pydantic dependencies
+```
+
+Key implementation details:
+
+1. **Server Entry Point** (`mcp_server.py`):
+```python
+from fastmcp import MCPServer
+from tools.issue_query import issue_query
+from tools.issue_create import issue_create
+from tools.issue_comment_add import issue_comment_add
+
+server = MCPServer()
+server.register_tool(issue_query)
+server.register_tool(issue_create)
+server.register_tool(issue_comment_add)
+server.start()
+```
+
+2. **Tool Implementation Pattern** (`tools/issue_query.py`):
+```python
+from fastmcp import tool
+from pydantic import BaseModel
+from typing import Optional, List
+
+class IssueQueryParams(BaseModel):
+    id: Optional[str] = None
+    status: Optional[str] = None
+    assignee: Optional[str] = None
+    limit: int = 20
+    cursor: Optional[str] = None
+
+@tool("issue_query")
+async def issue_query(params: IssueQueryParams):
+    """Fetch issues by ID or filter by status/assignee."""
+    # Implement API call to /issues endpoint with parameters
+    # Return structured data with pagination support
+    pass
+```
+
+3. **Error Handling**:
+```python
+from fastmcp import MCPError
+
+try:
+    # API call
+except APIError as e:
+    raise MCPError(
+        message=f"Failed to fetch issues: {e}",
+        suggestion="Check API key and try again",
+        next_steps=["Verify authentication credentials", "Check network connectivity"]
+    )
+```
+
+4. **Testing**:
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run server
+python mcp_server.py
+
+# Test with MCP Inspector
+npx @modelcontextprotocol/inspector
+```
+
+This structure follows the Python MCP guide's recommendations for:
+- Pydantic model validation
+- Async I/O operations
+- Structured error messages
+- Tool registration patterns
+- Pagination support
+
+Would you like me to expand any specific part of this structure?<|im_end|>

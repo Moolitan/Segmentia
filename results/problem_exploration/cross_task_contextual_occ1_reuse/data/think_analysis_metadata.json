@@ -1,0 +1,18 @@
+{
+  "cases": 3,
+  "modes": [
+    "recompute",
+    "cross_contextual_rope"
+  ],
+  "temperature": 0.0,
+  "paired_think_exact_matches": 0,
+  "paired_tool_name_matches": 3,
+  "paired_tool_argument_exact_matches": 0,
+  "metric_notes": {
+    "think_words": "Regex word count over text inside <think>...</think>.",
+    "word_jaccard": "Set overlap of lower-cased regex words; lexical, not semantic.",
+    "char_sequence_ratio": "Python difflib SequenceMatcher ratio; order-sensitive surface similarity."
+  },
+  "figure_status": "not_generated",
+  "figure_reason": "Only three heterogeneous qualitative cases; an aggregate chart would imply unsupported generality."
+}

@@ -1,0 +1,40 @@
+<think>
+Okay, the user wants me to sketch a minimal project structure for a Python-based MCP server. Let me recall the previous steps. They've already outlined the tools: issue_query, issue_create, issue_comment_add. The parameters for each tool are defined, so now the next step is setting up the project.
+
+First, I need to think about the standard Python project structure. Typically, there's a main server file, maybe a directory for tools, and configuration files. Since they mentioned using FastMCP for Python, I should refer to the Python SDK documentation. The user also wants to use the mcp-builder skill, so I should ensure the structure aligns with best practices from the MCP guidelines.
+
+The MCP Best Practices mention using Pydantic for data validation, so the project should include models defined with Pydantic. The server will need to handle tool registration, authentication, and error handling. Also, the project structure guide from the reference files would have examples.
+
+I should outline the main components: the server entry point, tool implementations, models, and any configuration. Maybe a 'tools' directory with each tool as a separate module. The main server file would initialize the MCP server, register the tools, and set up the API client with authentication.
+
+Wait, the user mentioned minimal structure, so I shouldn't overcomplicate. Let me list the essential files and directories. The main server script, a tools directory with the three tools, a models directory for Pydantic models, and maybe a config file for API keys or settings. Also, include setup.py or requirements.txt for dependencies.
+
+I need to make sure that the project structure is simple but covers all necessary parts. The answer should be written in the spec file they've been using, so I'll structure the directories and files accordingly, referencing the Python guide for any specific patterns.
+</think>
+
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/mcp_server_and_spec/mcp_server_spec.md", "content": "# MCP Server for Issue Tracker — Spec (working draft)\n\n## Tools to expose (Turn 1 plan)\nStart from the minimum requirements in the brief:\n1. `issue_query` — fetch by id or filter by status/assignee.\n2. `issue_create` — create a new issue.\n3. `issue_comment_add` — add a comment to an existing issue.\n\nOut of scope (per brief): attachments, bulk modification, user\npermission integration.\n\n## Tool parameter design (Turn 2)\n\n### `issue_query`\n- `id` (str, optional) — single-issue path.\n- `status` (str, optional) — filter, e.g. \"open\" / \"closed\".\n- `assignee` (str, optional) — filter by username.\n- `limit` (int, default 20) — bound the response size.\n- `cursor` (str, optional) — pagination token.\n\n### `issue_create`\n- `title` (str, required)\n- `body` (str, required)\n- `labels` (list[str], optional)\n- `assignee` (str, optional)\n\n### `issue_comment_add`\n- `issue_id` (str, required)\n- `body` (str, required)\n\n## Project Structure (Python, Turn 3)\n\n```
+mcp_issue_server/
+├── main.py                  # Server entry point
+├── tools/                   # Tool implementations
+│   ├── issue_query.py
+│   ├── issue_create.py
+│   └── issue_comment_add.py
+├── models/                  # Pydantic models for request/response schemas
+│   ├── issue.py
+│   └── comment.py
+├── config.py                # Configuration (API keys, auth, etc.)
+├── utils/                   # Shared utilities (error handling, pagination)
+│   ├── api_client.py
+│   └── pagination.py
+├── requirements.txt         # Dependencies
+└── README.md                # Project documentation
+```
+
+Key considerations:
+- Use `@mcp.tool` decorator for tool registration
+- Implement Pydantic models for input/output validation
+- Centralize API client logic in `utils/api_client.py`
+- Use `config.py` for environment-specific settings
+- Include error handling utilities for consistent responses"}}
+</tool_call><|im_end|>

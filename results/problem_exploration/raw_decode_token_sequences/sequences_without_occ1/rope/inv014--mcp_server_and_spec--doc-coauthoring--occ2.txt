@@ -1,0 +1,30 @@
+<think>
+Okay, let's see. The user wants me to review the spec they've written and point out three places where a real agent might still run into trouble when using the MCP server. 
+
+First, I need to recall the content of the spec. The spec outlines the tools: issue_query, issue_create, and issue_comment_add, along with their parameters. The error handling principles mention handling different HTTP status codes and returning structured JSON.
+
+So, where could agents have issues? Let's think about each tool.
+
+Starting with issue_query. The parameters include id, status, assignee, limit, and cursor. But the spec doesn't mention how the server handles cases where multiple filters are applied, like combining status and assignee. An agent might not know if the server supports that, leading to incorrect assumptions.
+
+Next, issue_create. The parameters are title, body, labels, and assignee. However, the spec doesn't specify if there are any validation rules for the title or body, like length limits or required formats. An agent might submit a title that's too long or doesn't meet the service's requirements, causing an error.
+
+Then, issue_comment_add requires issue_id and body. But the spec doesn't mention if the server checks if the issue exists before adding a comment. If the issue doesn't exist, the server might return a 404, but the agent might not handle that gracefully, leading to confusion.
+
+Also, looking at error handling, the spec says to return structured JSON but doesn't detail how specific errors are formatted. For example, if a 400 error occurs due to a missing required parameter, the agent needs clear feedback. Without examples, the agent might not know how to interpret the error messages correctly.
+
+Another point is the lack of examples in the tool parameters. Agents might not know the expected format for labels or assignee, leading to incorrect data submission. Including examples would help agents understand the required input better.
+
+Additionally, the spec doesn't mention rate limiting or authentication requirements. If the server enforces rate limits, agents might hit them without knowing, leading to unexpected errors. Similarly, if authentication is required, the spec should detail how to include credentials in the requests.
+
+Wait, the user's constraints mentioned no user-permission integration, so maybe authentication isn't part of this scope. But rate limiting could still be an issue. However, the user's initial brief didn't mention it, so maybe that's out of scope. The main points are the tool parameters and error handling specifics.
+
+So, summarizing the three issues: 
+1. Lack of clarity on combining filters in issue_query.
+2. Missing validation details for issue_create parameters.
+3. No examples or detailed error messages for handling server responses.
+</think>
+
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/mcp_server_and_spec/mcp_server_spec.md", "content": "# MCP Server for Issue Tracker — Spec (working draft)\n\n## Tools to expose (Turn 1 plan)\nStart from the minimum requirements in the brief:\n1. `issue_query` — fetch by id or filter by status/assignee.\n2. `issue_create` — create a new issue.\n3. `issue_comment_add` — add a comment to an existing issue.\n\nOut of scope (per brief): attachments, bulk modification, user\npermission integration.\n\n## Tool parameter design (Turn 2)\n\n### `issue_query`\n- `id` (str, optional) — single-issue path.\n- `status` (str, optional) — filter, e.g. \"open\" / \"closed\".\n- `assignee` (str, optional) — filter by username.\n- `limit` (int, default 20) — bound the response size.\n- `cursor` (str, optional) — pagination token.\n\n### `issue_create`\n- `title` (str, required)\n- `body` (str, required)\n- `labels` (list[str], optional)\n- `assignee` (str, optional)\n\n### `issue_comment_add`\n- `issue_id` (str, required)\n- `body` (str, required)\n\n## Minimal Python project layout (Turn 3)\n\n```\nmcp-issues/\n  pyproject.toml\n  src/mcp_issues/\n    __init__.py\n    server.py          # FastMCP entrypoint, tool registrations\n    client.py          # thin REST client wrapping the issue API\n    schemas.py         # Pydantic models for issue payloads\n    errors.py          # mapping HTTP errors → MCP tool errors\n  tests/\n    test_client.py\n    test_tools.py\n```\n\n## Short spec (Turn 4)\n\n### Goal\nLet an agent triage and reply to issues without an SDK.\n\n### Tool surface\n`issue_query`, `issue_create`, `issue_comment_add` (see Turn 2\nfor parameters).\n\n### Error handling principles\n- Network/timeout errors → retryable MCP error with the original\n  HTTP status.\n- 4xx validation errors → non-retryable MCP error; surface the\n  field-level message verbatim.\n- 5xx → retryable; include a short hint and an\n  `attempt_remaining` hint.\n- Always return a structured JSON body; never a free-text\n  stacktrace.\n\n## Review & Improvement Notes (Turn 5)\n\n### Potential agent pain points:\n\n1. **Filter combination ambiguity** in `issue_query`: The spec doesn't clarify whether multiple filters (e.g., `status=open` + `assignee=john`) are allowed or how they interact. Agents might assume logical AND by default, but the server could enforce OR or have other logic.\n\n2. **Missing validation constraints** for `issue_create`: No details on title/body length limits, allowed characters, or format requirements (e.g., markdown support). Agents might submit invalid payloads that fail silently or with cryptic errors.\n\n3. **Lack of example responses** for error cases: While the error handling principles are clear, the spec doesn't show examples of actual error structures (e.g., `\"error\": {\"field\": \"title\", \"message\": \"must be at least 5 characters\"}`). Agents may struggle to map HTTP status codes to actionable fixes without concrete examples.\n"}}
+</tool_call><|im_end|>

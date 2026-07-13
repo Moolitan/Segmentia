@@ -1,0 +1,28 @@
+<think>
+Okay, let's tackle this step by step. The user wants everything tightened according to the brand notes, ensuring consistency in wording, colors, and style. They also want a final launch-pack summary.
+
+First, I need to recall the brand guidelines. The main colors are dark (#141413), light (#faf9f5), mid gray (#b0aea5), and light gray (#e8e6dc). Accent colors include orange (#d97757), blue (#6a9bcc), and green (#788c5d). Typography uses Poppins for headings and Lora for body text. The tone should be simple, clear, trustworthy, with a technical team vibe, avoiding flashiness.
+
+Next, the internal-comms skill guidelines. The announcement should be concise, using the structure from the examples. The Slack GIF needs to align with the brand's calm colors and simple shapes, as per the brand notes. The previous GIF concept used #1d1d1b (a dark shade), #e8e6dc (baseline), #d97757 (accent), and #faf9f5 (background). That seems to fit the brand colors.
+
+Now, checking the existing announcement. The Slack version uses a playful tone with emojis but needs to be more aligned with the brand's technical and trustworthy tone. The original message had ":gear: *Retry-on-failure is now live..." which is good, but maybe "live" can be replaced with "available" for a more formal tone. Also, ensuring that the colors mentioned in the announcement match the brand guidelines.
+
+For the GIF, the palette is already aligned, but I should confirm that the colors used are exactly from the brand guidelines. The ink color #1d1d1b is close to the main dark #141413, but maybe adjust to match exactly. The baseline #e8e6dc is correct. The accent #d97757 is the orange from the brand, which is good. The background #faf9f5 is the light color. So that's all correct.
+
+The final summary needs to encapsulate the announcement, GIF, and brand alignment. It should mention the key points: retry feature, audience, benefits, and the visual elements adhering to brand guidelines.
+
+I should also ensure that the announcement doesn't have any exclamation marks or hype language. The current version uses "Worth a look if you maintain long-running tasks." which is good. The GIF description mentions "no excitement marks," which aligns with the brand notes.
+
+Putting it all together, the final announcement and GIF concept should reflect the brand's calm, technical tone with the correct color palette. The summary should highlight consistency in style, colors, and messaging across both the announcement and the GIF.
+</think>
+
+Finalizing with brand-aligned colors, tone, and structure.
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/slack_launch_pack/launch_announcement.md", "content": ":gear: *Retry-on-failure is now available in the experiment task dashboard.*\n\n- Transient failures retry automatically (bounded budget).\n- Retry history is visible on each task.\n- Non-retryable failures surface immediately.\n\nWorth a look if you maintain long-running tasks. Heads-up: a few task types are excluded for now while we tune the classifier.\n"}}
+</tool_call>
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/slack_launch_pack/launch_gif.md", "content": "# Launch GIF — concept (final)\n\n## Theme\n\"A failed task gets back up and tries again.\"\n\n## Visual\n- 128×128, 12 frames, 10 fps.\n- Small ink-square sprite with calm motion.\n- 4-frame stumble (down), 2-frame pause, 6-frame rise back to baseline.\n\n## Palette (brand-aligned)\n- `#141413` ink\n- `#e8e6dc` baseline\n- `#d97757` accent on rise frame\n- `#faf9f5` background\n\n## Why this works for Slack\n- Loops cleanly under 3 s\n- Reads clearly at 32 px in chat lists\n- No text frames or excitement marks\n- Matches brand color guidelines\n"}}
+</tool_call>
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/slack_launch_pack/launch_summary.md", "content": "# Launch Pack Summary\n\n**Feature:** Retry support for failed tasks in experiment dashboard\n**Audience:** Research & platform engineering teams\n**Key message:** Reduces manual reruns for transient failures\n**Visual identity:**\n- Brand-aligned colors (#141413, #d97757, #e8e6dc)\n- Calm motion in 128×128 emoji-style GIF\n- Technical tone with no hype language\n**Next steps:** Finalize GIF animation using brand palette"}}
+</tool_call><|im_end|>

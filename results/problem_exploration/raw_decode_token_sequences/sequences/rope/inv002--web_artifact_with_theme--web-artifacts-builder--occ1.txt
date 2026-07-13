@@ -1,0 +1,17 @@
+<think>
+Okay, let's tackle this user request. The user wants me to use the "web-artifacts-builder" skill to create an internal tech-event landing page. First, I need to make sure I understand the requirements. The landing page should include title, time, location, registration button, and a short agenda. It needs to look proper, not just a plain demo.
+
+The user mentioned to first read seed_files/event_brief.md. So I should start by checking that file to get any details about the event. Maybe the event's title, date, location, and agenda items are there. But since I can't access external files directly, I need to use the Read tool to get the content of event_brief.md.
+
+Wait, the user provided a context segment about the web-artifacts-builder skill. The skill's description says it's for scaffolding web artifacts. So after reading the event brief, I should use the web-artifacts-builder skill to generate the landing page structure. The skill might handle creating the necessary HTML, CSS, and JavaScript files with the required components.
+
+I need to make sure the generated page uses React, Tailwind CSS, and shadcn/ui components as per the stack mentioned. The design guidelines say to avoid certain styles like purple gradients and uniform rounded corners. So the generated page should follow modern, clean design principles.
+
+Once the structure is created, I should bundle it into a single HTML file using the bundle-artifact.sh script. Then, the user can share that HTML as an artifact. Also, the user might need testing, but they mentioned it's optional. So the main steps are: read the event brief, generate the page with the skill, bundle it, and present the HTML.
+
+I should check if the event_brief.md exists and read it. If there's no such file, maybe the user expects me to use default values or prompt for details. But since the user specified to read that file, I'll proceed with the Read tool. Then, use the web-artifacts-builder skill with the parameters from the event brief to create the landing page components. Finally, bundle everything into a single HTML file.
+</think>
+
+<tool_call>
+{"name": "Read", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv/internal_comms_incident_update/seed_files/event_brief.md"}}
+</tool_call><|im_end|>

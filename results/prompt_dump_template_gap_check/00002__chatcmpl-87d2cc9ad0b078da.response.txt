@@ -1,0 +1,27 @@
+<think>
+Okay, the user wants to co-write a design document about adding automatic retry for failed benchmark tasks. Let me start by understanding the existing system and the failure examples.
+
+First, from the system background, the current setup doesn't have any automatic retries. When a task fails, it's marked as failed, and the user has to manually relaunch it. The known issues mention temporary network problems and timeouts that could be recovered with retries, but there's a risk of resource waste and hiding real bugs with unlimited retries.
+
+Looking at the failure examples, there are cases where retries work (like timeouts and I/O errors) but also cases where the failure is due to a logic bug that wouldn't benefit from retries. So the solution needs to handle these different scenarios.
+
+The user mentioned using the "doc-coauthoring" skill, so I should structure the design doc properly. The skill probably guides on creating structured documents with sections like Problem Statement, Proposed Solution, etc. 
+
+I need to outline the structure first. Start with the problem statement, then the proposed solution. The solution should include how to determine if a retry is appropriate. Maybe categorize failures into transient and non-transient. Transient ones (like timeouts) could have retries, while non-transient (like logic bugs) shouldn't. 
+
+Also, the system background mentions that reruns create new records with weak linkage. The design doc should address how to link retry attempts to the original task for better tracking. Maybe adding a parent task ID or a retry count.
+
+Another point is limiting the number of retries to prevent infinite loops. The known issues mention that unlimited retries are bad, so the solution should have a configurable maximum retry limit. Also, exponential backoff between retries could help with temporary issues.
+
+I should also consider how to detect if a failure is transient. Maybe by checking the error type or message. For example, timeouts or network errors could trigger a retry, while other errors would not.
+
+The design doc might need sections on implementation details, such as modifying the task scheduler to handle retries, updating the database schema to track retry attempts, and logging mechanisms to record why a retry was attempted or failed.
+
+Testing the solution is important too. The doc should mention creating test cases for both transient and non-transient failures to ensure the retry logic works as intended.
+
+I need to make sure the document is clear and follows the structure suggested by the doc-coauthoring skill. Maybe start with an introduction, then problem statement, proposed solution with subsections on retry policies, implementation details, testing, and considerations.
+</think>
+
+<tool_call>
+{"name": "think", "arguments": {"thought": "Based on the system background and failure examples, I'll structure the design doc with these key sections: Problem Statement, Proposed Solution (with retry policy rules), Implementation Details (task state tracking, retry triggers), and Considerations (error classification, max retry limits). Let me outline the thinking process first.", "summary": "Plan design doc structure based on system context and failure patterns"}}
+</tool_call>

@@ -1,0 +1,30 @@
+<think>
+Okay, let's see. The user wants me to review the spec they've created and point out three places where a real agent might still run into trouble when using the MCP server. 
+
+First, I need to recall the spec details. The spec includes three tools: issue_query, issue_create, and issue_comment_add. The error handling principles mention handling different HTTP status codes and returning structured JSON. The project structure is outlined with Python files.
+
+Now, thinking about potential issues. One thing that comes to mind is the lack of detailed error messages. The spec says to return structured JSON, but if the error messages aren't specific enough, the agent might not know how to correct the issue. For example, if there's a 400 error, the agent might not get enough info to fix the input.
+
+Another point is the absence of authentication handling. The spec mentions the client.py file, but there's no mention of how authentication is managed. If the API requires auth tokens or API keys, the MCP server needs to handle that, otherwise, the agent might fail to authenticate and get 401 errors without clear guidance.
+
+Third, the tool parameters for issue_create include labels and assignee, but there's no validation mentioned. If the labels don't exist or the assignee isn't a valid user, the server might return an error, but the agent wouldn't know why unless the error message specifies the invalid input. The spec's error handling doesn't address this, so the agent might not handle those cases properly.
+
+I should check if these points are covered in the spec. Looking back, the error handling principles mention 4xx errors should surface field-level messages, but maybe the spec doesn't detail how those messages are structured or if they include specific validation errors. Also, authentication isn't mentioned in the tool parameters or error handling, which could be a gap. The tool parameters don't specify if there are constraints on the labels or assignee, so the agent might not know valid values.
+
+Yes, these three areas—error message specificity, authentication, and input validation—could be trouble spots for the agent. The user might need to add more details in the spec to address these issues.
+</think>
+
+Here are 3 potential trouble spots for agents using this MCP server:
+
+1. **Ambiguous Error Handling for Validation Failures**  
+   The spec mentions 4xx errors should surface field-level messages verbatim, but doesn't specify how validation errors would be structured. An agent might receive a generic "invalid input" error without knowing which specific field failed or why (e.g., "assignee does not exist" or "label format invalid").
+
+2. **Missing Authentication Context**  
+   The spec doesn't mention how authentication is handled for the issue API. If the underlying service requires API keys, OAuth tokens, or other auth mechanisms, the MCP server needs to expose this as part of the tool parameters. Agents would fail silently with 401 errors if this isn't explicitly documented.
+
+3. **Unspecified Input Validation Rules**  
+   While `issue_create` accepts labels and assignees, the spec doesn't define validation rules for these parameters. For example:
+   - Are labels case-sensitive?
+   - What format are valid assignee usernames in?
+   - Are there maximum length constraints?
+   Agents might submit invalid values (e.g., "LABEL" vs "label") without knowing the expected format.<|im_end|>

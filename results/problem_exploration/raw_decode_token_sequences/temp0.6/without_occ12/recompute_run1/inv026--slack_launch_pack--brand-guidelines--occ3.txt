@@ -1,0 +1,17 @@
+<think>
+Okay, let's tackle this final step. The user wants a polished final version for internal rollout, including the main Slack announcement, a shorter fallback version, the GIF concept, and a brief note on how the pieces fit together. 
+
+First, I need to ensure that the announcement is clear for platform engineers. The previous version added substance about what the feature does, so I should check if that's sufficient. Maybe I can make it even more concise while keeping the technical details.
+
+Next, the fallback version needs to be shorter. Perhaps a one-liner that captures the essence without the details. Something like a brief mention of the retry feature with an emoji.
+
+For the GIF, the concept has been refined to be more polished. I should reference the specific details from the launch_gif.md, like the 128x128 size, the easing effect, and the single accent flick. Also, ensure it aligns with brand guidelines using the correct colors.
+
+The note on how the pieces fit together should explain the synergy between the announcement and the GIF. Highlighting the consistent use of brand colors and the calm, technical tone will show alignment.
+
+I need to make sure all elements are included and formatted correctly, using the brand guidelines for colors and typography. Also, check that the GIF specifications meet Slack's requirements for emoji GIFs. Finally, compile everything into a cohesive final package.
+</think>
+
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/slack_launch_pack/final_launch_pack.md", "content": "# Final Launch Pack — Retry-on-Failure\n\n## Main Slack Announcement\n:gear: *Retry-on-failure is now live in the experiment task dashboard.*\n\n*What it does*\n- Detects transient failures (timeouts, I/O issues, rate-limit signals) and retries within a bounded budget per task.\n- Records retry attempts against original task IDs.\n- Leaves non-retryable failures (logic bugs, validation errors) unchanged.\n\n*Why now*\nManual reruns were dominating operator time for recoverable failures. Classifier matched 94% of manual triage during dark launch.\n\n*What's excluded*\n- No cross-worker-restart retries (coming next)\n- A few task types excluded during classifier tuning\n\n## Fallback Version\n`<retry-on-failure> Now retries transient failures in experiment tasks (excludes: X, Y, Z).` \n\n## GIF Concept\n**File:** `launch_gif.md` (128×128, 12 frames @10fps)\n- Ink-square sprite stumbles (4f), pauses (2f), rises with ease-out (6f)\n- Single warm accent (`#d97757`) at rise apex (frame 11)\n- Subtle baseline shadow animation\n\n## 🔗 Brand Alignment\n- Consistent use of `#1d1d1b` (ink), `#e8e6dc` (baseline), and `#d97757` (accent)\n- Technical tone with no hype language\n- Slack-optimized: <3s loop, 32px readability, no text frames\n\n## How It Fits\nThe announcement explains the feature's boundaries, the GIF visually represents recoverable failures, and both use calm brand colors to avoid overwhelming technical audiences."}}
+</tool_call><|im_end|>

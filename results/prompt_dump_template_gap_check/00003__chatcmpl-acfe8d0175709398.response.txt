@@ -1,0 +1,19 @@
+<think>
+Okay, let's start by understanding the user's request. They want a design document for adding automatic retries for failed benchmark tasks. The user mentioned using the "doc-coauthoring" skill, so I need to follow the structured approach outlined in that skill.
+
+First, I'll recall the system background and failure examples provided. The current system doesn't have automatic retries, leading to manual intervention. The failure examples show that some errors are transient (like timeouts, I/O issues) and can be resolved with a retry, while others (like logic bugs) won't benefit from retries.
+
+The design doc needs to address these points. The structure should include sections like Problem Statement, Proposed Solution, Implementation Details, and Considerations. 
+
+In the Problem Statement, I should highlight the current limitations and the impact of manual retries. The Proposed Solution would involve a retry mechanism with specific rules, such as retrying only certain error types a limited number of times. 
+
+Implementation Details might cover how to track task states, when to trigger retries (maybe based on error codes or types), and how to link retry attempts to the original task for traceability. Considerations should discuss error classification, avoiding infinite loops, resource management, and user notifications.
+
+I need to ensure that the document is clear and addresses both the technical implementation and the operational aspects. Also, considering the known issues mentioned, like resource waste and hiding real bugs, the solution should include safeguards like maximum retry limits and logging to distinguish between transient and persistent failures.
+
+Now, I'll outline these sections step by step, making sure each part is concise and addresses the key points identified from the background and examples.
+</think>
+
+<tool_call>
+{"name": "write_file", "arguments": {"file_path": "design_docs/automatic_retry_design.md", "content": "## Automatic Retry Design Document\n\n### 1. Problem Statement\nCurrent benchmark task failures require manual intervention, leading to:\n- Inconsistent failure handling\n- Lost context between failed and rerun tasks\n- Wasted human effort for transient failures\n\n### 2. Proposed Solution\nImplement a smart retry system with:\n- Error classification (transient vs permanent)\n- Configurable retry limits (e.g., 3 attempts for network errors)\n- Automatic task state tracking\n- Linkage between original and retry attempts\n\n### 3. Implementation Details\n**Retry Triggers:**\n- Network timeouts (HTTP 5xx, connection errors)\n- I/O errors with retryable status codes\n- Tool call failures with 'transient' classification\n\n**State Tracking:**\n- Add 'retry_count' field to task metadata\n- Store failure diagnostics with each attempt\n- Use task ID linkage for audit trails\n\n### 4. Considerations\n- Implement exponential backoff between retries\n- Set hard limits (e.g., max 3 retries per task)\n- Create alerting for persistent failures\n- Add UI indicators for retry status", "security_risk": "LOW", "summary": "Create initial design document structure for automatic retry system"}}
+</tool_call>

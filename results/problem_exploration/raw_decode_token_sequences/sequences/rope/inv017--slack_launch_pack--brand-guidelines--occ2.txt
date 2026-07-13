@@ -1,0 +1,42 @@
+<think>
+Okay, let's tackle this step by step. The user wants to tighten everything according to the brand notes and ensure consistency in wording, colors, and style. They also want a final launch-pack summary.
+
+First, I need to recall the brand guidelines. The brand notes emphasize simplicity, clarity, trustworthiness, and a technical tone without being flashy. The visual direction is calm colors, simple shapes, and avoiding excessive exclamation marks or hype language.
+
+Looking at the existing announcement and GIF concept, I should check if they align with these principles. The announcement uses a calm palette with the specified colors and avoids any hype. The GIF concept has a simple animation without exaggerated movements, which fits the brand notes.
+
+Next, I need to ensure that the colors used in both the announcement and the GIF are consistent with the brand guidelines. The main colors are Dark (#141413), Light (#faf9f5), Mid Gray (#b0aea5), and Light Gray (#e8e6dc). The accent colors are Orange (#d97757), Blue (#6a9bcc), and Green (#788c5d). The GIF uses #1d1d1b (which is similar to Dark), #e8e6dc (Light Gray), #d97757 (Orange), and #faf9f5 (Light). These are all within the brand's color palette, so that's good.
+
+The announcement's wording is straightforward and technical, which matches the brand's requirement for a technical-team tone. It avoids any flashy language and sticks to clear, concise points. The GIF concept also uses simple shapes and calm motion, which aligns with the visual direction.
+
+Now, to tighten everything, I should ensure that there are no deviations from the brand guidelines. Check for any instances where colors might be out of the specified palette or where the tone might be too casual. The announcement and GIF concept seem to be in line, so maybe just a quick review to confirm.
+
+For the final launch-pack summary, it should encapsulate the key elements: the announcement, the GIF, adherence to brand guidelines, and the technical specifications. Make sure to mention the consistent use of colors, the calm visual style, and the technical tone.
+
+I should also verify that the GIF's dimensions, FPS, and color count meet Slack's requirements. The GIF is 128x128, 12 frames at 10 FPS, using 4 colors, which fits the emoji GIF constraints. The announcement is formatted correctly with the right typography and colors.
+
+Finally, compile the summary to highlight the alignment with brand notes, the technical specifications, and the cohesive launch pack.
+</think>
+
+Finalizing with brand-aligned consistency across text, colors, and style.
+
+**Launch Pack Summary**
+
+**1. Announcement**  
+- **Tone**: Technical, clear, and concise  
+- **Colors**: Brand-aligned palette (`#1d1d1b`, `#e8e6dc`, `#d97757`, `#faf9f5`)  
+- **Format**: 3P structure (What changed, Who it's for, Why it helps)  
+- **Key message**: "Retry-on-failure is now live in the experiment task dashboard."  
+
+**2. GIF**  
+- **Visual**: Calm, simple animation (ink-square sprite with minimal motion)  
+- **Dimensions**: 128×128 (Slack emoji spec)  
+- **Palette**: 4 colors (brand-approved, no gradients or flash)  
+- **Animation**: 12 frames @10 FPS (under 3s, loops cleanly)  
+
+**3. Brand Alignment**  
+- No hype language or exclamation marks  
+- Consistent use of `#d97757` (accent) and `#e8e6dc` (background)  
+- Technical tone matching internal comms standards  
+
+All assets are optimized for Slack and adhere to Anthropic's visual and textual brand guidelines.<|im_end|>

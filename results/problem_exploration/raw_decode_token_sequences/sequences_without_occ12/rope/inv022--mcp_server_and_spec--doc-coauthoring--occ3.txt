@@ -1,0 +1,40 @@
+<think>
+Okay, let's tackle this step by step. The user wants me to provide three things: the final concise spec, a compact implementation checklist, and the top three design decisions. They also mentioned using the "doc-coauthoring" and "mcp-builder" skills.
+
+First, I need to recall the previous interactions. The user has been working on an MCP server for an issue tracker, going through phases of planning, implementation, and testing. The spec has evolved from a draft to an implementation note, focusing on tools, error handling, pagination, and filtering.
+
+For the final concise spec, I should summarize the key points from the implementation note. That includes the tools available, their parameters, and the behaviors like pagination limits and error handling.
+
+Next, the compact implementation checklist. This should be a list of actionable items for the developers. Things like setting up the project structure, implementing the core tools with proper schemas, handling errors as specified, testing pagination, and creating evaluations.
+
+The top three design decisions are crucial. Based on the previous discussions, the main points were: clamping the limit to 100 for pagination, using top-level next_cursor and has_more for pagination, and ensuring 4xx errors have clear, actionable messages. These decisions impact usability and reliability of the MCP server.
+
+I need to make sure each section is clear and concise, using the skills mentioned. Also, check that the answer follows the structure the user requested without any markdown. Let me organize this into the three parts as specified.
+</think>
+
+1. **Final Concise Spec**  
+   - **Tools**:  
+     - `issue_query(id?, status?, assignee?, label?, updated_since?, limit<=100, cursor?)` → `{items, next_cursor, has_more}`  
+     - `issue_create(title, body, labels?, assignee?)` → issue object  
+     - `issue_comment_add(issue_id, body)` → comment object  
+   - **Behaviors**:  
+     - `limit` clamped to 100 server-side; clients get a warning if exceeded.  
+     - All list responses include `next_cursor` (opaque) and `has_more` at the top level.  
+     - 4xx errors include field-level validation messages with "fix and retry" instructions.  
+     - 5xx errors are retryable with `attempt_remaining` hints.  
+
+2. **Compact Implementation Checklist**  
+   - [ ] Set up project structure (Python/TypeScript per guides).  
+   - [ ] Implement `issue_query` with pagination, filtering, and schema validation.  
+   - [ ] Implement `issue_create` and `issue_comment_add` with input/output schemas.  
+   - [ ] Map HTTP errors to MCP error formats (structured JSON, no free-text stacktraces).  
+   - [ ] Test pagination edge cases (e.g., `limit=100`, cursor reuse).  
+   - [ ] Write 10+ read-only evaluation questions (per evaluation guide).  
+
+3. **Top 3 Design Decisions**  
+   - **Pagination Safety**: Hard-limit `limit` to 100 to prevent agents from loading excessive data.  
+   - **Cursor Visibility**: Expose `next_cursor` and `has_more` at the top level for clear, actionable pagination.  
+   - **Error Clarity**: 4xx errors must explicitly instruct agents to "fix the field and retry" to avoid loops.  
+
+---  
+Ready for final review or deployment.<|im_end|>

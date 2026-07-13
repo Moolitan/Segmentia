@@ -1,0 +1,69 @@
+<think>
+Okay, the user wants a polished final version for internal rollout that includes the main Slack announcement, a shorter fallback version, the GIF concept, and a note on how the pieces fit together. Let me start by recalling the previous steps.
+
+First, I need to ensure that the announcement is clear for platform engineers. The latest version of the announcement includes sections on what the feature does, why it's implemented now, and what's not included yet. That should be the main announcement.
+
+For the fallback version, it should be shorter. Maybe condense the main points into a more concise message, keeping the key benefits and the note about excluded task types. The fallback could be a single paragraph without the bullet points.
+
+Next, the GIF concept. The latest version from the user's last input includes details about the animation's visual elements, palette, and polish. I need to present that as the GIF concept, ensuring it's clear and aligns with the brand guidelines.
+
+The brief note on how the pieces fit together should explain that the announcement communicates the feature's functionality and benefits, the GIF provides a visual representation of the retry process, and both are consistent in branding and messaging. Emphasize the alignment with Slack's requirements and the brand's calm, technical tone.
+
+I should also check that all elements adhere to the brand guidelines: using the correct colors, typography, and maintaining a professional yet approachable tone. The GIF's description should mention the use of the specified colors and the polished animation details.
+
+Finally, structure everything in a clear, organized manner. Use headers for each section, ensure the fallback is distinct, and the note ties everything together. Make sure there are no markdown formats and the content is ready for actual internal use.
+</think>
+
+# Final Launch Pack - Internal Rollout
+
+## Main Slack Announcement
+:gear: *Retry-on-failure is now live in the experiment task dashboard.*
+
+*What it does*
+- Detects transient failures (timeouts, transient I/O, rate-limit signals) and retries within a bounded budget per task
+- Records each retry attempt against the original task id so history stays linked
+- Leaves non-retryable failures (logic bugs, validation errors) to surface immediately, unchanged
+
+*Why now*
+Manual reruns were dominating operator time for failure shapes that are deterministically recoverable. The classifier was dark-launched for a week and matched our prior manual triage on 94% of failed runs.
+
+*What it doesn't do yet*
+- It does not retry across worker restarts; that lands next
+- A handful of task types are still excluded while we tune the classifier
+
+---
+
+## Fallback Version (Shorter)
+:gear: *Retry-on-failure is now live in the experiment task dashboard.*  
+Automatically retries transient failures (timeouts, I/O issues) while preserving non-retryable errors. Excludes some task types temporarily.
+
+---
+
+## GIF Concept (Ready for Production)
+**Theme**: "A failed task gets back up and tries again"  
+**Visual**:  
+- 128×128px, 12 frames @10fps  
+- Ink-square sprite with:  
+  - 4-frame stumble (down)  
+  - 2-frame pause  
+  - 6-frame ease-out rise  
+- **Palette**:  
+  - `#1d1d1b` (ink), `#e8e6dc` (baseline), `#d97757` (accent on rise apex)  
+  - `#faf9f5` (background)  
+- **Polish**:  
+  - Single-frame accent at rise apex  
+  - Subtle baseline shadow animation  
+  - No text, no gradients  
+
+---
+
+## How the Pieces Fit Together
+1. **Announcement** communicates technical substance (what it does, limitations) in platform-engineer-readable language  
+2. **GIF** visually represents the retry process with calm, branded motion  
+3. **Both align**:  
+   - Use of `#d97757` accent color  
+   - No exclamation marks beyond the leading emoji  
+   - Technical tone matching Slack's "platform engineering" audience  
+   - 3s loop duration for emoji compatibility  
+
+All components meet Slack's 128x128 emoji spec and Anthropic's brand guidelines for technical communications.<|im_end|>

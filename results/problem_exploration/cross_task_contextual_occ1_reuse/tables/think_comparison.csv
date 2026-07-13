@@ -1,0 +1,4 @@
+skill,source_task,target_task,recompute_total_tokens,cross_total_tokens,total_token_delta,recompute_think_words,cross_think_words,think_word_delta,word_jaccard,char_sequence_ratio,qualitative_outcome
+doc-coauthoring,doc_coauthoring_design_doc,mcp_server_and_spec,1049,1128,79,272,407,135,0.531,0.259,intent_stable_structure_changed
+internal-comms,internal_comms_incident_update,slack_launch_pack,359,503,144,226,370,144,0.330,0.073,planning_and_read_path_degraded
+web-artifacts-builder,web_artifact_with_theme,launch_poster_page_pack,1528,1300,-228,484,429,-55,0.446,0.179,intent_stable_implementation_changed

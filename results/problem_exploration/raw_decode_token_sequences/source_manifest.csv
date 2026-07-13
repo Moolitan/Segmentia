@@ -1,0 +1,12 @@
+path,kind,description,source
+summary.md,summary,Code and result audit for raw decode token sequences,manual audit and recomputation
+tables/temp0.6_action_audit.csv,table,Per-case action signatures and three paired comparisons,temp0.6/without_occ12/*/*.txt
+tables/temp0.6_without_occ12_embedding_cosine.csv,table,Per-case BGE-large CLS cosine for thinking and action across three arm pairings,temp0.6/without_occ12/*/*.txt
+data/temp0.6_without_occ12_embedding_cosine_summary.json,data,Aggregate BGE-large CLS cosine statistics and metric configuration,tables/temp0.6_without_occ12_embedding_cosine.csv
+figures/temp0.6_without_occ12_embedding_cosine.png,figure,Thinking-action cosine scatter and per-comparison distributions,tables/temp0.6_without_occ12_embedding_cosine.csv
+figures/temp0.6_without_occ12_embedding_cosine.pdf,figure,Vector version of thinking-action cosine scatter and distributions,tables/temp0.6_without_occ12_embedding_cosine.csv
+temp0.6/without_occ12/recompute_run1/sequence_manifest.jsonl,manifest,Recompute seed 1111 raw-sequence manifest,run_raw_decode_token_sequences.py
+temp0.6/without_occ12/recompute_run2/sequence_manifest.jsonl,manifest,Recompute seed 2222 raw-sequence manifest,run_raw_decode_token_sequences.py
+temp0.6/without_occ12/rope/sequence_manifest.jsonl,manifest,RoPE seed 1111 raw-sequence manifest,run_raw_decode_token_sequences.py
+/mnt/Large_Language_Model_Lab_1/wsh/Segmentia/output/06_context_free_segment_cache/cross_occurrence_function_vector/logit_divergence/temp0.6/without_occ12/divergence_summary_recompute_run1__vs__recompute_run2.csv,external_data,Different-seed recompute logit comparison,run_logit_divergence.py
+/mnt/Large_Language_Model_Lab_1/wsh/Segmentia/output/06_context_free_segment_cache/cross_occurrence_function_vector/logit_divergence/temp0.6/without_occ12/divergence_summary_recompute_run1__vs__rope.csv,external_data,Same-seed recompute-RoPE logit comparison,run_logit_divergence.py

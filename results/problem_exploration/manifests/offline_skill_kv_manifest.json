@@ -1,0 +1,500 @@
+{
+  "model": "Qwen3",
+  "base_url": "http://127.0.0.1:8000",
+  "tasks": [
+    "internal_comms_incident_update",
+    "doc_coauthoring_design_doc",
+    "mcp_server_and_spec",
+    "web_artifact_with_theme",
+    "launch_poster_page_pack",
+    "slack_launch_pack"
+  ],
+  "kv_dir": "results/06_context_free_segment_cache/offline_skill_kv",
+  "records": [
+    {
+      "skill": "brand-guidelines",
+      "source_task": "slack_launch_pack",
+      "cache_id": "context-free-skill-brand-guidelines",
+      "status": "collected",
+      "source_start": 47,
+      "source_end": 587,
+      "source_tokens": 540,
+      "expected_path": "results/06_context_free_segment_cache/offline_skill_kv/context-free-skill-brand-guidelines.pt",
+      "path_exists_after_request": true,
+      "latency_s": 0.4644,
+      "usage": {
+        "prompt_tokens": 590,
+        "total_tokens": 591,
+        "completion_tokens": 1,
+        "prompt_tokens_details": null
+      },
+      "checks": [
+        {
+          "task": "slack_launch_pack",
+          "skill": "brand-guidelines",
+          "occurrence": 1,
+          "ok": true,
+          "source_tokens": 540,
+          "target_tokens": 540,
+          "first_mismatch": null
+        },
+        {
+          "task": "slack_launch_pack",
+          "skill": "brand-guidelines",
+          "occurrence": 2,
+          "ok": true,
+          "source_tokens": 540,
+          "target_tokens": 540,
+          "first_mismatch": null
+        },
+        {
+          "task": "slack_launch_pack",
+          "skill": "brand-guidelines",
+          "occurrence": 3,
+          "ok": true,
+          "source_tokens": 540,
+          "target_tokens": 540,
+          "first_mismatch": null
+        }
+      ]
+    },
+    {
+      "skill": "canvas-design",
+      "source_task": "launch_poster_page_pack",
+      "cache_id": "context-free-skill-canvas-design",
+      "status": "collected",
+      "source_start": 46,
+      "source_end": 2402,
+      "source_tokens": 2356,
+      "expected_path": "results/06_context_free_segment_cache/offline_skill_kv/context-free-skill-canvas-design.pt",
+      "path_exists_after_request": true,
+      "latency_s": 1.7889,
+      "usage": {
+        "prompt_tokens": 2405,
+        "total_tokens": 2406,
+        "completion_tokens": 1,
+        "prompt_tokens_details": null
+      },
+      "checks": [
+        {
+          "task": "launch_poster_page_pack",
+          "skill": "canvas-design",
+          "occurrence": 1,
+          "ok": true,
+          "source_tokens": 2356,
+          "target_tokens": 2356,
+          "first_mismatch": null
+        },
+        {
+          "task": "launch_poster_page_pack",
+          "skill": "canvas-design",
+          "occurrence": 2,
+          "ok": true,
+          "source_tokens": 2356,
+          "target_tokens": 2356,
+          "first_mismatch": null
+        },
+        {
+          "task": "launch_poster_page_pack",
+          "skill": "canvas-design",
+          "occurrence": 3,
+          "ok": true,
+          "source_tokens": 2356,
+          "target_tokens": 2356,
+          "first_mismatch": null
+        }
+      ]
+    },
+    {
+      "skill": "doc-coauthoring",
+      "source_task": "doc_coauthoring_design_doc",
+      "cache_id": "context-free-skill-doc-coauthoring",
+      "status": "collected",
+      "source_start": 47,
+      "source_end": 3360,
+      "source_tokens": 3313,
+      "expected_path": "results/06_context_free_segment_cache/offline_skill_kv/context-free-skill-doc-coauthoring.pt",
+      "path_exists_after_request": true,
+      "latency_s": 2.4928,
+      "usage": {
+        "prompt_tokens": 3363,
+        "total_tokens": 3364,
+        "completion_tokens": 1,
+        "prompt_tokens_details": null
+      },
+      "checks": [
+        {
+          "task": "doc_coauthoring_design_doc",
+          "skill": "doc-coauthoring",
+          "occurrence": 1,
+          "ok": true,
+          "source_tokens": 3313,
+          "target_tokens": 3313,
+          "first_mismatch": null
+        },
+        {
+          "task": "doc_coauthoring_design_doc",
+          "skill": "doc-coauthoring",
+          "occurrence": 2,
+          "ok": true,
+          "source_tokens": 3313,
+          "target_tokens": 3313,
+          "first_mismatch": null
+        },
+        {
+          "task": "doc_coauthoring_design_doc",
+          "skill": "doc-coauthoring",
+          "occurrence": 3,
+          "ok": true,
+          "source_tokens": 3313,
+          "target_tokens": 3313,
+          "first_mismatch": null
+        },
+        {
+          "task": "mcp_server_and_spec",
+          "skill": "doc-coauthoring",
+          "occurrence": 1,
+          "ok": true,
+          "source_tokens": 3313,
+          "target_tokens": 3313,
+          "first_mismatch": null
+        },
+        {
+          "task": "mcp_server_and_spec",
+          "skill": "doc-coauthoring",
+          "occurrence": 2,
+          "ok": true,
+          "source_tokens": 3313,
+          "target_tokens": 3313,
+          "first_mismatch": null
+        },
+        {
+          "task": "mcp_server_and_spec",
+          "skill": "doc-coauthoring",
+          "occurrence": 3,
+          "ok": true,
+          "source_tokens": 3313,
+          "target_tokens": 3313,
+          "first_mismatch": null
+        }
+      ]
+    },
+    {
+      "skill": "internal-comms",
+      "source_task": "internal_comms_incident_update",
+      "cache_id": "context-free-skill-internal-comms",
+      "status": "collected",
+      "source_start": 46,
+      "source_end": 384,
+      "source_tokens": 338,
+      "expected_path": "results/06_context_free_segment_cache/offline_skill_kv/context-free-skill-internal-comms.pt",
+      "path_exists_after_request": true,
+      "latency_s": 0.2285,
+      "usage": {
+        "prompt_tokens": 387,
+        "total_tokens": 388,
+        "completion_tokens": 1,
+        "prompt_tokens_details": null
+      },
+      "checks": [
+        {
+          "task": "internal_comms_incident_update",
+          "skill": "internal-comms",
+          "occurrence": 1,
+          "ok": true,
+          "source_tokens": 338,
+          "target_tokens": 338,
+          "first_mismatch": null
+        },
+        {
+          "task": "internal_comms_incident_update",
+          "skill": "internal-comms",
+          "occurrence": 2,
+          "ok": true,
+          "source_tokens": 338,
+          "target_tokens": 338,
+          "first_mismatch": null
+        },
+        {
+          "task": "internal_comms_incident_update",
+          "skill": "internal-comms",
+          "occurrence": 3,
+          "ok": true,
+          "source_tokens": 338,
+          "target_tokens": 338,
+          "first_mismatch": null
+        },
+        {
+          "task": "slack_launch_pack",
+          "skill": "internal-comms",
+          "occurrence": 1,
+          "ok": true,
+          "source_tokens": 338,
+          "target_tokens": 338,
+          "first_mismatch": null
+        },
+        {
+          "task": "slack_launch_pack",
+          "skill": "internal-comms",
+          "occurrence": 2,
+          "ok": true,
+          "source_tokens": 338,
+          "target_tokens": 338,
+          "first_mismatch": null
+        },
+        {
+          "task": "slack_launch_pack",
+          "skill": "internal-comms",
+          "occurrence": 3,
+          "ok": true,
+          "source_tokens": 338,
+          "target_tokens": 338,
+          "first_mismatch": null
+        }
+      ]
+    },
+    {
+      "skill": "mcp-builder",
+      "source_task": "mcp_server_and_spec",
+      "cache_id": "context-free-skill-mcp-builder",
+      "status": "collected",
+      "source_start": 46,
+      "source_end": 1964,
+      "source_tokens": 1918,
+      "expected_path": "results/06_context_free_segment_cache/offline_skill_kv/context-free-skill-mcp-builder.pt",
+      "path_exists_after_request": true,
+      "latency_s": 1.4214,
+      "usage": {
+        "prompt_tokens": 1967,
+        "total_tokens": 1968,
+        "completion_tokens": 1,
+        "prompt_tokens_details": null
+      },
+      "checks": [
+        {
+          "task": "mcp_server_and_spec",
+          "skill": "mcp-builder",
+          "occurrence": 1,
+          "ok": true,
+          "source_tokens": 1918,
+          "target_tokens": 1918,
+          "first_mismatch": null
+        },
+        {
+          "task": "mcp_server_and_spec",
+          "skill": "mcp-builder",
+          "occurrence": 2,
+          "ok": true,
+          "source_tokens": 1918,
+          "target_tokens": 1918,
+          "first_mismatch": null
+        },
+        {
+          "task": "mcp_server_and_spec",
+          "skill": "mcp-builder",
+          "occurrence": 3,
+          "ok": true,
+          "source_tokens": 1918,
+          "target_tokens": 1918,
+          "first_mismatch": null
+        }
+      ]
+    },
+    {
+      "skill": "slack-gif-creator",
+      "source_task": "slack_launch_pack",
+      "cache_id": "context-free-skill-slack-gif-creator",
+      "status": "collected",
+      "source_start": 49,
+      "source_end": 2139,
+      "source_tokens": 2090,
+      "expected_path": "results/06_context_free_segment_cache/offline_skill_kv/context-free-skill-slack-gif-creator.pt",
+      "path_exists_after_request": true,
+      "latency_s": 1.6092,
+      "usage": {
+        "prompt_tokens": 2142,
+        "total_tokens": 2143,
+        "completion_tokens": 1,
+        "prompt_tokens_details": null
+      },
+      "checks": [
+        {
+          "task": "slack_launch_pack",
+          "skill": "slack-gif-creator",
+          "occurrence": 1,
+          "ok": true,
+          "source_tokens": 2090,
+          "target_tokens": 2090,
+          "first_mismatch": null
+        },
+        {
+          "task": "slack_launch_pack",
+          "skill": "slack-gif-creator",
+          "occurrence": 2,
+          "ok": true,
+          "source_tokens": 2090,
+          "target_tokens": 2090,
+          "first_mismatch": null
+        },
+        {
+          "task": "slack_launch_pack",
+          "skill": "slack-gif-creator",
+          "occurrence": 3,
+          "ok": true,
+          "source_tokens": 2090,
+          "target_tokens": 2090,
+          "first_mismatch": null
+        }
+      ]
+    },
+    {
+      "skill": "theme-factory",
+      "source_task": "web_artifact_with_theme",
+      "cache_id": "context-free-skill-theme-factory",
+      "status": "collected",
+      "source_start": 46,
+      "source_end": 715,
+      "source_tokens": 669,
+      "expected_path": "results/06_context_free_segment_cache/offline_skill_kv/context-free-skill-theme-factory.pt",
+      "path_exists_after_request": true,
+      "latency_s": 0.4617,
+      "usage": {
+        "prompt_tokens": 718,
+        "total_tokens": 719,
+        "completion_tokens": 1,
+        "prompt_tokens_details": null
+      },
+      "checks": [
+        {
+          "task": "web_artifact_with_theme",
+          "skill": "theme-factory",
+          "occurrence": 1,
+          "ok": true,
+          "source_tokens": 669,
+          "target_tokens": 669,
+          "first_mismatch": null
+        },
+        {
+          "task": "web_artifact_with_theme",
+          "skill": "theme-factory",
+          "occurrence": 2,
+          "ok": true,
+          "source_tokens": 669,
+          "target_tokens": 669,
+          "first_mismatch": null
+        },
+        {
+          "task": "web_artifact_with_theme",
+          "skill": "theme-factory",
+          "occurrence": 3,
+          "ok": true,
+          "source_tokens": 669,
+          "target_tokens": 669,
+          "first_mismatch": null
+        },
+        {
+          "task": "launch_poster_page_pack",
+          "skill": "theme-factory",
+          "occurrence": 1,
+          "ok": true,
+          "source_tokens": 669,
+          "target_tokens": 669,
+          "first_mismatch": null
+        },
+        {
+          "task": "launch_poster_page_pack",
+          "skill": "theme-factory",
+          "occurrence": 2,
+          "ok": true,
+          "source_tokens": 669,
+          "target_tokens": 669,
+          "first_mismatch": null
+        },
+        {
+          "task": "launch_poster_page_pack",
+          "skill": "theme-factory",
+          "occurrence": 3,
+          "ok": true,
+          "source_tokens": 669,
+          "target_tokens": 669,
+          "first_mismatch": null
+        }
+      ]
+    },
+    {
+      "skill": "web-artifacts-builder",
+      "source_task": "web_artifact_with_theme",
+      "cache_id": "context-free-skill-web-artifacts-builder",
+      "status": "collected",
+      "source_start": 47,
+      "source_end": 766,
+      "source_tokens": 719,
+      "expected_path": "results/06_context_free_segment_cache/offline_skill_kv/context-free-skill-web-artifacts-builder.pt",
+      "path_exists_after_request": true,
+      "latency_s": 0.474,
+      "usage": {
+        "prompt_tokens": 769,
+        "total_tokens": 770,
+        "completion_tokens": 1,
+        "prompt_tokens_details": null
+      },
+      "checks": [
+        {
+          "task": "web_artifact_with_theme",
+          "skill": "web-artifacts-builder",
+          "occurrence": 1,
+          "ok": true,
+          "source_tokens": 719,
+          "target_tokens": 719,
+          "first_mismatch": null
+        },
+        {
+          "task": "web_artifact_with_theme",
+          "skill": "web-artifacts-builder",
+          "occurrence": 2,
+          "ok": true,
+          "source_tokens": 719,
+          "target_tokens": 719,
+          "first_mismatch": null
+        },
+        {
+          "task": "web_artifact_with_theme",
+          "skill": "web-artifacts-builder",
+          "occurrence": 3,
+          "ok": true,
+          "source_tokens": 719,
+          "target_tokens": 719,
+          "first_mismatch": null
+        },
+        {
+          "task": "launch_poster_page_pack",
+          "skill": "web-artifacts-builder",
+          "occurrence": 1,
+          "ok": true,
+          "source_tokens": 719,
+          "target_tokens": 719,
+          "first_mismatch": null
+        },
+        {
+          "task": "launch_poster_page_pack",
+          "skill": "web-artifacts-builder",
+          "occurrence": 2,
+          "ok": true,
+          "source_tokens": 719,
+          "target_tokens": 719,
+          "first_mismatch": null
+        },
+        {
+          "task": "launch_poster_page_pack",
+          "skill": "web-artifacts-builder",
+          "occurrence": 3,
+          "ok": true,
+          "source_tokens": 719,
+          "target_tokens": 719,
+          "first_mismatch": null
+        }
+      ]
+    }
+  ],
+  "token_identity_failures": []
+}

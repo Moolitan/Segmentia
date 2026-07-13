@@ -1,0 +1,19 @@
+<think>
+Okay, the user wants me to draft an internal announcement about the new retry feature for failed tasks in the experiment task dashboard. They mentioned using the "internal-comms" skill, so I need to follow the guidelines from the skill's context.
+
+First, I should check the examples provided in the internal-comms skill. The relevant example here is probably the 3P updates template since it's an update about a new feature. The 3P structure is Progress, Plans, Problems. Let me recall the structure from the example file.
+
+The example for 3P updates likely has sections for Progress (what's been done), Plans (future steps), and Problems (any issues or things to watch out for). Since the user is announcing a new feature, the main focus would be on the Progress section, explaining the new retry functionality. The Plans might include any upcoming features or improvements, and Problems could mention any known issues or areas needing attention.
+
+I need to make sure the tone is clear and concise, as per the company's preferred format. Also, the announcement should be short, so I'll need to be brief but informative. Let me structure the draft with the 3P sections, using the information from the feature launch brief. The key points are the new retry support for failed tasks, how it helps users, and maybe any next steps or additional features planned.
+
+Wait, the user provided the seed file "feature_launch_brief.md" which I should have read. Let me check that. The brief probably details the feature's benefits, implementation, and any important notes. Since I can't actually read the file here, I'll assume it mentions that the retry feature allows users to re-run failed tasks without manual intervention, improving efficiency and reducing errors.
+
+So, the Progress section would highlight the successful implementation of the retry feature. Plans might include expanding this feature to other dashboards or adding more automation. Problems could be any limitations, like the retry limit or specific task types not yet supported.
+
+I should also include a call to action, encouraging teams to test the feature and provide feedback. Keeping it friendly and informative. Let me put this all together in the 3P format, ensuring it's concise and follows the guidelines from the internal-comms skill.
+</think>
+
+<tool_call>
+{"name": "Read", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv/seed_files/feature_launch_brief.md"}}
+</tool_call><|im_end|>

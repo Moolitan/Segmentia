@@ -1,0 +1,56 @@
+<think>
+Okay, the user wants a polished final version for internal rollout that includes the main Slack announcement, a shorter fallback version, the GIF concept, and a note on how they fit together. Let me start by recalling the previous steps.
+
+First, I need to ensure that the announcement is clear for platform engineers. The latest version of the announcement includes technical details about what the feature does, why it's implemented, and what's excluded. That should be the main announcement.
+
+For the fallback version, it should be shorter. Maybe a concise summary without the technical details. Something like a brief message with the key points: retry-on-failure is live, what it does, and a note on exclusions.
+
+Next, the GIF concept. The latest version has the polished details about the animation: 12 frames, ease-out rise, single accent flick, and the baseline shadow. I need to present that clearly, maybe in a structured format.
+
+The brief note on how the pieces fit together should explain that the announcement communicates the feature's benefits and technical aspects, the GIF provides a visual representation of the feature in action, and together they ensure clarity and brand consistency.
+
+I also need to check that all elements align with the brand guidelines: using the correct colors, typography, and maintaining a calm, professional tone without being overly promotional. The colors should be as specified, and the fonts should be Poppins and Lora where applicable.
+
+Finally, make sure there are no markdown formats and that the response is structured as per the user's request, including all four components: main announcement, fallback, GIF concept, and the note. Double-check for any inconsistencies or missing elements.
+</think>
+
+# Final Launch Pack for Internal Rollout
+
+## 1. Main Slack Announcement
+:gear: *Retry-on-failure is now live in the experiment task dashboard.*
+
+*What it does*
+- Detects transient failures (timeouts, transient I/O, rate-limit signals) and retries within a bounded budget per task
+- Records each retry attempt against the original task id so history stays linked
+- Leaves non-retryable failures (logic bugs, validation errors) to surface immediately, unchanged
+
+*Why now*
+Manual reruns were dominating operator time for failure shapes that are deterministically recoverable. The classifier was dark-launched for a week and matched our prior manual triage on 94% of failed runs.
+
+*What it doesn't do yet*
+- It does not retry across worker restarts; that lands next
+- A handful of task types are still excluded while we tune the classifier
+
+## 2. Fallback Version (Short)
+:arrow_forward: Retry-on-failure is now live in the experiment task dashboard. It handles transient failures automatically while preserving non-retryable errors. Some task types are excluded temporarily.
+
+## 3. GIF Concept
+**Theme:** "A failed task gets back up and tries again"
+**Visual spec:**
+- 128×128, 12 frames @10fps
+- Ink-square sprite with:
+  - 4-frame stumble (down)
+  - 2-frame pause
+  - 6-frame ease-out rise
+- Brand colors:
+  - `#1d1d1b` (ink)
+  - `#e8e6dc` (baseline)
+  - `#d97757` (accent flick at rise apex)
+  - `#faf9f5` (background)
+- Polish details:
+  - Faint baseline shadow that softens during stumble
+  - Single-frame accent instead of color wash
+  - Smooth easing for considered recovery motion
+
+## 4. Integration Note
+The text announcement explains technical implementation details while the GIF provides a visual metaphor for the retry mechanism. Both use the brand's calm color palette with a single warm accent. The fallback version ensures clarity in constrained spaces while the full announcement provides context for engineers.<|im_end|>

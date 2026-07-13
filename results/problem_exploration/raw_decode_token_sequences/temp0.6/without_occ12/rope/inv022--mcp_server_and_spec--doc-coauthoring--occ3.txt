@@ -1,0 +1,59 @@
+<think>
+Okay, let's tackle this. The user wants me to provide three things: the final concise spec, a compact implementation checklist, and the top three design decisions. They also mentioned using the "doc-coauthoring" and "mcp-builder" skills.
+
+First, I need to recall the previous steps. The user has been working on an MCP server for an issue tracker, going through phases of planning, implementation, and testing. The latest spec includes pagination, error handling, and tool parameters. Now, they want a concise version of that spec, a checklist for implementation, and the key design decisions.
+
+For the final spec, I should distill the main points from the previous spec. It should include the tools available, their parameters, error handling, and pagination details. Make sure it's clear and to the point for future developers.
+
+Next, the implementation checklist. This should be a list of tasks or items that need to be done when building the server. Based on the earlier steps, things like setting up the project structure, implementing the core tools, handling errors, testing, and creating evaluations come to mind. Each item should be a brief, actionable point.
+
+The top three design decisions are crucial. From the previous discussions, the key points were: clamping the limit to 100 for pagination, using top-level next_cursor and has_more for pagination, and the error handling strategies (retryable vs non-retryable errors). These decisions impact the usability and reliability of the MCP server, so they should be highlighted.
+
+I need to ensure that each section is distinct and follows the user's request. Also, since they mentioned using the specified skills, I should make sure the content aligns with the guidelines from "doc-coauthoring" and "mcp-builder", focusing on clarity, structure, and best practices. Avoid any markdown formatting and keep the language straightforward.
+</think>
+
+# Final MCP Server Spec for Issue Tracker  
+
+## 1. **Concise Spec**  
+- **Tools**:  
+  - `issue_query(id?, status?, assignee?, label?, updated_since?, limit<=100, cursor?)` → `{items, next_cursor, has_more}`.  
+  - `issue_create(title, body, labels?, assignee?)` → issue object.  
+  - `issue_comment_add(issue_id, body)` → comment object.  
+- **Pagination**:  
+  - `limit` clamped to 100 server-side; clients get a warning if they request more.  
+  - All list responses include `next_cursor` (opaque token) and `has_more` (boolean) at the top level.  
+- **Error Handling**:  
+  - 4xx errors: Non-retryable, include field-level validation messages and explicit "fix and retry" instructions.  
+  - 5xx errors: Retryable, include `attempt_remaining` count.  
+  - Always return structured JSON; no free-text stacktraces.  
+
+---
+
+## 2. **Implementation Checklist**  
+- [ ] Set up project structure (Python/TypeScript per guides).  
+- [ ] Implement `issue_query` with filters, pagination, and limit clamping.  
+- [ ] Implement `issue_create` with validation and error feedback.  
+- [ ] Implement `issue_comment_add` with issue ID validation.  
+- [ ] Map HTTP errors to MCP error semantics (4xx/5xx, structured messages).  
+- [ ] Add logging: One structured line per tool call (`tool`, `latency_ms`, `outcome`).  
+- [ ] Write tests for all tools (unit + integration).  
+- [ ] Create 10+ evaluation questions (read-only, verifiable answers).  
+
+---
+
+## 3. **Top 3 Design Decisions**  
+1. **Pagination Safety**:  
+   - Hard-limit `limit` to 100 to prevent excessive data loads.  
+   - Expose `next_cursor` and `has_more` explicitly to guide agents through large datasets.  
+
+2. **Error Clarity**:  
+   - 4xx errors must explicitly instruct agents to "fix the field and retry" (no silent loops).  
+   - 5xx errors include `attempt_remaining` to avoid dead loops.  
+
+3. **Tool Consistency**:  
+   - All list responses use the same structure (`{items, next_cursor, has_more}`) for predictability.  
+   - Tool names follow `verb_noun` convention (e.g., `issue_query`, `issue_comment_add`).  
+
+--- 
+
+This spec balances flexibility for agents with safeguards against misuse, ensuring usability at scale.<|im_end|>

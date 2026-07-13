@@ -1,0 +1,15 @@
+<think>
+Okay, the user wants me to provide three things: the final concise spec, a compact implementation checklist, and the top three design decisions. Let me start by recalling the previous steps.
+
+First, the final spec should be a concise version of what's been discussed. The user mentioned making it realistic for future implementers, so I need to ensure it's clear and to the point. The tool surface includes issue_query, issue_create, and issue_comment_add with their parameters and responses. Also, the concrete behaviors like limit clamping, next_cursor, and error handling are important.
+
+Next, the implementation checklist. This should be a quick reference for developers. Items like setting up the project structure, implementing the core infrastructure (API client, error handling), tool implementations with proper schemas, pagination, and testing. Also, including the evaluation setup as per the guide.
+
+For the top three design decisions, I need to highlight what's most critical. The limit clamping to 100 is crucial for preventing large data loads. The next_cursor being top-level ensures agents can easily paginate. And the explicit error messages for 4xx errors help agents correct their actions without confusion.
+
+I should structure each section clearly, using headers and bullet points for readability. Make sure the language is straightforward, avoiding jargon where possible. Also, check that all the key points from the previous discussions are included without redundancy.
+</think>
+
+<tool_call>
+{"name": "Read", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv/internal_comms_incident_update/.agents/skills/doc-coauthoring/SKILL.md"}}
+</tool_call><|im_end|>

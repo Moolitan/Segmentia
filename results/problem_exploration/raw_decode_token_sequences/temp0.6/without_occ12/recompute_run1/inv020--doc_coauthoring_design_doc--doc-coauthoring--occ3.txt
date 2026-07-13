@@ -1,0 +1,63 @@
+<think>
+Okay, let's see. The user wants the final concise design doc and a 5-bullet summary for teammates who won't read the full document. I need to make sure the design doc is clear and addresses the previous reviewer comments.
+
+First, I should check the current state of the document. The user mentioned three unclear points: classifier rules, retry ownership across worker restarts, and the dashboard signal. I need to address these in the final version.
+
+For the classifier rules, I should list specific exceptions or patterns that define retryable failures. Maybe include examples like HTTP 5xx errors, timeout exceptions, etc. That makes it concrete.
+
+Regarding retry ownership across worker restarts, the doc should clarify that the retry state is stored in a shared database or message queue. That way, if a worker dies, another can pick up where it left off. Need to mention the persistence mechanism.
+
+The dashboard signal was mentioned as a mitigation but not defined. I should specify where the "retried N times" information is displayed, like in the task details or a dedicated retry metrics panel.
+
+Now, the final design doc should be concise, so I'll trim any redundant sections. The summary bullets need to capture the key points: problem, solution, retry policy, rollout plan, and risks. Make sure each bullet is a standalone point without jargon.
+
+Also, ensure the document structure is clean with clear headings. Check that all sections from the previous draft are included but refined. Avoid any markdown formatting as per the user's request.
+
+Finally, verify that the 5-bullet summary is easy to read and highlights the most important aspects for teammates who might not have time to read the full doc. Make sure it's succinct and covers the main goals and considerations.
+</think>
+
+# Final Design Doc — Automatic Retry for Failed Benchmark Tasks
+
+## Audience and length  
+Teammates working on agent infrastructure. Target: ~1.5 pages.
+
+## Problem  
+Manual reruns of transient failures are costly and error-prone. Three common failure shapes exist:  
+- Web retrieval timeout (manual rerun → success)  
+- Transient I/O error (manual rerun → success)  
+- Logic bug (manual rerun → still fails)  
+
+## Solution  
+Add bounded retry with classification:  
+- **Classifier rules** (explicitly enumerated):  
+  - `retryable_transient`: HTTP 5xx errors, timeout exceptions, DNS resolution failures  
+  - `retryable_with_caution`: Rate-limit headers, "try-after" signals  
+  - `non_retryable`: Logic errors, assertion failures, deterministic crashes  
+
+- **Retry policy**:  
+  - Max 3 retries for `retryable_transient`, 1 for `retryable_with_caution`  
+  - Exponential backoff: 30s → 60s → 120s → 5min max  
+  - Logs: `retry_of`, `attempt_number`, `failure_class`, `delay_before_attempt`, `final_status_after_retries`  
+
+- **Persistence**: Retry state stored in shared DB; worker restarts do not interrupt retries.  
+
+- **Dashboard signal**: "Retried 3 times before final failure" appears in task detail view.  
+
+## Rollout  
+1. **Dark-launch** classifier (log-only) for 1 week  
+2. Enable retries for `web_retrieval` task type, 1 tenant at a time  
+3. Broaden to all `retryable_transient` tasks after stable success rate  
+
+## Risks  
+- **Masking bugs**: Conservative classifier rules + "retried N times" dashboard signal  
+- **Resource surge**: Per-tenant retry budgets + global circuit breaker  
+- **UI clarity**: "Retried run" flag in task history  
+
+---
+
+## 5-Bullet Summary for Teammates  
+1. **Problem**: Manual reruns of transient failures are costly and error-prone.  
+2. **Solution**: Bounded retries with classifier rules (HTTP 5xx, timeouts, etc.) and exponential backoff.  
+3. **Safety**: Retry state is persisted across worker restarts; dashboard shows "retried N times" for transparency.  
+4. **Rollout**: Phased — dark-launch → single task type → full enable.  
+5. **Risks**: Masked bugs (mitigated by conservative rules), resource surges (mitigated by budgets), and UI clarity (explicit flags).<|im_end|>

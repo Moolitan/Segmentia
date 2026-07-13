@@ -1,0 +1,18 @@
+<think>
+Okay, let's tackle this final step. The user wants a polished final version for internal rollout, including the main Slack announcement, a shorter fallback, the GIF concept, and a note on how they fit together. They also mentioned using the brand-guidelines, internal-comms, and slack-gif-creator skills.
+
+First, I need to ensure the announcement is clear and aligned with the brand guidelines. The previous version had technical details, so I should keep that but make sure the tone is consistent with the brand's calm and trustworthy style. The fallback version needs to be concise, maybe stripping down the details but keeping the essential info.
+
+For the GIF, the latest concept includes easing and a single accent flick. I should reference the slack-gif-creator guidelines to confirm the dimensions, colors, and animation specifics. The note on how the pieces fit together should tie the announcement and GIF together, emphasizing brand alignment and the message they convey.
+
+I'll check the brand guidelines again to ensure colors and typography are correctly applied. The main colors are dark, light, mid gray, and light gray, with accent colors like orange. The announcement should use these, maybe the orange accent for highlights.
+
+Also, the internal-comms skill suggests using the appropriate examples. Since this is a project update, referencing the general-comms.md might be necessary, but since the user didn't specify, I'll stick to the provided guidelines.
+
+Finally, compiling all parts into a structured final version, making sure each component is included and aligned with the brand and Slack requirements.
+</think>
+
+Finalizing with brand-guidelines, internal-comms, and slack-gif-creator alignment.
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/slack_launch_pack/final_launch_pack.md", "content": "# Final Launch Pack — Retry for Failed Tasks\n\n## Main Slack Announcement\n:gear: *Retry-on-failure is now live in the experiment task dashboard.*\n\n*What it does*\n- Detects transient failures (timeouts, transient I/O, rate-limit signals) and retries within a bounded budget per task.\n- Records each retry attempt against the original task id so history stays linked.\n- Leaves non-retryable failures (logic bugs, validation errors) to surface immediately, unchanged.\n\n*Why now*\nManual reruns were dominating operator time for failure shapes that are deterministically recoverable. The classifier was dark-launched for a week and matched our prior manual triage on 94% of failed runs.\n\n*What it doesn't do yet*\n- It does not retry across worker restarts; that lands next.\n- A handful of task types are still excluded while we tune the classifier.\n\n## Fallback Version (for narrow channels)\n:arrow_up: *Retry-on-failure now handles transient failures in the experiment task dashboard.*\n- Retry budget: bounded per task\n- Non-retryable failures remain unchanged\n- Excludes some task types (tuning in progress)\n\n## GIF Concept\n**Visual:** 128×128px, 12 frames @10fps\n- Ink-square sprite stumbles (4 frames), pauses (2 frames), rises (6 frames) with ease-out motion\n- Single warm accent (`#d97757`) flicks at the rise apex (frame 11)\n- Baseline shadow softens during stumble, re-thickens on rise\n\n**Palette:**\n- `#1d1d1b` (ink), `#e8e6dc` (baseline), `#faf9f5` (bg), `#d97757` (accent)\n\n## Assembly Note\nThe announcement's technical specificity matches the GIF's克制 animation — both avoid hype language while clearly signaling recovery capability. The warm accent in the GIF parallels the \"bounded budget\" wording, creating a cohesive visual-language system for platform engineers."}}
+</tool_call><|im_end|>

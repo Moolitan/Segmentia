@@ -1,0 +1,21 @@
+<think>
+Okay, let me start by understanding the user's request. They want to co-write a design document about adding automatic retry for failed benchmark tasks. The user mentioned using the "doc-coauthoring" skill, so I need to follow the structured approach outlined in that skill.
+
+First, I'll review the existing files they provided: system_background.md and failure_examples.md. From the system background, I see that the current setup doesn't have any automatic retry mechanism, leading to manual interventions. The failure examples show that some failures are transient and could be retried, while others are due to bugs that won't resolve on retry.
+
+The user wants a short design doc, so I need to structure it effectively. The initial response created a draft with sections like Problem Statement, Proposed Solution, Implementation Details, and Considerations. Now, the next step is to expand on each section based on the context provided.
+
+In the Problem Statement, I should elaborate on the issues with the current system, referencing the known issues from the system background. For the Proposed Solution, error classification is key. I need to differentiate between transient errors (like network hiccups) and permanent ones (like logic bugs). The retry policy should handle these differently, maybe with a maximum retry limit.
+
+Implementation Details need to outline how the retry mechanism will be triggered. For example, specific error codes or conditions that prompt a retry. State tracking is important here—how to log each attempt, store diagnostics, and link retries to the original task. Also, considering the UI, how to indicate retry status to users.
+
+In the Considerations section, I should address potential pitfalls. Exponential backoff can prevent overwhelming the system with retries. Setting hard limits avoids infinite loops. Alerting for persistent failures ensures that real issues aren't overlooked. The UI indicators help users understand the retry status without confusion.
+
+I should also think about how to integrate this with existing systems. For example, modifying the scheduler to handle retries, updating the task metadata schema, and ensuring that the results directory properly links retry attempts to the original task. Testing the retry mechanism with different failure scenarios would be crucial to validate it works as intended.
+
+Finally, I need to make sure the document is concise but covers all necessary aspects. Maybe add a section on monitoring and logging to track the effectiveness of the retry system. Also, consider how this change affects the overall workflow for users and whether any documentation updates are needed.
+</think>
+
+<tool_call>
+{"name": "edit", "arguments": {"file_path": "design_docs/automatic_retry_design.md", "old_string": "## Automatic Retry Design Document", "new_string": "## Automatic Retry Design Document\n\n### 1. Problem Statement\nCurrent benchmark task failures require manual intervention, leading to:\n- Inconsistent failure handling\n- Lost context between failed and rerun tasks\n- Wasted human effort for transient failures\n\n### 2. Proposed Solution\nImplement a smart retry system with:\n- Error classification (transient vs permanent)\n- Configurable retry limits (e.g., 3 attempts for network errors)\n- Automatic task state tracking\n- Linkage between original and retry attempts\n\n### 3. Implementation Details\n**Retry Triggers:**\n- Network timeouts (HTTP 5xx, connection errors)\n- I/O errors with retryable status codes\n- Tool call failures with 'transient' classification\n\n**State Tracking:**\n- Add 'retry_count' field to task metadata\n- Store failure diagnostics with each attempt\n- Use task ID linkage for audit trails\n\n### 4. Considerations\n- Implement exponential backoff between retries\n- Set hard limits (e.g., max 3 retries per task)\n- Create alerting for persistent failures\n- Add UI indicators for retry status", "expected_replacements": 1, "security_risk": "LOW", "summary": "Expand design document with detailed sections on problem statement, solution, implementation, and considerations"}}
+</tool_call>

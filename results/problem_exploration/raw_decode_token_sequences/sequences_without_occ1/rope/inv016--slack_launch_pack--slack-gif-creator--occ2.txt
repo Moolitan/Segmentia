@@ -1,0 +1,32 @@
+<think>
+Okay, let's see. The user wants me to tighten everything according to the brand notes and ensure consistency in wording, colors, and style. They also want a final launch-pack summary.
+
+First, I need to recall the brand notes: simple, clear, trustworthy, technical tone, no flashy stuff. Visuals should be calm colors, simple shapes, avoid exclamation marks.
+
+Looking at the previous steps, the announcement and GIF concept were aligned with the brand, but maybe there's still room for tightening. The announcement uses a positive tone, mentions benefits clearly, and sticks to the technical audience. The GIF uses the brand colors like #1d1d1b, #e8e6dc, and #d97757, which are calm and not too flashy.
+
+I should check if the announcement's wording is simple and clear. The current version says "The experiment task dashboard now retries failed tasks automatically." That's concise. The benefits are listed with bullet points, which is good. Maybe ensure that there's no hype language and that it's straightforward.
+
+For the GIF, the palette is already aligned with brand colors. The motion is calm, no exaggerated animations. The description mentions avoiding squash-and-stretch, which aligns with the brand notes. The duration is under 3 seconds, which is optimal for Slack.
+
+Now, the final summary needs to encapsulate the launch pack. It should mention the announcement and GIF, their alignment with brand guidelines, and the key elements like colors, simplicity, and technical tone.
+
+I should also make sure that the summary is brief, as per the user's request. No markdown, just a clear, concise summary. Let me put it all together, ensuring that all elements are consistent and meet the brand's requirements.
+</think>
+
+Final launch pack summary:
+
+**Announcement**  
+- Clear, technical tone with no hype language  
+- Calm color references (`#d97757` accent, `#e8e6dc` baseline)  
+- Focus on functional benefits: "retries failed tasks automatically"  
+
+**GIF**  
+- 128×128px with 12 frames @10fps (under 3s loop)  
+- Calm motion: subtle stumble-and-rise animation  
+- Brand-aligned palette: `#1d1d1b` ink, `#faf9f5` background  
+
+Both assets share:  
+- No flashing colors or excessive motion  
+- Simple shapes and clean lines  
+- Consistent technical-team tone<|im_end|>

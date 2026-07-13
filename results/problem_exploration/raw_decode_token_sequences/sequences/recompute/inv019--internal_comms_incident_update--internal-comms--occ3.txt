@@ -1,0 +1,19 @@
+<think>
+Okay, the user wants three versions of the incident update: leadership-facing, internal chat, and a very short 3-sentence summary. Let me start by recalling the previous content we've worked on. The main document has sections like Summary, Timeline, Impact, Status, Next steps, FAQ, and Daily digest. 
+
+First, the leadership version needs to be concise, high-level, and avoid technical jargon. I should focus on the key points: what happened, the impact, and the next steps without getting into the details of auto-scaling. Maybe start with a brief summary, mention the recovery, no data loss, and the planned actions.
+
+Next, the internal chat version should be more casual but still informative. It might use bullet points or a more relaxed tone. Include the timeline, impact, current status, and next steps in a way that's easy to scan. Maybe add a note about the FAQ if needed.
+
+For the 3-sentence summary, it needs to be extremely brief. Capture the incident, the resolution, and the next steps in three clear sentences. Avoid any extra details.
+
+I need to ensure consistency with the internal-comms guidelines. Check if there are specific formats for leadership updates or internal chats in the examples. Since the user mentioned using the internal-comms skill, I should follow the structure and tone examples provided in the SKILL.md, like using clear headings and concise language.
+
+Also, make sure that each version is distinct. Leadership might not need the FAQ or daily digest, so those can be omitted. The internal chat might include more actionable items or reminders. The summary should be a standalone, quick read.
+
+Let me structure each version step by step, ensuring that each meets the user's requirements and adheres to the company's communication standards as per the internal-comms skill.
+</think>
+
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/internal_comms_incident_update/incident_update.md", "content": "# Service Incident Update — 2026-05-30\n\n## Leadership-facing version\nA brief internal incident this morning delayed 12 experiment tasks for up to 25 minutes. The service has fully recovered with no data loss or external impact. The team is reviewing auto-scaling triggers and alert thresholds to prevent recurrence.\n\n## Internal chat version\n- 09:20–09:45: Experiment service queue buildup delayed 12 internal tasks\n- ✅ Service fully recovered, no data loss\n-️ Team reviewing auto-scaling triggers and alert thresholds\n- Next steps: Load test, tighten alert thresholds, add runbook entry\n\n## 3-sentence summary\nAn internal experiment service incident delayed 12 tasks for 25 minutes this morning. The service has fully recovered with no data loss. The team is reviewing auto-scaling triggers to prevent recurrence.\n\n## Daily digest version\nExperiment service had a brief queue buildup this morning (09:20–09:45) that delayed 12 internal tasks. Fully recovered, no data loss, no external impact. Team is reviewing auto-scaling triggers.\n\n## Next steps\n- Reproduce the auto-scaling miss in a staging load test.\n- Tighten the queue-depth alert so on-call is paged earlier.\n- Add a runbook entry for manual scale-up while the fix lands.\n\n## FAQ\n**Could this happen again?** Possible until the scaling-trigger fix lands; mitigations are in place to detect recurrence quickly.\n\n**Was any data lost?** No.\n\n**Is everything recovered now?** Yes — service is healthy.\n\n**What will we do to prevent this next time?** Tighten the auto-scaling trigger and the alert threshold so similar load patterns page on-call earlier."}}
+</tool_call><|im_end|>

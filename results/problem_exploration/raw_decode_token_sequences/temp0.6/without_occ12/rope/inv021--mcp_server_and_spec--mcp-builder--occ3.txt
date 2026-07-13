@@ -1,0 +1,24 @@
+<think>
+Okay, let's tackle this. The user wants me to provide three things: the final concise spec, a compact implementation checklist, and the top three design decisions. They also mentioned using the "doc-coauthoring" and "mcp-builder" skills.
+
+First, I need to recall the previous steps. The spec has evolved through several phases, focusing on tool design, error handling, pagination, and filtering. The latest version is an implementation note tailored for future developers. 
+
+For the final concise spec, I should summarize the key points from the implementation note. That includes the tools available, their parameters, response formats, error handling, and pagination details. I need to make it clear and to the point, avoiding any fluff.
+
+Next, the compact implementation checklist. This should list the main tasks that need to be done when building the server. Based on the previous discussions, items like setting up the project structure, implementing the core tools with proper schemas, handling errors as specified, pagination logic, and writing tests come to mind. Each item should be a brief bullet point.
+
+For the top three design decisions, I need to identify what's most critical. From the spec, the three main points are: 
+1. The tool surface and parameters, especially the limit cap and cursor handling for pagination.
+2. Error handling strategies, distinguishing between retryable and non-retryable errors and providing clear messages.
+3. The use of structured responses with next_cursor and has_more to manage large datasets efficiently.
+
+I should ensure these points are clearly articulated, explaining why each decision is important. Also, since the user wants this in a format suitable for teammates, the language should be straightforward and practical. 
+
+I need to make sure I'm using the correct skills. The "doc-coauthoring" skill would help structure the response in a way that's easy for others to follow, while "mcp-builder" ensures adherence to the MCP protocol guidelines. 
+
+Finally, I should present each section (spec, checklist, design decisions) clearly, using markdown for readability. Check that all information is accurate and aligns with the previous work done on the spec and implementation notes.
+</think>
+
+<tool_call>
+{"name": "Read", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv/internal_comms_incident_update/.agents/skills/doc-coauthoring/SKILL.md"}}
+</tool_call><|im_end|>

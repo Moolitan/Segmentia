@@ -1,0 +1,13 @@
+case,recompute_run1_action,recompute_run2_action,rope_action,recompute_self_match,recompute_rope_match,recompute_run2_rope_match
+internal_comms_incident_update--internal-comms--occ3,tool:Write,tool:Write,tool:Write,True,True,True
+doc_coauthoring_design_doc--doc-coauthoring--occ3,text,tool:Write,text,False,True,False
+mcp_server_and_spec--mcp-builder--occ3,tool:Read,tool:Read,tool:Read,True,True,True
+mcp_server_and_spec--doc-coauthoring--occ3,tool:Write,tool:Write,text,True,False,False
+web_artifact_with_theme--web-artifacts-builder--occ3,tool:Read,text,tool:Read,False,True,False
+web_artifact_with_theme--theme-factory--occ3,text,text,tool:Write,True,False,False
+launch_poster_page_pack--canvas-design--occ3,text,"tool:Write,Write,Write","tool:Write,Write,Write",False,False,True
+launch_poster_page_pack--web-artifacts-builder--occ3,text,text,text,True,True,True
+launch_poster_page_pack--theme-factory--occ3,text,text,text,True,True,True
+slack_launch_pack--internal-comms--occ3,tool:Write,tool:Write,tool:Write,True,True,True
+slack_launch_pack--slack-gif-creator--occ3,tool:Write,tool:Write,tool:Write,True,True,True
+slack_launch_pack--brand-guidelines--occ3,tool:Write,tool:Write,tool:Write,True,True,True

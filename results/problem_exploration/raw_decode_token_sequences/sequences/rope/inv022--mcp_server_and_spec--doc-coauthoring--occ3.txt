@@ -1,0 +1,73 @@
+<think>
+Okay, let's tackle this. The user wants me to provide three things: the final concise spec, a compact implementation checklist, and the top 3 design decisions. 
+
+First, the final concise spec. Looking back at the previous interactions, the user revised the spec to be an implementation note. The key points there were the tool surface, concrete behaviors like limit clamping, error handling, and project layout. I need to condense that into a concise spec.
+
+Next, the implementation checklist. The user mentioned a compact one, so I should list the main steps without too much detail. Things like setting up the project structure, implementing core tools with proper schemas, handling pagination, error handling, testing, and reader testing.
+
+For the top 3 design decisions, I need to identify the most critical choices made in the spec. The limit clamping to 100 is important for preventing large responses. The use of top-level next_cursor and has_more for pagination ensures clarity. Also, the structured error messages with actionable steps are crucial for agent reliability.
+
+I should make sure each section is clear and to the point, avoiding any fluff. Check that the spec is accurate based on the previous discussions and that the checklist covers all necessary steps. The design decisions should highlight what makes the MCP server effective and user-friendly.
+</think>
+
+# Final MCP Server Spec for Issue Tracker
+
+## Concise Spec
+**Tools:**
+- `issue_query(id?, status?, assignee?, label?, updated_since?, limit<=100, cursor?)` → `{items, next_cursor, has_more}`
+- `issue_create(title, body, labels?, assignee?)` → issue object
+- `issue_comment_add(issue_id, body)` → comment object
+
+**Behaviors:**
+- `limit` clamped to 100 server-side with warning field
+- All list responses include `next_cursor` (opaque) and `has_more` at top level
+- 4xx errors: field-level validation messages + "fix and retry" instruction
+- 5xx errors: retryable with `attempt_remaining` hint
+- Auth: out-of-scope (treat API as trusted local)
+
+---
+
+# ✅ Implementation Checklist
+
+1. **Project Setup**
+   - Create `pyproject.toml` with FastMCP dependencies
+   - Define `server.py` with MCP server entrypoint
+   - Implement `client.py` for REST API wrapping
+
+2. **Core Tools**
+   - Implement `issue_query` with:
+     - Filter combinators (status + assignee + label)
+     - Pagination (limit<=100, next_cursor, has_more)
+   - Implement `issue_create` with:
+     - Required fields: title, body
+     - Optional: labels, assignee
+   - Implement `issue_comment_add` with:
+     - Required: issue_id, body
+
+3. **Error Handling**
+   - Map 4xx errors to non-retryable MCP errors with field-level messages
+   - Map 5xx errors to retryable MCP errors with `attempt_remaining` hint
+   - Never return free-text stacktraces
+
+4. **Testing**
+   - Implement unit tests for all tools
+   - Create 10+ evaluation questions (read-only, verifiable)
+   - Run Reader Testing with fresh Claude instance
+
+5. **Quality**
+   - Add structured logging for tool calls
+   - Ensure all tool responses include `structuredContent` when possible
+   - Verify all error messages include actionable next steps
+
+---
+
+#️ Top 3 Design Decisions
+
+1. **Pagination Safety**  
+   `limit<=100` cap prevents runaway context loads while `next_cursor` (opaque) ensures clients can paginate without parsing tokens.
+
+2. **Error Guidance**  
+   4xx errors explicitly instruct agents to "fix and retry" rather than loop, preventing deadlocks in agent workflows.
+
+3. **Reader-First Design**  
+   All tool responses include `structuredContent` and avoid free-text explanations, ensuring LLMs can parse outputs programmatically without context bleed.<|im_end|>

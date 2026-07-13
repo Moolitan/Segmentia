@@ -1,0 +1,21 @@
+<think>
+Okay, the user wants to build an MCP server for an issue-tracking API and needs help deciding on the tools to expose. They mentioned using the "mcp-builder" skill, so I should start by referencing that. First, I need to recall what the mcp-builder skill does. From the previous tool response, the SKILL.md file probably outlines the capabilities of the mcp-builder. 
+
+The user has already asked to read the seed_files/issue_api_brief.md, which I assume contains details about the issue-tracking API's endpoints and functionalities. But since I can't access external files, I need to rely on the provided context. The mcp-builder skill's documentation might include guidelines on tool selection, naming conventions, and best practices for MCP servers.
+
+The next step is to use the mcp-builder skill to determine the appropriate tools. The skill might analyze the API's structure and suggest tools based on common patterns. For an issue-tracking API, typical tools could include creating, updating, and retrieving issues, managing projects, handling comments, and querying issues with filters.
+
+I should consider the phases mentioned in the MCP Development Guide. Phase 1 involves research and planning, so using the mcp-builder skill here would help in identifying the necessary tools by evaluating the API's endpoints and their purposes. The skill might recommend a balance between comprehensive API coverage and specialized tools, as mentioned in the guide.
+
+Also, the tool naming conventions from the MCP Best Practices should be followed. For example, tools like 'issue_create', 'issue_update', 'project_list', 'comment_add', etc. Each tool should have clear, descriptive names with consistent prefixes.
+
+The mcp-builder might also suggest considering context management, ensuring that tools return focused data and handle pagination. Error messages should be actionable, guiding the LLM on possible next steps if something goes wrong.
+
+Since the user wants to avoid going too deep into code yet, the focus should be on high-level tool selection and structuring them according to MCP standards. The skill might generate a list of recommended tools based on the API's functionality, ensuring they align with the best practices outlined in the documentation.
+
+Finally, the evaluation phase would involve creating test questions to ensure the tools are effective. But for now, the main task is to use the mcp-builder skill to outline the tools the MCP server should expose, ensuring they are well-designed and follow the guidelines provided.
+</think>
+
+<tool_call>
+{"name": "Skill", "arguments": {"skill": "mcp-builder", "args": "scope_tool_set_for_issue_api"}}
+</tool_call><|im_end|>

@@ -1,0 +1,13 @@
+<think>
+Okay, let's tackle this. The user wants me to provide three things: the final concise spec, a compact implementation checklist, and the top three design decisions. They also mentioned using the "doc-coauthoring" and "mcp-builder" skills.
+
+First, I need to recall the previous steps. The spec has evolved through several iterations, focusing on tools like issue_query, issue_create, and issue_comment_add. The error handling, pagination, and filtering were refined, especially clamping the limit to 100 and using next_cursor.
+
+For the final spec, I should present it in a clear, structured way. The implementation checklist needs to be a quick reference for developers. The top design decisions should highlight what's critical for the server's functionality and usability.
+
+I should ensure that the spec is concise, the checklist is actionable, and the design decisions are the ones that most impact the server's performance and user experience. Also, using the skills means following the structured workflow for documentation and adhering to MCP best practices.
+</think>
+
+<tool_call>
+{"name": "Read", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv/internal_comms_incident_update/.agents/skills/doc-coauthoring/SKILL.md"}}
+</tool_call><|im_end|>

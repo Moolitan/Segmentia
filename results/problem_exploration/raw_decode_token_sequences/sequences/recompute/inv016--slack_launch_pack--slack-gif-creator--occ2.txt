@@ -1,0 +1,30 @@
+<think>
+Okay, let's see. The user wants me to tighten everything according to the brand notes, ensuring consistency in wording, colors, and style. They also want a final launch-pack summary. 
+
+First, I need to recall the brand guidelines. The main colors are dark (#141413), light (#faf9f5), mid gray (#b0aea5), and light gray (#e8e6dc). Accent colors include orange (#d97757), blue (#6a9bcc), and green (#788c5d). Typography uses Poppins for headings and Lora for body text.
+
+The brand notes emphasize a simple, clear, trustworthy, and technical tone without being flashy. Visuals should use calm colors, simple shapes, and avoid excessive exclamation marks or hype language.
+
+Looking at the previous announcement, it's already concise and professional. But I should check if the colors mentioned align with the brand guidelines. The previous palette used #1d1d1b (similar to dark), #e8e6dc (light gray), #d97757 (orange accent), and #faf9f5 (light). That seems okay, but maybe adjust to match the exact brand colors.
+
+For the GIF concept, the palette was calm with the same colors. Need to ensure that the description uses the exact brand colors and that the animation adheres to the simple, non-flashy style.
+
+The final summary should encapsulate the announcement and GIF, highlighting consistency with brand guidelines. It should mention the use of brand colors, simple design, and the technical tone.
+
+I should also make sure that the announcement doesn't have any exclamation marks or overly enthusiastic language. Keep it straightforward, focusing on the benefits and who it's for.
+
+Now, applying the brand guidelines to the announcement text. Check for any deviations in color references, typography suggestions, and tone. Ensure that the GIF's description uses the correct color codes and adheres to the size and frame rate requirements from the slack-gif-creator tool.
+
+Finally, compose the launch-pack summary, ensuring it's brief and highlights alignment with brand notes, consistent colors, and the overall message.
+</think>
+
+Finalizing with brand-aligned colors, simple shapes, and technical tone.
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/slack_launch_pack/launch_announcement.md", "content": ":gear: *Retry-on-failure is now live in the experiment task dashboard.*\n\n- Transient failures retry automatically (bounded budget).\n- Retry history is visible on each task.\n- Non-retryable failures surface immediately.\n\nWorth a look if you maintain long-running tasks. Heads-up: a few task types are excluded for now while we tune the classifier.\n"}}
+</tool_call>
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/slack_launch_pack/launch_gif.md", "content": "# Launch GIF — concept (final)\n\n## Theme\n\"A failed task gets back up and tries again.\"\n\n## Visual\n- 128×128, 12 frames, 10 fps.\n- Small ink-square sprite with calm motion.\n- 4-frame stumble (down), 2-frame pause, 6-frame rise back to baseline.\n\n## Palette (brand-aligned)\n- Base ink: `#141413`\n- Baseline: `#e8e6dc`\n- Accent: `#d97757` (orange)\n- Background: `#faf9f5`\n\n## Why this works for Slack\n- Loops cleanly under 3 s\n- Reads at 32 px in chat lists\n- No text frames or hype language\n- Matches brand color palette\n- Simple shapes per brand notes\n"}}
+</tool_call>
+<tool_call>
+{"name": "Write", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv_claude/slack_launch_pack/launch_summary.md", "content": "# Launch Pack Summary\n\n**Feature:** Retry for failed tasks in experiment dashboard\n**Tone:** Technical, clear, no hype\n**Colors:** Brand-aligned (dark, light gray, orange accent)\n**Visuals:** Simple shapes, calm motion, no text frames\n**Files:** Announcement (Slack-ready), GIF concept (128×128 emoji GIF)\n**Status:** Ready for internal launch comms"}}
+</tool_call><|im_end|>

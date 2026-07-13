@@ -1,0 +1,17 @@
+<think>
+Okay, the user wants to co-write a design doc about adding automatic retry for failed benchmark tasks. They mentioned using the "doc-coauthoring" skill, so I need to follow the structured workflow outlined in the provided context.
+
+First, I should start by reading the seed files they mentioned: system_background.md and failure_examples.md. These will give me the necessary context to understand the existing system and common failure scenarios. Once I have that info, I can proceed with the three stages: Context Gathering, Refinement & Structure, and Reader Testing.
+
+In the Context Gathering phase, I need to ask the user about the document type, audience, desired impact, and any templates or constraints. They might have specific requirements or existing formats they want to follow. Also, checking if there are any integrations available to pull in additional context from shared documents or channels.
+
+Next, during Refinement & Structure, I'll help outline the document's sections. Since it's a design doc, typical sections might include Introduction, Problem Statement, Proposed Solution, Technical Details, Implementation Plan, Testing Strategy, and Conclusion. I'll need to brainstorm each section with the user, get their input on what to include, and iteratively refine each part.
+
+For Reader Testing, I'll generate potential questions a reader might have about the document and test them using a sub-agent if available. If not, the user will have to manually test by pasting the doc into a fresh Claude instance and checking the responses. This helps ensure the document is clear and answers potential questions without ambiguity.
+
+Throughout the process, I should keep the user informed of each step, ask clarifying questions, and make sure the document meets their goals. If they prefer a different approach or want to skip a stage, I should accommodate that while ensuring the final document is effective and reader-friendly.
+</think>
+
+<tool_call>
+{"name": "Read", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv/internal_comms_incident_update/.agents/skills/doc-coauthoring/SKILL.md"}}
+</tool_call><|im_end|>

@@ -1,0 +1,7 @@
+artifact,type,sources,notes
+summary.md,summary,"tables/kv_divergence_summary.csv;data/per_layer_kv_divergence.csv;figures/kv_divergence_by_depth.png;figures/kv_divergence_summary_bars.png","Contextual vs context-free skill KV divergence over 12 (task,skill) pairs."
+data/per_layer_kv_divergence.csv,data,"contextual_occ1_skill_kv/*.pt;offline_skill_kv/*.pt","Per-layer V/K cosine and relative L2, RoPE position-aligned keys."
+tables/kv_divergence_summary.csv,table,"data/per_layer_kv_divergence.csv","Per-pair aggregate: mean/min V cosine, aligned and raw K cosine, token count, position delta."
+figures/kv_divergence_by_depth.png,figure,"data/per_layer_kv_divergence.csv","Two-panel V and position-aligned K cosine vs transformer depth, one line per pair."
+figures/kv_divergence_summary_bars.png,figure,"tables/kv_divergence_summary.csv","Per-pair mean V and aligned K cosine bars, sorted by V similarity."
+compare_contextual_vs_clean_kv.py,code,"scripts/06_context_free_segment_cache/contextual_vs_clean_kv_divergence/compare_contextual_vs_clean_kv.py","Offline tensor comparison; no vLLM; neox RoPE re-rotation with rope_theta=1e6."

@@ -1,0 +1,48 @@
+<think>
+Okay, let's see. The user wants me to tighten everything according to the brand notes and ensure consistency in wording, colors, and style. They also want a final launch-pack summary.
+
+First, I need to recall the brand guidelines. The main colors are dark, light, mid gray, and light gray, with accent colors like orange, blue, and green. The typography uses Poppins for headings and Lora for body text. The style should be simple, clear, trustworthy, with a technical tone and no flashy elements.
+
+Looking at the existing announcement and GIF concept, I should check if they align with these guidelines. The announcement uses a calm palette with the specified colors. The GIF concept mentions using #1d1d1b, #e8e6dc, #d97757, and #faf9f5, which are from the brand colors. The wording is straightforward, no exclamation marks, which fits the brand notes.
+
+Next, the final summary needs to encapsulate the key points: the announcement, the GIF details, and the brand alignment. I should mention the use of brand colors, the technical tone, and the consistency between the announcement and GIF. Also, ensure that the summary is concise and follows the style guidelines.
+
+I should also verify that all elements are using the correct fonts and colors as per the brand guidelines. The announcement's text should be in Lora, and any headings in Poppins. The GIF's colors are already aligned, so that's good.
+
+Finally, the summary should be a short overview, so I'll structure it with bullet points or sections highlighting the key aspects without being too verbose. Make sure to mention the collaboration between the announcement and GIF, adherence to brand colors, and the technical tone.
+</think>
+
+Finalizing with brand-aligned colors, typography, and tone.  
+Here's the launch-pack summary:
+
+---
+
+### **Launch Pack: Retry for Failed Tasks**
+
+**1. Announcement (Slack Message)**  
+- **Tone**: Technical, clear, and trustworthy  
+- **Colors**:  
+  - Background: `#faf9f5` (light)  
+  - Text: `#141413` (dark)  
+  - Accent: `#d97757` (orange) for key highlights  
+- **Typography**:  
+  - Headings: Poppins (24pt)  
+  - Body: Lora  
+
+**2. GIF (128×128, 12 frames @10fps)**  
+- **Visual**: Calm animation of a square "stumbling" then rising  
+- **Palette**:  
+  - Ink: `#1d1d1b`  
+  - Baseline: `#e8e6dc`  
+  - Accent: `#d97757` (orange) on rise frame  
+  - Background: `#faf9f5`  
+- **Style**: No hype language, no exclamation marks  
+
+**3. Brand Consistency**  
+- All elements use Anthropic’s official colors and fonts  
+- No flashy gradients or unnecessary complexity  
+- Technical tone matches internal comms standards  
+
+--- 
+
+Ready for deployment.<|im_end|>

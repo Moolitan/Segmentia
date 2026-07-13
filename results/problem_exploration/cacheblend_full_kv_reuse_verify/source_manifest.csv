@@ -1,0 +1,6 @@
+path,kind,description,source
+summary.md,summary,Two-pair recompute versus zero-token-recompute full-KV-reuse protocol and current status,manual experiment specification
+data/comparison.json,data,Lightweight four-arm answers reasoning usage and source paths generated after the real run,/mnt/Large_Language_Model_Lab_1/wsh/CacheBlend/output/two_chunk_full_reuse_verify/pilot1/raw/*/*.json
+data/comparison_temp06.json,data,Single-seed four-arm comparison at temperature 0.6 top_p 0.95 top_k 20 min_p 0.0,/mnt/Large_Language_Model_Lab_1/wsh/CacheBlend/output/two_chunk_full_reuse_verify/pilot_temp06/raw/*/*.json
+figures/README.md,note,Reason that no aggregate figure is planned for the two-case verification,manual experiment specification
+tables/README.md,note,Table materialization policy for the four-arm comparison,manual experiment specification

@@ -1,0 +1,16 @@
+<think>
+Okay, the user wants a polished final version for internal rollout that includes the main Slack announcement, a shorter fallback version, the GIF concept, and a note on how the pieces fit together. Let me start by recalling the previous steps.
+
+First, the main announcement was refined to be clearer for platform engineers, explaining what the feature does, why it's implemented now, and what's excluded. The fallback version needs to be shorter, so I'll condense the key points without the detailed sections.
+
+For the GIF concept, the latest version includes a polished animation with ease-out rise and a single accent flick. I need to ensure the description aligns with the brand guidelines, using the specified colors and maintaining a calm, professional look.
+
+The note on how the pieces fit together should tie the announcement and GIF together, emphasizing consistency in branding and the purpose of each component. I'll check the brand guidelines again to confirm color codes and typography. Also, ensure that the Slack GIF meets the size and optimization requirements from the slack-gif-creator tool.
+
+Finally, compiling all these elements into a cohesive final package, making sure each part is clearly separated and easy to understand for the internal team. Double-checking that the fallback announcement is concise and captures the essence without the extra details. Alright, time to structure the final response with all the required components.
+</think>
+
+Finalizing the launch pack — re-loading brand-guidelines.
+<tool_call>
+{"name": "Read", "arguments": {"file_path": "/home/wsh/openhands_code_research/workspace/05_context_segment_agent_kv/internal_comms_incident_update/.agents/skills/brand-guidelines/SKILL.md"}}
+</tool_call><|im_end|>

@@ -28,6 +28,7 @@ DEFAULT_OUTPUT_DIR = Path(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skills-dir", type=Path, default=DEFAULT_SKILLS_DIR)
+    parser.add_argument("--skill", default=None, help="Process one skills/<name>/SKILL.md")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL_PATH)
     parser.add_argument("--served-model", default="Qwen3")
@@ -84,7 +85,9 @@ def wait_for_health(base_url: str, api_key: str, timeout: float) -> None:
     raise RuntimeError(f"vLLM health check timed out after {timeout}s: {last_error}")
 
 
-def discover_skills(skills_dir: Path) -> list[tuple[str, Path]]:
+def discover_skills(
+    skills_dir: Path, selected_skill: str | None = None
+) -> list[tuple[str, Path]]:
     if not skills_dir.is_dir():
         raise FileNotFoundError(f"Skills directory does not exist: {skills_dir}")
     result = [
@@ -93,8 +96,11 @@ def discover_skills(skills_dir: Path) -> list[tuple[str, Path]]:
         if directory.is_dir() and (directory / "SKILL.md").is_file()
     ]
     result.sort(key=lambda item: item[0])
+    if selected_skill is not None:
+        result = [item for item in result if item[0] == selected_skill]
     if not result:
-        raise RuntimeError(f"No skills/*/SKILL.md files found under {skills_dir}")
+        target = selected_skill if selected_skill is not None else "*"
+        raise RuntimeError(f"No skills/{target}/SKILL.md found under {skills_dir}")
     return result
 
 
@@ -123,6 +129,17 @@ def main() -> None:
     from cskcache.v1.storage.local_disk_backend import LocalDiskBackend
 
     disk = LocalDiskBackend(args.output_dir)
+    existing_records: dict[str, dict[str, Any]] = {}
+    if manifest_path.exists():
+        try:
+            previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+            existing_records = {
+                str(record["cache_id"]): record
+                for record in previous.get("records", [])
+                if isinstance(record, dict) and "cache_id" in record
+            }
+        except (OSError, ValueError, TypeError):
+            existing_records = {}
     manifest: dict[str, Any] = {
         "schema_version": 1,
         "model_path": str(args.model_path),
@@ -131,14 +148,14 @@ def main() -> None:
         "output_dir": str(args.output_dir),
         "tokenization": {"add_special_tokens": False, "chat_template": False},
         "dry_run": args.dry_run,
-        "records": [],
+        "records": list(existing_records.values()),
     }
     failures = 0
 
     if not args.dry_run:
         wait_for_health(args.base_url, args.api_key, args.health_timeout)
 
-    for cache_id, skill_path in discover_skills(args.skills_dir):
+    for cache_id, skill_path in discover_skills(args.skills_dir, args.skill):
         text = skill_path.read_text(encoding="utf-8")
         token_ids = tokenizer.encode(text, add_special_tokens=False)
         special_tokens = [token_id for token_id in token_ids if token_id in special_ids]
@@ -214,7 +231,10 @@ def main() -> None:
                 )
                 failures += 1
 
-        manifest["records"].append(record)
+        existing_records[cache_id] = record
+        manifest["records"] = [
+            existing_records[key] for key in sorted(existing_records)
+        ]
         write_manifest(manifest_path, manifest)
         print(
             f"[{record['status']}] {cache_id:24s} tokens={len(token_ids):5d} "
@@ -229,7 +249,7 @@ def main() -> None:
             r["status"] == "skipped_existing" for r in manifest["records"]
         ),
         "dry_run": sum(r["status"] == "dry_run" for r in manifest["records"]),
-        "failed": failures,
+        "failed": sum(r["status"] == "failed" for r in manifest["records"]),
     }
     write_manifest(manifest_path, manifest)
     print(f"[done] manifest={manifest_path}", flush=True)

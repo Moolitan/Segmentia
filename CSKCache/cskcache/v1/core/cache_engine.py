@@ -82,7 +82,11 @@ class CSKCacheEngine:
         self._catalog = (
             catalog
             if catalog is not None
-            else SegmentCatalog.from_entries(storage.all_entries())
+            else (
+                SegmentCatalog([])
+                if config.capture_only
+                else SegmentCatalog.from_entries(storage.all_entries())
+            )
         )
         # Device-side KV movement is delegated to the connector so the engine
         # stays free of paged-memory details.

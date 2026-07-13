@@ -97,7 +97,7 @@ class CSKCacheConnectorV1Impl:
             self._registry = get_global_registry()
             storage = self._registry.storage
 
-        if config.kv_dir is not None:
+        if config.kv_dir is not None and not config.capture_only:
             loaded = self._registry.load_dir(config.kv_dir)
             logger.warning(
                 "CSKCache loaded %d KV entries from %s", len(loaded), config.kv_dir

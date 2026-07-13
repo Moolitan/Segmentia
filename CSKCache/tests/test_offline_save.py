@@ -86,6 +86,21 @@ def test_offline_save_waits_for_full_span_and_persists() -> None:
         assert torch.equal(saved_value, value)
 
 
+def test_capture_only_does_not_materialize_existing_catalog() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        storage = StorageManager.with_disk(tmp)
+        connector = VLLMPagedGPUConnector(BLOCK_SIZE)
+        engine = CSKCacheEngine(
+            CSKCacheConfig(capture_only=True),
+            storage,
+            block_size=BLOCK_SIZE,
+            gpu_connector=connector,
+        )
+        assert engine.catalog.segments == []
+
+
 if __name__ == "__main__":
     test_offline_save_waits_for_full_span_and_persists()
     print("PASS test_offline_save_waits_for_full_span_and_persists")
+    test_capture_only_does_not_materialize_existing_catalog()
+    print("PASS test_capture_only_does_not_materialize_existing_catalog")

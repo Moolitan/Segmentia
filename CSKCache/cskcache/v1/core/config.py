@@ -45,6 +45,7 @@ class CSKCacheConfig:
     # reproducing the original in-memory registry. Set both to enable disk spill.
     cpu_max_bytes: int | None = None
     disk_dir: Path | None = None
+    capture_only: bool = False
 
     def __post_init__(self) -> None:
         if self.probe_tokens <= 0:
@@ -80,6 +81,7 @@ class CSKCacheConfig:
             gate_metric=str(pick("gate_metric") or "max"),
             cpu_max_bytes=None if cpu_max_bytes is None else int(cpu_max_bytes),
             disk_dir=Path(str(disk_dir)) if disk_dir else None,
+            capture_only=_coerce_bool(pick("capture_only"), False),
         )
 
     @classmethod
@@ -101,6 +103,7 @@ class CSKCacheConfig:
                 "gate_metric": pick("gate_metric"),
                 "cpu_max_bytes": pick("cpu_max_bytes"),
                 "disk_dir": pick("disk_dir"),
+                "capture_only": pick("capture_only"),
             }
         )
 
@@ -130,6 +133,7 @@ class CSKCacheConfig:
             ),
             "cpu_max_bytes": extra.get("cskcache.cpu_max_bytes"),
             "disk_dir": extra.get("cskcache.disk_dir") or os.environ.get("CSKCACHE_DISK_DIR"),
+            "capture_only": extra.get("cskcache.capture_only"),
         }
         env_fallback = cls.from_env()
         # For probe/gate scalars, prefer explicit extra-config, else env value.
@@ -163,5 +167,10 @@ class CSKCacheConfig:
                     else env_fallback.cpu_max_bytes
                 ),
                 "disk_dir": merged["disk_dir"],
+                "capture_only": (
+                    merged["capture_only"]
+                    if merged["capture_only"] is not None
+                    else env_fallback.capture_only
+                ),
             }
         )

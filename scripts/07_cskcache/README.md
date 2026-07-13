@@ -13,8 +13,10 @@ Large KV payloads default to:
 /mnt/Large_Language_Model_Lab_1/wsh/Segmentia/output/07_cskcache/offline_skill_kv/
 ```
 
-The wrapper starts one CSKCache-enabled vLLM server, processes skills serially,
-and stops the server on exit:
+The wrapper processes skills in sorted order. It starts a fresh CSKCache-enabled
+vLLM server for one skill, saves that skill, fully stops the server, and only
+then starts the next one. Prefix caching is also disabled. This makes the server
+lifecycle and all runtime KV state isolated at the individual-skill boundary:
 
 ```bash
 cd /home/wsh/openhands_code_research
@@ -36,4 +38,6 @@ python scripts/07_cskcache/offline_prefill_skills.py --dry-run
 ```
 
 `manifest.json` is refreshed after every skill. A failed skill is recorded and
-processing continues; the driver exits nonzero after the batch if any failed.
+processing continues after its server is stopped; the wrapper exits nonzero
+after the batch if any failed. Capture-only mode scans disk sidecars for existing
+cache IDs but does not reload earlier skills' large tensors into each new server.

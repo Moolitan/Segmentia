@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import warnings
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Iterable
 
 import torch
 
+from cskcache.profiling import LoadTrace, NullLoadTrace
 from cskcache.v1.metadata import CSKCacheEntry
 from cskcache.v1.storage.abstract_backend import StorageBackendInterface
 from cskcache.v1.storage.cache_policy import get_cache_policy
@@ -66,21 +68,40 @@ class StorageManager:
             return True
         return self._disk is not None and self._disk.contains(cache_id)
 
-    def get(self, cache_id: str) -> CSKCacheEntry | None:
-        entry = self._cpu.get(cache_id)
-        if entry is not None:
+    def get(
+        self,
+        cache_id: str,
+        trace: LoadTrace | NullLoadTrace | None = None,
+    ) -> CSKCacheEntry | None:
+        active_trace = trace if trace is not None and trace.enabled else None
+        timer = (
+            active_trace.cpu_stage("storage_get")
+            if active_trace is not None
+            else nullcontext()
+        )
+        with timer:
+            entry = self._cpu.get(cache_id, trace=active_trace)
+            if entry is not None:
+                if active_trace is not None:
+                    active_trace.set(source_tier="cpu")
+                self._policy.record_access(cache_id)
+                return entry
+            if self._disk is None:
+                if active_trace is not None:
+                    active_trace.set(source_tier="miss")
+                return None
+            entry = self._disk.get(cache_id, trace=active_trace)
+            if entry is None:
+                if active_trace is not None:
+                    active_trace.set(source_tier="miss")
+                return None
+            if active_trace is not None:
+                active_trace.set(source_tier="disk")
+            # Disk hit: promote into the hot tier so repeated reuse stays fast.
+            self._cpu.put(entry)
             self._policy.record_access(cache_id)
+            self._enforce_cpu_budget()
             return entry
-        if self._disk is None:
-            return None
-        entry = self._disk.get(cache_id)
-        if entry is None:
-            return None
-        # Disk hit: promote into the hot tier so repeated reuse stays fast.
-        self._cpu.put(entry)
-        self._policy.record_access(cache_id)
-        self._enforce_cpu_budget()
-        return entry
 
     def put(self, entry: CSKCacheEntry, *, persist: bool = False) -> None:
         if persist:

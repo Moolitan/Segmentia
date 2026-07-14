@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Iterable
 
+from cskcache.profiling import LoadTrace, NullLoadTrace
 from cskcache.v1.metadata import CSKCacheEntry
 
 
@@ -36,7 +37,11 @@ class StorageBackendInterface(ABC):
         """Whether this tier currently holds the entry."""
 
     @abstractmethod
-    def get(self, cache_id: str) -> CSKCacheEntry | None:
+    def get(
+        self,
+        cache_id: str,
+        trace: LoadTrace | NullLoadTrace | None = None,
+    ) -> CSKCacheEntry | None:
         """Return the entry, or None if this tier does not hold it."""
 
     @abstractmethod

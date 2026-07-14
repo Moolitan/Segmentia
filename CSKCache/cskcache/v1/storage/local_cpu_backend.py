@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from cskcache.profiling import LoadTrace, NullLoadTrace
 from cskcache.v1.metadata import CSKCacheEntry
 from cskcache.v1.storage.abstract_backend import (
     StorageBackendInterface,
@@ -25,7 +26,11 @@ class LocalCPUBackend(StorageBackendInterface):
     def contains(self, cache_id: str) -> bool:
         return cache_id in self._entries
 
-    def get(self, cache_id: str) -> CSKCacheEntry | None:
+    def get(
+        self,
+        cache_id: str,
+        trace: LoadTrace | NullLoadTrace | None = None,
+    ) -> CSKCacheEntry | None:
         return self._entries.get(cache_id)
 
     def put(self, entry: CSKCacheEntry) -> None:

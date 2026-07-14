@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 
 import torch
 
+from cskcache.profiling import LoadTrace, NullLoadTrace
 from cskcache.v1.compute.reuse import prepare_reuse_slice
 from cskcache.v1.metadata import CSKCacheEntry, CSKLoadPlan
 from cskcache.v1.rope import find_rotary_embedding
@@ -33,6 +34,7 @@ class KVConnectorInterface(ABC):
         entry: CSKCacheEntry,
         plan: CSKLoadPlan,
         block_ids: list[int],
+        trace: LoadTrace | NullLoadTrace | None = None,
     ) -> tuple[int, int, int]:
         """Scatter every entry layer and return expected/scattered/skipped counts."""
 
@@ -118,6 +120,7 @@ class VLLMPagedGPUConnector(KVConnectorInterface):
         entry: CSKCacheEntry,
         plan: CSKLoadPlan,
         block_ids: list[int],
+        trace: LoadTrace | NullLoadTrace | None = None,
     ) -> tuple[int, int, int]:
         expected_layers = set(entry.kv_by_layer)
         available_layers = set(self._kv_caches)
@@ -136,24 +139,27 @@ class VLLMPagedGPUConnector(KVConnectorInterface):
             )
 
         scattered_layers = 0
+        stage_trace = trace if trace is not None else NullLoadTrace()
         for layer_name in entry.kv_by_layer:
             target_cache = self._kv_caches[layer_name]
-            key, value = self.reuse_slice(
-                entry,
-                layer_name=layer_name,
-                source_offset=plan.source_offset,
-                length=plan.length,
-                target_start=plan.start,
-                device=target_cache.device,
-            )
-            scatter_span(
-                target_cache,
-                block_ids,
-                plan.start,
-                plan.end,
-                self._block_size,
-                key,
-                value,
-            )
+            with stage_trace.cuda_stage("prepare_reuse_slice", target_cache.device):
+                key, value = self.reuse_slice(
+                    entry,
+                    layer_name=layer_name,
+                    source_offset=plan.source_offset,
+                    length=plan.length,
+                    target_start=plan.start,
+                    device=target_cache.device,
+                )
+            with stage_trace.cuda_stage("scatter_span", target_cache.device):
+                scatter_span(
+                    target_cache,
+                    block_ids,
+                    plan.start,
+                    plan.end,
+                    self._block_size,
+                    key,
+                    value,
+                )
             scattered_layers += 1
         return len(expected_layers), scattered_layers, 0

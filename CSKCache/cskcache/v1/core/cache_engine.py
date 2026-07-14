@@ -23,6 +23,7 @@ import torch
 
 from cskcache.v1.compute import CSKProbeAccumulator, CSKProbeDecision
 from cskcache.logging import init_logger
+from cskcache.profiling import LoadTrace, NullLoadTrace, Profiler
 from cskcache.v1.core.config import CSKCacheConfig
 from cskcache.v1.core.probe_state import CSKProbePhase, CSKProbeState
 from cskcache.v1.kv_transfer.gpu_connector import (
@@ -40,6 +41,7 @@ from cskcache.v1.metadata import (
     CSKSaveMeta,
     ReuseSpan,
 )
+from cskcache.v1.storage import entry_nbytes
 from cskcache.v1.storage.storage_manager import StorageManager
 
 logger = init_logger(__name__)
@@ -75,6 +77,7 @@ class CSKCacheEngine:
         block_size: int,
         catalog: SegmentCatalog | None = None,
         gpu_connector: KVConnectorInterface | None = None,
+        profiler: Profiler | None = None,
     ) -> None:
         self._config = config
         self._storage = storage
@@ -95,6 +98,7 @@ class CSKCacheEngine:
             if gpu_connector is not None
             else VLLMPagedGPUConnector(block_size)
         )
+        self._profiler = profiler if profiler is not None else Profiler()
         # Scheduler-side one-shot / per-request state.
         self._plans: dict[str, CSKLoadPlan] = {}
         self._allocated_blocks: dict[str, tuple[list[int], ...]] = {}
@@ -582,7 +586,15 @@ class CSKCacheEngine:
             self._gpu.set_model(model)
         for request in requests:
             plan = request.plan
-            entry = self._storage.get(plan.cache_id)
+            trace = self._profiler.start_worker_load(
+                req_id=plan.req_id,
+                cache_id=plan.cache_id,
+                target_start=plan.start,
+                target_end=plan.end,
+                tokens=plan.length,
+                source_offset=plan.source_offset,
+            )
+            entry = self._storage.get(plan.cache_id, trace=trace)
             if entry is None:
                 raise RuntimeError(f"CSKCache cache_id={plan.cache_id} is not loaded")
             if plan.source_offset + plan.length > entry.length:
@@ -593,9 +605,17 @@ class CSKCacheEngine:
                 )
             if not request.block_ids or request.block_ids[0] is None:
                 raise RuntimeError(f"CSKCache load plan for {plan.req_id} has no blocks")
+            if trace.enabled:
+                full_entry_bytes = entry_nbytes(entry)
+                trace.set(
+                    bytes=full_entry_bytes * plan.length // entry.length,
+                    entry_bytes=full_entry_bytes,
+                    entry_tokens=entry.length,
+                    expected_layers=len(entry.kv_by_layer),
+                )
             started = time.perf_counter()
             expected_layers, scattered_layers, skipped_layers = self._gpu.to_gpu(
-                entry, plan, request.block_ids[0]
+                entry, plan, request.block_ids[0], trace=trace
             )
             if scattered_layers != expected_layers or skipped_layers != 0:
                 raise RuntimeError(
@@ -626,6 +646,11 @@ class CSKCacheEngine:
                 skipped_layers,
                 elapsed_ms,
             )
+            trace.set(
+                scattered_layers=scattered_layers,
+                skipped_layers=skipped_layers,
+            )
+            self._profiler.finish(trace)
 
     def capture_probes(
         self,
@@ -793,7 +818,7 @@ class CSKCacheEngine:
         spans = self._reuse_spans.get(req_id)
         if spans is not None:
             return spans
-        spans = self._resolve_reuses(token_ids, kv_transfer_params)
+        spans = self._resolve_reuses(req_id, token_ids, kv_transfer_params)
         self._reuse_spans[req_id] = spans
         if spans:
             frontier = 0 if num_computed_tokens is None else num_computed_tokens
@@ -879,20 +904,27 @@ class CSKCacheEngine:
 
     def _resolve_reuses(
         self,
+        req_id: str,
         token_ids: list[int],
         kv_transfer_params: Mapping | None,
     ) -> tuple[ReuseSpan, ...]:
         """Resolve and order request-local spans from explicit signals only."""
 
         signals = self._parse_reuse_signals(kv_transfer_params)
-        spans = sorted(
-            (
-                self._reuse_from_signal(token_ids, signal)
-                for signal in signals
-                if signal.enabled
-            ),
-            key=lambda span: (span.start, span.end, span.cache_id),
-        )
+        resolved: list[ReuseSpan] = []
+        for signal in signals:
+            if not signal.enabled:
+                continue
+            trace = self._profiler.start_scheduler_lookup(
+                req_id=req_id,
+                cache_id=signal.cache_id,
+                target_start=signal.target_start,
+                target_end=signal.target_end,
+            )
+            span = self._reuse_from_signal(token_ids, signal, trace=trace)
+            self._profiler.finish(trace)
+            resolved.append(span)
+        spans = sorted(resolved, key=lambda span: (span.start, span.end, span.cache_id))
         for previous, current in zip(spans, spans[1:]):
             if current.start < previous.end:
                 raise ValueError(
@@ -977,8 +1009,9 @@ class CSKCacheEngine:
         self,
         token_ids: list[int],
         signal: CSKCacheReuseSignal,
+        trace: LoadTrace | NullLoadTrace | None = None,
     ) -> ReuseSpan:
-        entry = self._storage.get(signal.cache_id)
+        entry = self._storage.get(signal.cache_id, trace=trace)
         if entry is None:
             raise RuntimeError(
                 f"CSKCache reuse signal cache_id={signal.cache_id} is not loaded"
@@ -1004,6 +1037,13 @@ class CSKCacheEngine:
             raise RuntimeError(
                 f"CSKCache reuse span length mismatch for {signal.cache_id}: "
                 f"target_length={target_end - target_start}, entry_length={entry.length}"
+            )
+        if trace is not None and trace.enabled:
+            full_entry_bytes = entry_nbytes(entry)
+            trace.set(
+                bytes=full_entry_bytes,
+                entry_bytes=full_entry_bytes,
+                entry_tokens=entry.length,
             )
 
         return ReuseSpan(

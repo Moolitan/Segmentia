@@ -7,6 +7,7 @@ from typing import Iterable
 
 import torch
 
+from cskcache.profiling import LoadTrace, NullLoadTrace
 from cskcache.v1.metadata import CSKCacheEntry
 from cskcache.v1.storage.abstract_backend import (
     StorageBackendInterface,
@@ -89,13 +90,22 @@ class LocalDiskBackend(StorageBackendInterface):
     def contains(self, cache_id: str) -> bool:
         return cache_id in self._index
 
-    def get(self, cache_id: str) -> CSKCacheEntry | None:
+    def get(
+        self,
+        cache_id: str,
+        trace: LoadTrace | NullLoadTrace | None = None,
+    ) -> CSKCacheEntry | None:
         record = self._index.get(cache_id)
         if record is None:
             return None
-        payload_path, _ = record
-        payload = torch.load(payload_path, map_location=self._device or "cpu")
-        return payload_to_entry(payload, device=self._device)
+        payload_path, nbytes = record
+        if trace is None or not trace.enabled:
+            payload = torch.load(payload_path, map_location=self._device or "cpu")
+            return payload_to_entry(payload, device=self._device)
+        trace.set(disk_path=str(payload_path), disk_entry_bytes=nbytes)
+        with trace.cpu_stage("disk_deserialize"):
+            payload = torch.load(payload_path, map_location=self._device or "cpu")
+            return payload_to_entry(payload, device=self._device)
 
     def put(self, entry: CSKCacheEntry) -> None:
         payload_path, sidecar = self._paths(entry.cache_id)

@@ -13,6 +13,8 @@ MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-32768}"
 KV_DIR="${CSKCACHE_KV_DIR:-/mnt/Large_Language_Model_Lab_1/wsh/Segmentia/output/07_cskcache/offline_skill_kv}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
 RUN_DIR="${CSKCACHE_AGENT_RUN_DIR:-/mnt/Large_Language_Model_Lab_1/wsh/Segmentia/output/07_cskcache/real_agent_runs/$RUN_ID}"
+PROFILE_ENABLED="${CSKCACHE_PROFILE_ENABLED:-0}"
+PROFILE_JSONL_OVERRIDE="${CSKCACHE_PROFILE_JSONL:-}"
 TASKS="${TASKS:-internal_comms_incident_update,doc_coauthoring_design_doc,mcp_server_and_spec,web_artifact_with_theme,launch_poster_page_pack,slack_launch_pack}"
 READY_ATTEMPTS="${VLLM_READY_MAX_ATTEMPTS:-450}"
 READY_INTERVAL="${VLLM_READY_INTERVAL:-2}"
@@ -118,6 +120,14 @@ for task in "${TASK_LIST[@]}"; do
 
   cleanup
   echo "[vLLM] restart boundary=(mode=cskcache, task=$task)"
+  export CSKCACHE_PROFILE_ENABLED="$PROFILE_ENABLED"
+  if [[ -n "$PROFILE_JSONL_OVERRIDE" ]]; then
+    export CSKCACHE_PROFILE_JSONL="$PROFILE_JSONL_OVERRIDE"
+  elif [[ "${PROFILE_ENABLED,,}" =~ ^(1|true|yes|on)$ ]]; then
+    export CSKCACHE_PROFILE_JSONL="$RUN_DIR/profile_${task}.jsonl"
+  else
+    unset CSKCACHE_PROFILE_JSONL || true
+  fi
   cd "$VLLM_ROOT"
   LD_LIBRARY_PATH="${CONDA_PREFIX}/lib" \
   python -m vllm.entrypoints.openai.api_server \

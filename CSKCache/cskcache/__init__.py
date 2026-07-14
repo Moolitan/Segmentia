@@ -13,6 +13,7 @@ without vLLM:
 - ``kv_transfer`` scatter/gather against paged KV cache
 - ``storage``     CPU + disk tiers with LRU eviction
 - ``compute``     probe-gate residual + decision (the signature mechanism)
+- ``profiling``   optional request-scoped CPU/CUDA timing and reporting
 
 vLLM integration lives in ``cskcache.integration.vllm`` and is the only part
 that imports vLLM.

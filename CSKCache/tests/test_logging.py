@@ -29,7 +29,7 @@ class _RecordingGPUConnector:
     def set_model(self, model) -> None:
         return
 
-    def to_gpu(self, entry, plan, block_ids) -> tuple[int, int, int]:
+    def to_gpu(self, entry, plan, block_ids, trace=None) -> tuple[int, int, int]:
         self.loaded.append((entry.cache_id, plan.start, plan.end))
         layers = len(entry.kv_by_layer)
         return layers, layers, 0

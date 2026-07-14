@@ -160,6 +160,36 @@ boundaries, dispatched load plans, completed KV loads with source/target spans
 and elapsed time, saves, probe decisions, and cleanup. Redirect vLLM stderr to a
 file to retain these records.
 
+## Optional profiling
+
+Profiling is implemented in the independent `cskcache/profiling/` package and
+is disabled by default. Enable it without changing cache mechanism config:
+
+```text
+CSKCACHE_PROFILE_ENABLED=1
+CSKCACHE_PROFILE_JSONL=/path/to/cskcache_profile.jsonl  # optional
+```
+
+Core storage and transfer code only carries a request-scoped trace and marks
+existing operation boundaries. The profiling package owns CPU/CUDA timing,
+aggregation, log formatting, and JSONL output. Scheduler lookup and worker load
+are deliberately separate records because they execute in different connector
+roles; correlate them using request ID, cache ID, and target span.
+
+The first profiling version reports:
+
+```text
+storage_get
+disk_deserialize       # disk hits only
+prepare_reuse_slice    # CPU-to-device transfer plus RoPE correction
+scatter_span           # slot construction plus K/V scatter
+```
+
+CUDA stages use deferred CUDA events and synchronize once when a load trace
+finishes. The normal profiling-disabled path does not create events or perform
+these synchronizations. JSONL filenames receive a `.pid<PID>` component so
+scheduler/worker processes never append to the same file.
+
 ## Old vLLM Patch Status
 
 The old `/home/wsh/vllm/vllm/v1/context_segment_cache/` implementation is kept

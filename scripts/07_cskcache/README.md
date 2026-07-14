@@ -114,6 +114,22 @@ skipped-layer accounting fail the request instead of silently continuing. Set
 the default is `INFO`. Polling paths do not emit a line unless the request moves
 to a new state.
 
+Performance profiling is independent of the correctness logs and is disabled
+by default. To enable one compact `PROFILE` summary per scheduler lookup and
+worker load, plus process-isolated JSONL records under the run directory:
+
+```bash
+CSKCACHE_PROFILE_ENABLED=1 bash scripts/07_cskcache/run.sh
+```
+
+Unless `CSKCACHE_PROFILE_JSONL` is explicitly set, `run_real_agent.sh` chooses
+`<run_dir>/profile_<task>.jsonl`; the profiler adds `.pid<PID>` before the
+suffix. Records distinguish CPU and disk hits and contain `storage_get`,
+optional `disk_deserialize`, `prepare_reuse_slice`, `scatter_span`, total time,
+bytes, and effective bandwidth. `prepare_reuse_slice` currently combines H2D
+and RoPE, while `scatter_span` combines slot mapping and scatter; these stages
+will only be subdivided if profiling shows that boundary is dominant.
+
 The wrapper restarts vLLM at the `(mode=cskcache, task)` boundary. It enables
 prefix caching, runs all benchmark turns for that task in one Conversation, and
 stops the server before the next task. Workspaces and raw request artifacts are

@@ -1,0 +1,528 @@
+#!/usr/bin/env python3
+"""Plot CSKCache request, probe, and tail-load time decomposition.
+
+The script reads profiler JSONL directly. It never embeds measured values in
+code, and it writes the normalized long-form data used by the figure
+alongside the output. Multiple reuse occurrences in one run become separate
+stacked groups.
+
+The figure is a single shared millisecond timeline per occurrence: row (a) is
+the reuse critical path, and rows (b)/(c) are drill-downs of the "Probe
+roundtrip" and "Tail KV load" segments, drawn at their true x-position inside
+row (a) and linked to it with a shaded connector. This avoids the earlier
+version's independent per-panel axes, which stretched a 155 ms bar and a
+1062 ms bar to the same visual width.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+from pathlib import Path
+from typing import Any, Iterable
+
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/cskcache-matplotlib")
+os.environ.setdefault("XDG_CACHE_HOME", "/tmp/cskcache-xdg-cache")
+
+import matplotlib.pyplot as plt
+from matplotlib.patches import Polygon
+
+from paper_plot_style import apply_publication_style, save_figure
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_RUN_ROOT = Path(
+    os.environ.get(
+        "CSKCACHE_AGENT_RUN_ROOT",
+        "/mnt/Large_Language_Model_Lab_1/wsh/Segmentia/output/07_cskcache/real_agent_runs",
+    )
+)
+DEFAULT_OUTPUT_DIR = (
+    REPO_ROOT
+    / "results"
+    / "problem_exploration"
+    / "cskcache_time_breakdown"
+)
+
+# Fixed reading order + one hex per leaf stage. Stages shared between the
+# probe and tail-load drill-downs (Key H2D, Value H2D, RoPE, Storage lookup)
+# keep the same color in both rows. "Probe roundtrip" and "Tail KV load" are
+# containers, not leaves: they are rendered as a hatched placeholder in row
+# (a) because they are decomposed in rows (b)/(c), so they never compete with
+# the legend below.
+STAGE_ORDER = [
+    "Scheduler lookup",
+    "Gap prefill",
+    "Anchor prefill",
+    "Load dispatch",
+    "Disk deserialize",
+    "Storage lookup",
+    "Key H2D",
+    "Value H2D",
+    "RoPE",
+    "Probe gather",
+    "Residual",
+    "Scatter",
+    "Other/control",
+]
+STAGE_COLORS = {
+    "Scheduler lookup": "#4477AA",
+    "Gap prefill": "#DDCC77",
+    "Anchor prefill": "#AA4499",
+    "Load dispatch": "#117733",
+    "Disk deserialize": "#882255",
+    "Storage lookup": "#CC6677",
+    "Key H2D": "#88CCEE",
+    "Value H2D": "#999933",
+    "RoPE": "#EE7733",
+    "Probe gather": "#BBCC33",
+    "Residual": "#6699CC",
+    "Scatter": "#44AA99",
+    "Other/control": "#999999",
+}
+CONTAINER_STAGES = {"Probe roundtrip", "Tail KV load"}
+CONTAINER_FACE = "#E5E5E2"
+CONTAINER_EDGE = "#8A8A85"
+BAR_HEIGHT = 0.62
+CONNECTOR_ALPHA = 0.12
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--profile-jsonl",
+        type=Path,
+        help="Profiler JSONL. If omitted, use the newest file under the run root.",
+    )
+    parser.add_argument("--run-root", type=Path, default=DEFAULT_RUN_ROOT)
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--name", default="cskcache_time_breakdown")
+    return parser.parse_args()
+
+
+def newest_profile(run_root: Path) -> Path:
+    candidates = list(run_root.glob("*/profile_*.jsonl"))
+    if not candidates:
+        raise FileNotFoundError(f"No profile JSONL found under {run_root}")
+    return max(candidates, key=lambda path: path.stat().st_mtime_ns)
+
+
+def read_records(path: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as source:
+        for line_number, line in enumerate(source, start=1):
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            if not isinstance(record, dict) or "kind" not in record:
+                raise ValueError(f"Invalid profiler record at {path}:{line_number}")
+            records.append(record)
+    return records
+
+
+def one_match(
+    records: Iterable[dict[str, Any]],
+    *,
+    kind: str,
+    req_id: str,
+    cache_id: str,
+    target_start: int | None = None,
+    target_end: int | None = None,
+) -> dict[str, Any]:
+    matches = [
+        record
+        for record in records
+        if record.get("kind") == kind
+        and record.get("req_id") == req_id
+        and record.get("cache_id") == cache_id
+        and (target_start is None or record.get("target_start") == target_start)
+        and (target_end is None or record.get("target_end") == target_end)
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"Expected one {kind} match for req={req_id} cache={cache_id} "
+            f"target=[{target_start},{target_end}), found {len(matches)}"
+        )
+    return matches[0]
+
+
+def stage_value(record: dict[str, Any], name: str) -> float:
+    return float(record.get("host_stage_ms", {}).get(name, 0.0) or 0.0)
+
+
+def nonnegative_other(total: float, components: dict[str, float]) -> float:
+    remainder = total - sum(components.values())
+    if remainder < -1.0:
+        raise ValueError(
+            f"Stage decomposition exceeds total by {-remainder:.3f} ms: {components}"
+        )
+    return max(remainder, 0.0)
+
+
+def build_occurrences(
+    records: list[dict[str, Any]], source: Path
+) -> list[dict[str, Any]]:
+    timelines = [record for record in records if record.get("kind") == "request_timeline"]
+    timelines.sort(key=lambda record: int(record["started_at_ns"]))
+    occurrences: list[dict[str, Any]] = []
+    for index, timeline in enumerate(timelines, start=1):
+        req_id = str(timeline["req_id"])
+        cache_id = str(timeline["cache_id"])
+        skill_start = int(timeline["target_start"])
+        skill_end = int(timeline["target_end"])
+        lookup = one_match(
+            records,
+            kind="scheduler_lookup",
+            req_id=req_id,
+            cache_id=cache_id,
+            target_start=skill_start,
+            target_end=skill_end,
+        )
+        probe = one_match(
+            records,
+            kind="worker_probe_capture",
+            req_id=req_id,
+            cache_id=cache_id,
+            target_start=skill_start,
+        )
+        load = one_match(
+            records,
+            kind="worker_load",
+            req_id=req_id,
+            cache_id=cache_id,
+            target_end=skill_end,
+        )
+        if int(probe.get("captured_layers", -1)) != int(
+            probe.get("expected_layers", -2)
+        ):
+            raise ValueError(f"Incomplete probe layers for {req_id} occurrence {index}")
+        if int(load.get("scattered_layers", -1)) != int(
+            load.get("expected_layers", -2)
+        ) or int(load.get("skipped_layers", -1)) != 0:
+            raise ValueError(f"Incomplete load layers for {req_id} occurrence {index}")
+
+        request_parts = {
+            "Scheduler lookup": float(lookup["total_ms"]),
+            "Gap prefill": float(timeline.get("stage_ms", {}).get("gap_prefill", 0.0)),
+            "Probe roundtrip": float(
+                timeline.get("stage_ms", {}).get("probe_roundtrip", 0.0)
+            ),
+            "Anchor prefill": float(
+                timeline.get("stage_ms", {}).get("anchor_prefill", 0.0)
+            ),
+            "Load dispatch": float(
+                timeline.get("stage_ms", {}).get("load_dispatch", 0.0)
+            ),
+            "Tail KV load": float(load["total_ms"]),
+        }
+        end_to_end_ms = (
+            int(load["finished_at_ns"]) - int(lookup["started_at_ns"])
+        ) / 1_000_000.0
+        request_parts["Other/control"] = nonnegative_other(
+            end_to_end_ms, request_parts
+        )
+
+        probe_parts: dict[str, float] = {}
+        disk_ms = stage_value(probe, "disk_deserialize")
+        if disk_ms:
+            probe_parts["Disk deserialize"] = disk_ms
+        else:
+            probe_parts["Storage lookup"] = stage_value(probe, "storage_get")
+        probe_parts.update(
+            {
+                "Key H2D": stage_value(probe, "key_h2d_host"),
+                "Value H2D": stage_value(probe, "value_h2d_host"),
+                "RoPE": stage_value(probe, "rope_host"),
+                "Probe gather": stage_value(probe, "probe_gather_host"),
+                "Residual": stage_value(probe, "residual_host"),
+            }
+        )
+        probe_parts["Other/control"] = nonnegative_other(
+            float(probe["total_ms"]), probe_parts
+        )
+
+        load_parts = {
+            "Storage lookup": stage_value(load, "storage_get"),
+            "Key H2D": stage_value(load, "key_h2d_host"),
+            "Value H2D": stage_value(load, "value_h2d_host"),
+            "RoPE": stage_value(load, "rope_host"),
+            "Scatter": stage_value(load, "scatter_span_host"),
+        }
+        load_parts["Other/control"] = nonnegative_other(
+            float(load["total_ms"]), load_parts
+        )
+        occurrences.append(
+            {
+                "index": index,
+                "label": f"Occ. {index}",
+                "req_id": req_id,
+                "cache_id": cache_id,
+                "skill_start": skill_start,
+                "skill_end": skill_end,
+                "source": str(source),
+                "request_total_ms": end_to_end_ms,
+                "request": request_parts,
+                "probe_total_ms": float(probe["total_ms"]),
+                "probe": probe_parts,
+                "load_total_ms": float(load["total_ms"]),
+                "load": load_parts,
+            }
+        )
+    if not occurrences:
+        raise ValueError(f"No request_timeline records in {source}")
+    return occurrences
+
+
+def write_long_csv(occurrences: list[dict[str, Any]], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as output:
+        writer = csv.DictWriter(
+            output,
+            fieldnames=(
+                "occurrence",
+                "req_id",
+                "cache_id",
+                "skill_start",
+                "skill_end",
+                "panel",
+                "stage",
+                "milliseconds",
+                "source_jsonl",
+            ),
+        )
+        writer.writeheader()
+        for occurrence in occurrences:
+            for panel in ("request", "probe", "load"):
+                for stage, milliseconds in occurrence[panel].items():
+                    writer.writerow(
+                        {
+                            "occurrence": occurrence["index"],
+                            "req_id": occurrence["req_id"],
+                            "cache_id": occurrence["cache_id"],
+                            "skill_start": occurrence["skill_start"],
+                            "skill_end": occurrence["skill_end"],
+                            "panel": panel,
+                            "stage": stage,
+                            "milliseconds": f"{milliseconds:.6f}",
+                            "source_jsonl": occurrence["source"],
+                        }
+                    )
+
+
+def stage_color(name: str) -> str:
+    if name in CONTAINER_STAGES:
+        return CONTAINER_FACE
+    return STAGE_COLORS[name]
+
+
+def draw_row(
+    ax: plt.Axes,
+    y_center: float,
+    stages: dict[str, float],
+    *,
+    x0: float,
+    pad_ms: float,
+    label_min_frac: float = 0.08,
+) -> list[tuple[str, float, float]]:
+    """Draw one stacked horizontal row starting at x0. Returns (name, left, width)."""
+    total = sum(stages.values())
+    spans: list[tuple[str, float, float]] = []
+    left = x0
+    for name, value in stages.items():
+        spans.append((name, left, value))
+        left += value
+    for name, seg_left, value in spans:
+        is_container = name in CONTAINER_STAGES
+        ax.barh(
+            y_center,
+            value,
+            left=seg_left,
+            height=BAR_HEIGHT,
+            color=stage_color(name),
+            edgecolor="white" if not is_container else CONTAINER_EDGE,
+            linewidth=1.3 if not is_container else 1.0,
+            hatch="///" if is_container else None,
+            zorder=3,
+        )
+        # Skip inline labels on slivers: text needs both a minimum share of
+        # the row and a minimum absolute width, or it collides with its
+        # neighbors (this is what produced garbled overlapping numbers on
+        # the sub-100 ms rows before this threshold was added).
+        if is_container or (value >= label_min_frac * total and value >= 32.0):
+            text = f"{name}\n{value:.1f} ms" if is_container else f"{value:.1f}"
+            ax.text(
+                seg_left + value / 2,
+                y_center,
+                text,
+                ha="center",
+                va="center",
+                fontsize=6.2,
+                color="#333333" if is_container else "white",
+                zorder=4,
+                linespacing=1.15,
+            )
+    ax.text(
+        left + pad_ms,
+        y_center,
+        f"{total:.1f} ms",
+        ha="left",
+        va="center",
+        fontsize=7.5,
+        fontweight="bold",
+        zorder=4,
+    )
+    return spans
+
+
+def connector(ax: plt.Axes, parent_span: tuple[float, float], child_span: tuple[float, float], y_top: float, y_bottom: float) -> None:
+    (p_left, p_width), (c_left, c_width) = parent_span, child_span
+    verts = [
+        (p_left, y_top),
+        (p_left + p_width, y_top),
+        (c_left + c_width, y_bottom),
+        (c_left, y_bottom),
+    ]
+    ax.add_patch(
+        Polygon(
+            verts,
+            closed=True,
+            facecolor="#888888",
+            alpha=CONNECTOR_ALPHA,
+            edgecolor="none",
+            zorder=0.5,
+        )
+    )
+
+
+def draw_occurrence(ax: plt.Axes, occurrence: dict[str, Any]) -> None:
+    y_a, y_b, y_c = 2.0, 1.0, 0.0
+    total_a = sum(occurrence["request"].values())
+    pad_ms = max(15.0, 0.02 * total_a)
+    spans_a = draw_row(ax, y_a, occurrence["request"], x0=0.0, pad_ms=pad_ms)
+    probe_left, probe_width = next(
+        (left, width) for name, left, width in spans_a if name == "Probe roundtrip"
+    )
+    load_left, load_width = next(
+        (left, width) for name, left, width in spans_a if name == "Tail KV load"
+    )
+
+    spans_b = draw_row(ax, y_b, occurrence["probe"], x0=probe_left, pad_ms=pad_ms)
+    b_total = sum(occurrence["probe"].values())
+    connector(
+        ax,
+        parent_span=(probe_left, probe_width),
+        child_span=(probe_left, b_total),
+        y_top=y_a - BAR_HEIGHT / 2,
+        y_bottom=y_b + BAR_HEIGHT / 2,
+    )
+
+    draw_row(ax, y_c, occurrence["load"], x0=load_left, pad_ms=pad_ms)
+    c_total = sum(occurrence["load"].values())
+    connector(
+        ax,
+        parent_span=(load_left, load_width),
+        child_span=(load_left, c_total),
+        y_top=y_a - BAR_HEIGHT / 2,
+        y_bottom=y_c + BAR_HEIGHT / 2,
+    )
+
+    ax.set_xlim(0, max(total_a, probe_left + b_total) * 1.14)
+    ax.set_ylim(y_c - BAR_HEIGHT, y_a + BAR_HEIGHT)
+    ax.set_yticks([y_a, y_b, y_c])
+    ax.set_yticklabels(
+        [
+            f"(a) Reuse critical path\n{total_a:.0f} ms total",
+            f"(b) Probe host path\n{b_total:.0f} ms",
+            f"(c) Tail-load host path\n{c_total:.0f} ms",
+        ],
+        fontsize=7.5,
+    )
+    ax.tick_params(axis="y", length=0)
+    ax.xaxis.grid(True, color="#E4E4E0", linewidth=0.6, zorder=0)
+    ax.set_axisbelow(True)
+    for spine in ("top", "right", "left"):
+        ax.spines[spine].set_visible(False)
+    ax.set_xlabel("Time since scheduler-lookup start (ms)")
+    ax.text(
+        0.0,
+        1.10,
+        f"{occurrence['req_id']}  ·  skill=\"{occurrence['cache_id']}\"  ·  "
+        f"span=[{occurrence['skill_start']}, {occurrence['skill_end']})",
+        transform=ax.transAxes,
+        fontsize=6.5,
+        color="#666666",
+        family="monospace",
+    )
+
+
+def build_legend(fig: plt.Figure, occurrences: list[dict[str, Any]]) -> None:
+    present: list[str] = []
+    for occurrence in occurrences:
+        for panel in ("request", "probe", "load"):
+            for name in occurrence[panel]:
+                if name not in present and name not in CONTAINER_STAGES:
+                    present.append(name)
+    ordered = [name for name in STAGE_ORDER if name in present]
+    handles = [
+        plt.Rectangle((0, 0), 1, 1, facecolor=STAGE_COLORS[name], edgecolor="white", linewidth=0.8)
+        for name in ordered
+    ]
+    handles.append(
+        plt.Rectangle(
+            (0, 0), 1, 1, facecolor=CONTAINER_FACE, edgecolor=CONTAINER_EDGE, hatch="///", linewidth=0.8
+        )
+    )
+    labels = ordered + ["Decomposed below (see child row)"]
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        ncol=5,
+        frameon=False,
+        fontsize=7.2,
+        columnspacing=1.1,
+        handlelength=1.3,
+        bbox_to_anchor=(0.5, -0.02),
+    )
+
+
+def plot(occurrences: list[dict[str, Any]], output_stem: Path) -> None:
+    apply_publication_style()
+    n = len(occurrences)
+    fig, axes = plt.subplots(
+        n, 1, figsize=(7.2, 3.6 * n + 0.9), squeeze=False, constrained_layout=False
+    )
+    for ax, occurrence in zip(axes[:, 0], occurrences):
+        draw_occurrence(ax, occurrence)
+    build_legend(fig, occurrences)
+    fig.tight_layout(rect=(0.0, 0.10, 1.0, 1.0))
+    output_stem.parent.mkdir(parents=True, exist_ok=True)
+    save_figure(fig, str(output_stem))
+    plt.close(fig)
+
+
+def main() -> None:
+    args = parse_args()
+    profile_jsonl = (
+        args.profile_jsonl.resolve()
+        if args.profile_jsonl is not None
+        else newest_profile(args.run_root).resolve()
+    )
+    records = read_records(profile_jsonl)
+    occurrences = build_occurrences(records, profile_jsonl)
+    figure_dir = args.output_dir / "figures"
+    data_path = args.output_dir / "data" / f"{args.name}.csv"
+    write_long_csv(occurrences, data_path)
+    output_stem = figure_dir / args.name
+    plot(occurrences, output_stem)
+    print(f"profile_jsonl={profile_jsonl}")
+    print(f"occurrences={len(occurrences)}")
+    print(f"data_csv={data_path}")
+    print(f"figure_pdf={output_stem}.pdf")
+    print(f"figure_png={output_stem}.png")
+
+
+if __name__ == "__main__":
+    main()

@@ -90,6 +90,13 @@ class CSKCacheConnectorV1(KVConnectorBase_V1):
     ) -> tuple[set[str] | None, set[str] | None]:
         return self._engine.get_finished(finished_req_ids)
 
+    def request_finished(
+        self,
+        request: "Request",
+        block_ids: list[int],
+    ) -> tuple[bool, dict[str, Any] | None]:
+        return self._engine.request_finished(request, block_ids)
+
     def update_connector_output(self, connector_output) -> None:
         self._engine.update_connector_output(connector_output)
 

@@ -32,6 +32,7 @@ class _Request:
         self.kv_transfer_params = (
             {"cskcache": cskcache} if cskcache is not None else None
         )
+        self.num_computed_tokens = 0
 
 
 def _make_entry(cache_id: str = "skill-demo") -> CSKCacheEntry:
@@ -187,8 +188,37 @@ def test_multiple_reuse_entries_advance_through_adapter_hooks() -> None:
     )
 
 
+def test_request_finished_cleans_scheduler_state() -> None:
+    entry = _make_entry()
+    impl = _make_impl(entry)
+    request = _Request(
+        [1, *entry.token_ids, 99],
+        {
+            "cache_id": entry.cache_id,
+            "target_start": 1,
+            "target_end": 7,
+        },
+    )
+    assert impl.get_num_new_matched_tokens(request, 0) == (0, False)
+    assert request.request_id in impl._engine._reuse_spans
+    assert impl.request_finished(request, []) == (False, None)
+    for mapping in (
+        impl._engine._reuse_spans,
+        impl._engine._pending_reuses,
+        impl._engine._plans,
+        impl._engine._allocated_blocks,
+        impl._engine._probe_states,
+        impl._engine._pending_saves,
+        impl._engine._request_prompt_lengths,
+        impl._engine._request_initial_frontiers,
+    ):
+        assert request.request_id not in mapping
+
+
 if __name__ == "__main__":
     test_explicit_span_reuse_signal_caps_then_loads_mid_prompt()
-    # test_disabled_reuse_signal_does_not_fallback_to_matching()
-    # test_reuse_signal_stale_token_slice_still_builds_plan()
+    test_disabled_reuse_signal_does_not_fallback_to_matching()
+    test_reuse_signal_stale_token_slice_still_builds_plan()
+    test_multiple_reuse_entries_advance_through_adapter_hooks()
+    test_request_finished_cleans_scheduler_state()
     print("CSKCache request reuse signal tests passed")

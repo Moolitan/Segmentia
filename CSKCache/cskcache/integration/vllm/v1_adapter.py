@@ -108,10 +108,23 @@ class CSKCacheConnectorV1Impl:
         self._engine = CSKCacheEngine(config, storage, block_size)
         self._kv_caches_bound = False
         logger.info(
-            "connector initialized role=%s catalog_segments=%d probe_enabled=%s",
+            "connector initialized role=%s catalog_segments=%d "
+            "mode=%s block_size=%d probe_enabled=%s probe_tokens=%d "
+            "anchor_tokens=%d probe_tau=%.6f gate_metric=%s "
+            "capture_only=%s kv_dir=%s disk_dir=%s prefix_caching=%s",
             role,
             len(self._engine.catalog.segments),
+            "probe_gated" if config.probe_enabled else "pure_reuse",
+            block_size,
             config.probe_enabled,
+            config.probe_tokens,
+            config.anchor_tokens,
+            config.probe_tau,
+            config.gate_metric,
+            config.capture_only,
+            config.kv_dir,
+            config.disk_dir,
+            getattr(vllm_config.cache_config, "enable_prefix_caching", None),
         )
 
     # ---- worker: cache registration -------------------------------------
@@ -202,6 +215,16 @@ class CSKCacheConnectorV1Impl:
     ) -> tuple[set[str] | None, set[str] | None]:
         self._engine.on_finished(finished_req_ids)
         return None, None
+
+    def request_finished(
+        self,
+        request: "Request",
+        block_ids: list[int],
+    ) -> tuple[bool, dict[str, Any] | None]:
+        """Clear scheduler-owned request state before vLLM frees its blocks."""
+
+        self._engine.on_finished((request.request_id,))
+        return False, None
 
     # ---- worker side -----------------------------------------------------
 

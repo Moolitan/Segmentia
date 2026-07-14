@@ -1,1 +1,9 @@
-env -u LD_LIBRARY_PATH CSKCACHE_LOG_LEVEL=INFO TASKS=doc_coauthoring_design_doc bash scripts/07_cskcache/run_real_agent.sh --overwrite
+env -u LD_LIBRARY_PATH \
+  CSKCACHE_LOG_LEVEL=INFO \
+  CSKCACHE_PROBE_ENABLED=1 \
+  CSKCACHE_PROBE_TOKENS=4 \
+  CSKCACHE_ANCHOR_TOKENS=32 \
+  CSKCACHE_PROBE_TAU=0.15 \
+  CSKCACHE_GATE_METRIC=max \
+  TASKS=doc_coauthoring_design_doc \
+  bash scripts/07_cskcache/run_real_agent.sh --overwrite

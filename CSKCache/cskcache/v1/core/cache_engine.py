@@ -102,6 +102,8 @@ class CSKCacheEngine:
         self._pending_reuses: dict[str, ReuseSpan] = {}
         self._probe_states: dict[str, CSKProbeState] = {}
         self._pending_saves: dict[str, _PendingSave] = {}
+        self._request_prompt_lengths: dict[str, int] = {}
+        self._request_initial_frontiers: dict[str, int] = {}
         # Worker-side gate accumulation (the star mechanism) stays in the engine.
         self._probe_accumulators: dict[str, CSKProbeAccumulator] = {}
         self._save_accumulators: dict[
@@ -141,7 +143,9 @@ class CSKCacheEngine:
         if self._config.probe_enabled:
             return 0, False
 
-        self._ensure_reuse_spans(req_id, token_ids, kv_transfer_params)
+        self._ensure_reuse_spans(
+            req_id, token_ids, kv_transfer_params, num_computed_tokens
+        )
         reuse = self._next_reuse(req_id, num_computed_tokens)
         self._plans.pop(req_id, None)
         self._pending_reuses.pop(req_id, None)
@@ -151,6 +155,7 @@ class CSKCacheEngine:
             return 0, False
         if reuse.start > num_computed_tokens:
             self._pending_reuses[req_id] = reuse
+            self._log_gap_scheduled(req_id, reuse, num_computed_tokens)
             return 0, False
         if reuse.start < num_computed_tokens:
             return 0, False
@@ -173,7 +178,9 @@ class CSKCacheEngine:
 
         if not self._config.probe_enabled:
             if req_id not in self._reuse_spans:
-                self._ensure_reuse_spans(req_id, token_ids, kv_transfer_params)
+                self._ensure_reuse_spans(
+                    req_id, token_ids, kv_transfer_params, base_num_computed_tokens
+                )
             boundary = self._pending_reuses.get(req_id)
             base = base_num_computed_tokens
             if boundary is None or boundary.start < base:
@@ -182,6 +189,7 @@ class CSKCacheEngine:
                 if boundary is None:
                     return num_new_tokens
                 self._pending_reuses[req_id] = boundary
+                self._log_gap_scheduled(req_id, boundary, base)
             if base < boundary.start:
                 return min(num_new_tokens, boundary.start - base)
             if base < boundary.end:
@@ -202,10 +210,34 @@ class CSKCacheEngine:
             return num_new_tokens
 
         if state.phase == CSKProbePhase.NEED_PROBE:
+            if base == state.start and not state.gap_completed_logged:
+                logger.info(
+                    "gap prefill completed req_id=%s cache_id=%s frontier=%d",
+                    req_id,
+                    state.cache_id,
+                    base,
+                )
+                state.gap_completed_logged = True
             if base >= state.probe_end:
                 state.phase = CSKProbePhase.WAIT_PROBE
                 return 0
             capped = min(num_new_tokens, state.probe_end - base)
+            if not state.probe_scheduled_logged:
+                logger.info(
+                    "probe scheduled req_id=%s cache_id=%s skill=[%d,%d) "
+                    "probe=[%d,%d) probe_tokens=%d anchor_end=%d "
+                    "tokens_after_skill=%d",
+                    req_id,
+                    state.cache_id,
+                    state.start,
+                    state.end,
+                    state.start,
+                    state.probe_end,
+                    state.probe_len,
+                    state.anchor_end,
+                    self._tokens_after_skill(req_id, state.end),
+                )
+                state.probe_scheduled_logged = True
             if base + capped >= state.probe_end:
                 state.pending_capture = "probe"
             return capped
@@ -219,6 +251,17 @@ class CSKCacheEngine:
                 state.load_start = state.anchor_end
                 return 0
             capped = min(num_new_tokens, state.anchor_end - base)
+            if not state.anchor_scheduled_logged:
+                logger.info(
+                    "anchor prefill scheduled req_id=%s cache_id=%s "
+                    "anchor=[%d,%d) anchor_tokens=%d",
+                    req_id,
+                    state.cache_id,
+                    base,
+                    state.anchor_end,
+                    state.anchor_end - base,
+                )
+                state.anchor_scheduled_logged = True
             if base + capped >= state.anchor_end:
                 state.pending_capture = "anchor"
             return capped
@@ -240,6 +283,12 @@ class CSKCacheEngine:
         if boundary is not None and num_computed_tokens == boundary.start:
             self._plans[req_id] = self._make_load_plan(req_id, boundary, token_ids)
             self._log_load_plan(self._plans[req_id], "boundary")
+            logger.info(
+                "gap prefill completed req_id=%s cache_id=%s frontier=%d",
+                req_id,
+                boundary.cache_id,
+                num_computed_tokens,
+            )
             self._pending_reuses.pop(req_id, None)
             return boundary.length
 
@@ -331,13 +380,17 @@ class CSKCacheEngine:
                 requests.append(CSKReqMeta(plan=plan, block_ids=blocks))
                 logger.info(
                     "load dispatched req_id=%s cache_id=%s target=[%d,%d) "
-                    "tokens=%d blocks=%d",
+                    "source_offset=%d tokens=%d blocks=%d "
+                    "frontier_after_load=%d tokens_after_skill=%d",
                     req_id,
                     plan.cache_id,
                     plan.start,
                     plan.end,
+                    plan.source_offset,
                     plan.length,
                     len(blocks[0]),
+                    plan.end,
+                    self._tokens_after_skill(req_id, self._skill_end(req_id, plan)),
                 )
                 state = self._probe_states.get(req_id)
                 if state is not None:
@@ -397,6 +450,20 @@ class CSKCacheEngine:
                 state.pending_capture = None
                 state.phase = CSKProbePhase.NEED_LOAD
                 state.load_start = state.anchor_end
+                logger.info(
+                    "anchor completed req_id=%s cache_id=%s frontier=%d "
+                    "recomputed_skill_tokens=%d load_target=[%d,%d) "
+                    "source_offset=%d load_tokens=%d tokens_after_skill=%d",
+                    req_id,
+                    state.cache_id,
+                    state.anchor_end,
+                    state.anchor_end - state.start,
+                    state.anchor_end,
+                    state.end,
+                    state.anchor_end - state.start,
+                    state.end - state.anchor_end,
+                    self._tokens_after_skill(req_id, state.end),
+                )
         return requests, probes, saves
 
     def on_worker_decisions(self, decisions: Iterable[CSKProbeDecision]) -> None:
@@ -414,7 +481,9 @@ class CSKCacheEngine:
                 state.phase = CSKProbePhase.NEED_ANCHOR
             logger.info(
                 "probe decision req_id=%s cache_id=%s passed=%s "
-                "gate=%.6f tau=%.6f metric=%s layers=%d",
+                "gate=%.6f tau=%.6f metric=%s layers=%d "
+                "k_mean=%.6f v_mean=%.6f kv_mean=%.6f "
+                "next_phase=%s load_start=%s",
                 decision.req_id,
                 decision.cache_id,
                 decision.passed,
@@ -422,17 +491,31 @@ class CSKCacheEngine:
                 decision.tau,
                 decision.metrics.gate_metric,
                 decision.metrics.num_layers,
+                decision.metrics.k_mean,
+                decision.metrics.v_mean,
+                decision.metrics.kv_mean,
+                state.phase.value,
+                state.load_start,
             )
 
     def on_finished(self, req_ids: Iterable[str]) -> None:
         for req_id in req_ids:
             spans = self._reuse_spans.get(req_id, ())
-            if spans:
-                logger.info(
-                    "request finished req_id=%s reuse_entries=%d",
-                    req_id,
-                    len(spans),
+            state = self._probe_states.get(req_id)
+            final_phase = state.phase.value if state is not None else "none"
+            had_state = any(
+                req_id in mapping
+                for mapping in (
+                    self._probe_states,
+                    self._plans,
+                    self._allocated_blocks,
+                    self._probe_accumulators,
+                    self._reuse_spans,
+                    self._pending_reuses,
+                    self._pending_saves,
+                    self._save_accumulators,
                 )
+            )
             self._probe_states.pop(req_id, None)
             self._plans.pop(req_id, None)
             self._allocated_blocks.pop(req_id, None)
@@ -441,11 +524,38 @@ class CSKCacheEngine:
             self._pending_reuses.pop(req_id, None)
             self._pending_saves.pop(req_id, None)
             self._save_accumulators.pop(req_id, None)
+            self._request_prompt_lengths.pop(req_id, None)
+            self._request_initial_frontiers.pop(req_id, None)
+            if had_state:
+                remaining = sum(
+                    req_id in mapping
+                    for mapping in (
+                        self._probe_states,
+                        self._plans,
+                        self._allocated_blocks,
+                        self._probe_accumulators,
+                        self._reuse_spans,
+                        self._pending_reuses,
+                        self._pending_saves,
+                        self._save_accumulators,
+                        self._request_prompt_lengths,
+                        self._request_initial_frontiers,
+                    )
+                )
+                logger.info(
+                    "request finished req_id=%s reuse_entries=%d "
+                    "final_probe_phase=%s scheduler_state_remaining=%d",
+                    req_id,
+                    len(spans),
+                    final_phase,
+                    remaining,
+                )
 
     # ---- worker side -----------------------------------------------------
 
     def register_kv_caches(self, kv_caches: dict[str, torch.Tensor]) -> None:
         self._gpu.bind_kv_caches(kv_caches)
+        logger.info("worker KV caches bound available_layers=%d", len(kv_caches))
 
     def register_model(self, model: object) -> None:
         """Register model state used to correct keys across positions."""
@@ -484,20 +594,36 @@ class CSKCacheEngine:
             if not request.block_ids or request.block_ids[0] is None:
                 raise RuntimeError(f"CSKCache load plan for {plan.req_id} has no blocks")
             started = time.perf_counter()
-            self._gpu.to_gpu(entry, plan, request.block_ids[0])
+            expected_layers, scattered_layers, skipped_layers = self._gpu.to_gpu(
+                entry, plan, request.block_ids[0]
+            )
+            if scattered_layers != expected_layers or skipped_layers != 0:
+                raise RuntimeError(
+                    "CSKCache KV load layer accounting mismatch: "
+                    f"req_id={plan.req_id} cache_id={plan.cache_id} "
+                    f"expected_layers={expected_layers} "
+                    f"scattered_layers={scattered_layers} "
+                    f"skipped_layers={skipped_layers}"
+                )
             elapsed_ms = (time.perf_counter() - started) * 1000
             source_start = entry.source_start + plan.source_offset
             source_end = source_start + plan.length
             logger.info(
                 "KV load completed req_id=%s cache_id=%s source=[%d,%d) "
-                "target=[%d,%d) tokens=%d elapsed_ms=%.3f",
+                "target=[%d,%d) rope_delta=%d tokens=%d "
+                "expected_layers=%d scattered_layers=%d skipped_layers=%d "
+                "elapsed_ms=%.3f",
                 plan.req_id,
                 plan.cache_id,
                 source_start,
                 source_end,
                 plan.start,
                 plan.end,
+                plan.start - source_start,
                 plan.length,
+                expected_layers,
+                scattered_layers,
+                skipped_layers,
                 elapsed_ms,
             )
 
@@ -617,9 +743,40 @@ class CSKCacheEngine:
         decisions: list[CSKProbeDecision] = []
         for req_id, accumulator in list(self._probe_accumulators.items()):
             try:
+                entry = self._storage.get(accumulator.cache_id)
+                if entry is None:
+                    raise RuntimeError(
+                        f"CSK probe cache_id={accumulator.cache_id} is not loaded"
+                    )
+                expected = set(entry.kv_by_layer)
+                captured_names = accumulator.layer_names
+                captured = set(captured_names)
+                missing = sorted(expected - captured)
+                unexpected = sorted(captured - expected)
+                duplicates = len(captured_names) - len(captured)
+                if duplicates or missing or unexpected:
+                    missing_preview = ",".join(missing[:8])
+                    unexpected_preview = ",".join(unexpected[:8])
+                    raise RuntimeError(
+                        "CSK probe layer coverage mismatch: "
+                        f"req_id={req_id} expected_layers={len(expected)} "
+                        f"captured_layers={len(captured_names)} "
+                        f"missing_layers={len(missing)} "
+                        f"unexpected_layers={len(unexpected)} "
+                        f"duplicate_layers={duplicates} "
+                        f"missing=[{missing_preview}] "
+                        f"unexpected=[{unexpected_preview}]"
+                    )
+                logger.info(
+                    "probe captured req_id=%s cache_id=%s expected_layers=%d "
+                    "captured_layers=%d missing_layers=0 "
+                    "unexpected_layers=0 duplicate_layers=0",
+                    req_id,
+                    accumulator.cache_id,
+                    len(expected),
+                    len(captured_names),
+                )
                 decisions.append(accumulator.decide())
-            except RuntimeError as exc:
-                logger.warning("probe decision skipped req_id=%s error=%s", req_id, exc)
             finally:
                 self._probe_accumulators.pop(req_id, None)
         return decisions
@@ -631,6 +788,7 @@ class CSKCacheEngine:
         req_id: str,
         token_ids: list[int],
         kv_transfer_params: Mapping | None,
+        num_computed_tokens: int | None = None,
     ) -> tuple[ReuseSpan, ...]:
         spans = self._reuse_spans.get(req_id)
         if spans is not None:
@@ -638,16 +796,41 @@ class CSKCacheEngine:
         spans = self._resolve_reuses(token_ids, kv_transfer_params)
         self._reuse_spans[req_id] = spans
         if spans:
+            frontier = 0 if num_computed_tokens is None else num_computed_tokens
+            self._request_prompt_lengths[req_id] = len(token_ids)
+            self._request_initial_frontiers[req_id] = frontier
             rendered = ", ".join(
                 f"{span.cache_id}:[{span.start},{span.end})" for span in spans
             )
             logger.info(
-                "reuse signal accepted req_id=%s prompt_tokens=%d entries=%d [%s]",
+                "reuse signal accepted req_id=%s prompt_tokens=%d "
+                "prefix_frontier=%d entries=%d [%s]",
                 req_id,
                 len(token_ids),
+                frontier,
                 len(spans),
                 rendered,
             )
+            previous_end = frontier
+            for index, span in enumerate(spans, start=1):
+                logger.info(
+                    "reuse entry layout req_id=%s entry=%d/%d cache_id=%s "
+                    "target=[%d,%d) skill_tokens=%d prefix_frontier=%d "
+                    "gap_from_frontier=%d gap_from_previous_entry=%d "
+                    "tokens_after_skill=%d",
+                    req_id,
+                    index,
+                    len(spans),
+                    span.cache_id,
+                    span.start,
+                    span.end,
+                    span.length,
+                    frontier,
+                    span.start - frontier,
+                    span.start - previous_end,
+                    len(token_ids) - span.end,
+                )
+                previous_end = span.end
         return spans
 
     def _parse_save_signal(
@@ -871,7 +1054,9 @@ class CSKCacheEngine:
         )
         logger.info(
             "reuse boundary selected req_id=%s cache_id=%s entry=%d/%d trigger=%s "
-            "target=[%d,%d) source_offset=%d tokens=%d",
+            "target=[%d,%d) source_offset=%d tokens=%d "
+            "recomputed_skill_tokens=%d frontier_after_load=%d "
+            "tokens_after_skill=%d",
             plan.req_id,
             plan.cache_id,
             entry_index,
@@ -881,6 +1066,9 @@ class CSKCacheEngine:
             plan.end,
             plan.source_offset,
             plan.length,
+            plan.start - (spans[entry_index - 1].start if entry_index else plan.start),
+            plan.end,
+            self._tokens_after_skill(plan.req_id, self._skill_end(plan.req_id, plan)),
         )
 
     def _get_or_create_probe_state(
@@ -895,7 +1083,9 @@ class CSKCacheEngine:
             return state
 
         if req_id not in self._reuse_spans:
-            self._ensure_reuse_spans(req_id, token_ids, kv_transfer_params)
+            self._ensure_reuse_spans(
+                req_id, token_ids, kv_transfer_params, num_computed_tokens
+            )
         reuse = self._next_reuse(req_id, num_computed_tokens)
         if reuse is None:
             return None
@@ -912,4 +1102,34 @@ class CSKCacheEngine:
             gate_metric=self._config.gate_metric,
         )
         self._probe_states[req_id] = state
+        self._log_gap_scheduled(req_id, reuse, num_computed_tokens)
         return state
+
+    def _log_gap_scheduled(
+        self,
+        req_id: str,
+        reuse: ReuseSpan,
+        frontier: int,
+    ) -> None:
+        gap = max(reuse.start - frontier, 0)
+        if gap <= 0:
+            return
+        logger.info(
+            "gap prefill scheduled req_id=%s cache_id=%s frontier=[%d,%d) "
+            "gap_tokens=%d next_skill_start=%d",
+            req_id,
+            reuse.cache_id,
+            frontier,
+            reuse.start,
+            gap,
+            reuse.start,
+        )
+
+    def _tokens_after_skill(self, req_id: str, skill_end: int) -> int:
+        return max(self._request_prompt_lengths.get(req_id, skill_end) - skill_end, 0)
+
+    def _skill_end(self, req_id: str, plan: CSKLoadPlan) -> int:
+        for span in self._reuse_spans.get(req_id, ()):
+            if span.cache_id == plan.cache_id and span.start <= plan.start < span.end:
+                return span.end
+        return plan.end

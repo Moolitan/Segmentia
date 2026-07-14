@@ -33,8 +33,8 @@ class KVConnectorInterface(ABC):
         entry: CSKCacheEntry,
         plan: CSKLoadPlan,
         block_ids: list[int],
-    ) -> None:
-        """Scatter every layer of a reuse plan into the paged cache."""
+    ) -> tuple[int, int, int]:
+        """Scatter every entry layer and return expected/scattered/skipped counts."""
 
     @abstractmethod
     def reuse_slice(
@@ -118,11 +118,26 @@ class VLLMPagedGPUConnector(KVConnectorInterface):
         entry: CSKCacheEntry,
         plan: CSKLoadPlan,
         block_ids: list[int],
-    ) -> None:
+    ) -> tuple[int, int, int]:
+        expected_layers = set(entry.kv_by_layer)
+        available_layers = set(self._kv_caches)
+        missing_layers = sorted(expected_layers - available_layers)
+        if not expected_layers:
+            raise RuntimeError(
+                f"CSKCache entry {entry.cache_id} contains no KV layers"
+            )
+        if missing_layers:
+            preview = ",".join(missing_layers[:8])
+            raise RuntimeError(
+                "CSKCache KV load rejected before scatter: "
+                f"cache_id={entry.cache_id} expected_layers={len(expected_layers)} "
+                f"available_layers={len(available_layers)} "
+                f"missing_layers={len(missing_layers)} missing=[{preview}]"
+            )
+
+        scattered_layers = 0
         for layer_name in entry.kv_by_layer:
-            target_cache = self._kv_caches.get(layer_name)
-            if target_cache is None:
-                continue
+            target_cache = self._kv_caches[layer_name]
             key, value = self.reuse_slice(
                 entry,
                 layer_name=layer_name,
@@ -140,3 +155,5 @@ class VLLMPagedGPUConnector(KVConnectorInterface):
                 key,
                 value,
             )
+            scattered_layers += 1
+        return len(expected_layers), scattered_layers, 0

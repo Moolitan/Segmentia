@@ -93,9 +93,23 @@ already written remain available when a later tool or model request fails.
 
 CSKCache uses its own stderr logger, following LMCache's process-visible logging
 pattern. Scheduler and worker state transitions appear in `vllm_<task>.log`
-with a `CSKCache` prefix: connector initialization, accepted ordered entries,
-selected reuse boundaries, dispatched load plans, completed KV loads and their
-elapsed time, saves, probe decisions, and request cleanup. Set
+with a `CSKCache` prefix. `scripts/07_cskcache/run.sh` enables selective
+recomputation (`probe_enabled=1`) and logs the following correctness evidence:
+
+- startup mode, block size, probe/anchor lengths, threshold, metric, storage
+  paths, and prefix-cache setting;
+- prompt length and the vLLM prefix frontier when the ordered reuse entries are
+  accepted;
+- each skill's target span, length, gap from the frontier/previous skill, and
+  number of prompt tokens after the skill;
+- gap prefill, probe recomputation, gate decision, optional anchor
+  recomputation, and remaining tail-load boundaries;
+- offline source span, online target span, RoPE position delta, and
+  expected/scattered/skipped layer counts for every completed KV load;
+- request cleanup with `scheduler_state_remaining=0`.
+
+Missing KV layers, incomplete/duplicate probe-layer coverage, or nonzero
+skipped-layer accounting fail the request instead of silently continuing. Set
 `CSKCACHE_LOG_LEVEL=DEBUG|INFO|WARNING|ERROR|CRITICAL` before running the wrapper;
 the default is `INFO`. Polling paths do not emit a line unless the request moves
 to a new state.
@@ -118,6 +132,15 @@ cd /home/wsh/openhands_code_research
 conda activate opencode
 bash scripts/07_cskcache/run_real_agent.sh
 ```
+
+For the current single-task probe-gated correctness run, use:
+
+```bash
+bash scripts/07_cskcache/run.sh
+```
+
+`run_real_agent.sh` remains environment-configurable; `run.sh` pins
+`probe_tokens=4`, `anchor_tokens=32`, `probe_tau=0.15`, and `gate_metric=max`.
 
 Completed task outputs are skipped. A failed task must restart from its first
 turn because both Conversation and prefix-cache state are task-local. Replace a

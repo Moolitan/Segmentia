@@ -84,6 +84,10 @@ class CSKProbeAccumulator:
         self.gate_metric = gate_metric
         self._layers: list[CSKLayerResidual] = []
 
+    @property
+    def layer_names(self) -> tuple[str, ...]:
+        return tuple(item.layer_name for item in self._layers)
+
     def add_layer(
         self,
         layer_name: str,

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sys
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 import torch
 
@@ -18,6 +20,16 @@ BLOCK_SIZE = 4
 NUM_BLOCKS = 2
 HEADS = 2
 DIM = 3
+
+
+@contextmanager
+def _raises(error_type: type[Exception], message: str) -> Iterator[None]:
+    try:
+        yield
+    except error_type as exc:
+        assert message in str(exc)
+    else:
+        raise AssertionError(f"Expected {error_type.__name__}: {message}")
 
 
 class _RecordingConnector(VLLMPagedGPUConnector):
@@ -62,7 +74,7 @@ def test_connector_scatter_gather_roundtrip() -> None:
         token_ids=tuple(entry.token_ids),
         source_offset=0,
     )
-    conn.to_gpu(entry, plan, block_ids=[0])
+    assert conn.to_gpu(entry, plan, block_ids=[0]) == (1, 1, 0)
     gk, gv = conn.gather(cache, [0], 0, 4)
     ek, ev = entry.kv_by_layer["layer0"]
     assert torch.equal(gk, ek) and torch.equal(gv, ev)
@@ -120,6 +132,26 @@ def test_engine_kv_only_load_preserves_registered_model() -> None:
     eng.load([CSKReqMeta(plan=plan, block_ids=([0],))], model=None)
 
     assert conn.models == [model]
+
+
+def test_connector_rejects_missing_layer_before_scatter() -> None:
+    conn = VLLMPagedGPUConnector(BLOCK_SIZE)
+    cache = _packed_cache()
+    conn.bind_kv_caches({"different-layer": cache})
+    entry = _entry(4)
+    plan = CSKLoadPlan(
+        req_id="r-missing",
+        cache_id="skill",
+        mode=CSKCacheMode.REUSE,
+        start=0,
+        end=4,
+        token_ids=tuple(entry.token_ids),
+        source_offset=0,
+    )
+
+    with _raises(RuntimeError, "missing_layers=1"):
+        conn.to_gpu(entry, plan, block_ids=[0])
+    assert torch.count_nonzero(cache) == 0
 
 
 if __name__ == "__main__":

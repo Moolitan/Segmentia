@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT))
 from cskcache.profiling import ProfileConfig, ProfileReporter, Profiler
 from cskcache.v1.core.cache_engine import CSKCacheEngine
 from cskcache.v1.core.config import CSKCacheConfig
+from cskcache.v1.compute.gate import CSKProbeDecision, CSKProbeMetrics
 from cskcache.v1.kv_transfer.gpu_connector import VLLMPagedGPUConnector
 from cskcache.v1.metadata import (
     CSKCacheEntry,
@@ -313,6 +314,66 @@ def test_engine_emits_direct_reuse_timeline() -> None:
         "load_dispatched",
         "request_finished",
     ]
+
+
+def test_anchor_completion_is_marked_after_anchor_forward_boundary() -> None:
+    reporter = _RecordingReporter()
+    profiler = Profiler(ProfileConfig(enabled=True), reporter=reporter)
+    storage = StorageManager()
+    key = torch.zeros(6, 1, 2)
+    storage.put(
+        CSKCacheEntry(
+            cache_id="skill",
+            source_start=0,
+            source_end=6,
+            token_ids=[10, 11, 12, 13, 14, 15],
+            kv_by_layer={"layer0": (key, key + 1)},
+        )
+    )
+    engine = CSKCacheEngine(
+        CSKCacheConfig(probe_enabled=True, probe_tokens=2, anchor_tokens=4),
+        storage,
+        block_size=4,
+        profiler=profiler,
+    )
+    prompt = [1, 2, 10, 11, 12, 13, 14, 15]
+    signal = {
+        "cskcache": {
+            "cache_id": "skill",
+            "target_start": 2,
+            "target_end": 8,
+        }
+    }
+
+    assert engine.cap_prefill_before_reuse("r-anchor", prompt, 0, 8, signal) == 2
+    assert engine.cap_prefill_before_reuse("r-anchor", prompt, 2, 8, signal) == 2
+    engine.update_reuse_after_alloc("r-anchor", ([0],), 0)
+    engine.build_meta({"r-anchor": 2})
+    metrics = CSKProbeMetrics(
+        1, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, "max", ()
+    )
+    engine.on_worker_decisions(
+        [CSKProbeDecision("r-anchor", "skill", False, 0.15, metrics)]
+    )
+    assert engine.cap_prefill_before_reuse("r-anchor", prompt, 4, 8, signal) == 2
+    engine.update_reuse_after_alloc("r-anchor", ([0],), 0)
+    engine.build_meta({"r-anchor": 2})
+    profiler.mark_timeline(
+        req_id="r-anchor",
+        cache_id="skill",
+        target_start=2,
+        event="anchor_metadata_built",
+    )
+
+    assert engine.get_boundary_reuse_load_tokens("r-anchor", prompt, 6) == 2
+    engine.on_finished(["r-anchor"])
+
+    timeline = next(
+        record for record in reporter.records if record["kind"] == "request_timeline"
+    )
+    events = [event["event"] for event in timeline["events"]]
+    assert events.index("anchor_metadata_built") < events.index("anchor_completed")
+    assert events.index("anchor_completed") < events.index("load_planned")
 
 
 if __name__ == "__main__":

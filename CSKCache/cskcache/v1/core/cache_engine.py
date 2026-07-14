@@ -330,6 +330,26 @@ class CSKCacheEngine:
         load_start = state.load_start
         if load_start is None or num_computed_tokens != load_start:
             return 0
+        logger.info(
+            "anchor completed req_id=%s cache_id=%s frontier=%d "
+            "recomputed_skill_tokens=%d load_target=[%d,%d) "
+            "source_offset=%d load_tokens=%d tokens_after_skill=%d",
+            req_id,
+            state.cache_id,
+            load_start,
+            load_start - state.start,
+            load_start,
+            state.end,
+            load_start - state.start,
+            state.end - load_start,
+            self._tokens_after_skill(req_id, state.end),
+        )
+        self._profiler.mark_timeline(
+            req_id=req_id,
+            cache_id=state.cache_id,
+            target_start=state.start,
+            event="anchor_completed",
+        )
         length = state.end - load_start
         if length <= 0:
             state.phase = CSKProbePhase.DONE
@@ -496,26 +516,6 @@ class CSKCacheEngine:
                 state.pending_capture = None
                 state.phase = CSKProbePhase.NEED_LOAD
                 state.load_start = state.anchor_end
-                logger.info(
-                    "anchor completed req_id=%s cache_id=%s frontier=%d "
-                    "recomputed_skill_tokens=%d load_target=[%d,%d) "
-                    "source_offset=%d load_tokens=%d tokens_after_skill=%d",
-                    req_id,
-                    state.cache_id,
-                    state.anchor_end,
-                    state.anchor_end - state.start,
-                    state.anchor_end,
-                    state.end,
-                    state.anchor_end - state.start,
-                    state.end - state.anchor_end,
-                    self._tokens_after_skill(req_id, state.end),
-                )
-                self._profiler.mark_timeline(
-                    req_id=req_id,
-                    cache_id=state.cache_id,
-                    target_start=state.start,
-                    event="anchor_completed",
-                )
         return requests, probes, saves
 
     def on_worker_decisions(self, decisions: Iterable[CSKProbeDecision]) -> None:

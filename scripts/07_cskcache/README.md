@@ -115,8 +115,9 @@ the default is `INFO`. Polling paths do not emit a line unless the request moves
 to a new state.
 
 Performance profiling is independent of the correctness logs and is disabled
-by default. To enable one compact `PROFILE` summary per scheduler lookup and
-worker load, plus process-isolated JSONL records under the run directory:
+by default. To enable compact `PROFILE` summaries for scheduler lookup, worker
+load, worker probe capture, and request timelines, plus process-isolated JSONL
+records under the run directory:
 
 ```bash
 CSKCACHE_PROFILE_ENABLED=1 bash scripts/07_cskcache/run.sh
@@ -125,10 +126,10 @@ CSKCACHE_PROFILE_ENABLED=1 bash scripts/07_cskcache/run.sh
 Unless `CSKCACHE_PROFILE_JSONL` is explicitly set, `run_real_agent.sh` chooses
 `<run_dir>/profile_<task>.jsonl`; the profiler adds `.pid<PID>` before the
 suffix. Records distinguish CPU and disk hits and contain `storage_get`,
-optional `disk_deserialize`, `prepare_reuse_slice`, `scatter_span`, total time,
-bytes, and effective bandwidth. `prepare_reuse_slice` currently combines H2D
-and RoPE, while `scatter_span` combines slot mapping and scatter; these stages
-will only be subdivided if profiling shows that boundary is dominant.
+optional `disk_deserialize`, separate `key_h2d`, `value_h2d`, `rope`, and
+`scatter_span` stages, total time, bytes, and effective bandwidth. Probe records
+add `probe_gather`, `residual`, layer coverage, and tier access counts. Timeline
+records preserve ordered gap/probe/anchor/load events and their phase durations.
 
 The wrapper restarts vLLM at the `(mode=cskcache, task)` boundary. It enables
 prefix caching, runs all benchmark turns for that task in one Conversation, and

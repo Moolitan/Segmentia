@@ -48,6 +48,7 @@ class KVConnectorInterface(ABC):
         length: int,
         target_start: int,
         device: torch.device | str,
+        trace: LoadTrace | NullLoadTrace | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Return the cached K/V slice, RoPE-corrected to the target position."""
 
@@ -58,6 +59,7 @@ class KVConnectorInterface(ABC):
         block_ids: list[int],
         start: int,
         end: int,
+        trace: LoadTrace | NullLoadTrace | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Read the K/V a forward just wrote for one layer's span."""
 
@@ -95,6 +97,7 @@ class VLLMPagedGPUConnector(KVConnectorInterface):
         length: int,
         target_start: int,
         device: torch.device | str,
+        trace: LoadTrace | NullLoadTrace | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         return prepare_reuse_slice(
             entry,
@@ -104,6 +107,7 @@ class VLLMPagedGPUConnector(KVConnectorInterface):
             target_start=target_start,
             rope=self._rope,
             device=device,
+            trace=trace,
         )
 
     def gather(
@@ -112,8 +116,11 @@ class VLLMPagedGPUConnector(KVConnectorInterface):
         block_ids: list[int],
         start: int,
         end: int,
+        trace: LoadTrace | NullLoadTrace | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        return gather_span(kv_layer, block_ids, start, end, self._block_size)
+        stage_trace = trace if trace is not None else NullLoadTrace()
+        with stage_trace.cuda_stage("probe_gather", kv_layer.device):
+            return gather_span(kv_layer, block_ids, start, end, self._block_size)
 
     def to_gpu(
         self,
@@ -142,15 +149,15 @@ class VLLMPagedGPUConnector(KVConnectorInterface):
         stage_trace = trace if trace is not None else NullLoadTrace()
         for layer_name in entry.kv_by_layer:
             target_cache = self._kv_caches[layer_name]
-            with stage_trace.cuda_stage("prepare_reuse_slice", target_cache.device):
-                key, value = self.reuse_slice(
-                    entry,
-                    layer_name=layer_name,
-                    source_offset=plan.source_offset,
-                    length=plan.length,
-                    target_start=plan.start,
-                    device=target_cache.device,
-                )
+            key, value = self.reuse_slice(
+                entry,
+                layer_name=layer_name,
+                source_offset=plan.source_offset,
+                length=plan.length,
+                target_start=plan.start,
+                device=target_cache.device,
+                trace=stage_trace,
+            )
             with stage_trace.cuda_stage("scatter_span", target_cache.device):
                 scatter_span(
                     target_cache,

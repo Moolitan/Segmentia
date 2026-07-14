@@ -83,20 +83,20 @@ class StorageManager:
             entry = self._cpu.get(cache_id, trace=active_trace)
             if entry is not None:
                 if active_trace is not None:
-                    active_trace.set(source_tier="cpu")
+                    active_trace.record_tier("cpu")
                 self._policy.record_access(cache_id)
                 return entry
             if self._disk is None:
                 if active_trace is not None:
-                    active_trace.set(source_tier="miss")
+                    active_trace.record_tier("miss")
                 return None
             entry = self._disk.get(cache_id, trace=active_trace)
             if entry is None:
                 if active_trace is not None:
-                    active_trace.set(source_tier="miss")
+                    active_trace.record_tier("miss")
                 return None
             if active_trace is not None:
-                active_trace.set(source_tier="disk")
+                active_trace.record_tier("disk")
             # Disk hit: promote into the hot tier so repeated reuse stays fast.
             self._cpu.put(entry)
             self._policy.record_access(cache_id)

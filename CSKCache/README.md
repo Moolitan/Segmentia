@@ -176,14 +176,22 @@ aggregation, log formatting, and JSONL output. Scheduler lookup and worker load
 are deliberately separate records because they execute in different connector
 roles; correlate them using request ID, cache ID, and target span.
 
-The first profiling version reports:
+Worker load records report:
 
 ```text
 storage_get
 disk_deserialize       # disk hits only
-prepare_reuse_slice    # CPU-to-device transfer plus RoPE correction
+key_h2d
+value_h2d
+rope                   # emitted when source and target positions differ
 scatter_span           # slot construction plus K/V scatter
 ```
+
+`worker_probe_capture` aggregates all probe layers into one record and adds
+`probe_gather`, `residual`, expected/captured layer counts, and per-tier access
+counts. `request_timeline` records ordered gap, probe, anchor, and load
+milestones and summarizes their scheduler-side durations. Wall-clock
+nanoseconds on every record allow scheduler and worker records to be aligned.
 
 CUDA stages use deferred CUDA events and synchronize once when a load trace
 finishes. The normal profiling-disabled path does not create events or perform

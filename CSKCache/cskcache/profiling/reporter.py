@@ -37,9 +37,20 @@ class ProfileReporter:
         stage_text = " ".join(
             f"{name}_ms={float(value):.3f}" for name, value in sorted(stages.items())
         )
+        tier_counts = json.dumps(
+            record.get("tier_access_counts", {}),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        completed_layers = record.get(
+            "captured_layers", record.get("scattered_layers")
+        )
+        expected_layers = record.get("expected_layers")
+        skipped_layers = record.get("skipped_layers")
         logger.info(
             "PROFILE kind=%s trace_id=%s req_id=%s cache_id=%s "
-            "reuse_index=%s source_tier=%s target=[%s,%s) tokens=%s bytes=%s "
+            "reuse_index=%s source_tier=%s tier_accesses=%s "
+            "target=[%s,%s) tokens=%s bytes=%s layers=%s/%s skipped=%s "
             "total_ms=%.3f effective_gbps=%.3f status=%s %s",
             record.get("kind"),
             record.get("trace_id"),
@@ -47,10 +58,14 @@ class ProfileReporter:
             record.get("cache_id"),
             record.get("reuse_index"),
             record.get("source_tier", "unknown"),
+            tier_counts,
             record.get("target_start"),
             record.get("target_end"),
             record.get("tokens"),
             record.get("bytes", 0),
+            completed_layers if completed_layers is not None else "-",
+            expected_layers if expected_layers is not None else "-",
+            skipped_layers if skipped_layers is not None else "-",
             float(record.get("total_ms", 0.0)),
             float(record.get("effective_gbps", 0.0)),
             record.get("status"),

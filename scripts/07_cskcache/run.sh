@@ -5,5 +5,6 @@ env -u LD_LIBRARY_PATH \
   CSKCACHE_ANCHOR_TOKENS=32 \
   CSKCACHE_PROBE_TAU=0.15 \
   CSKCACHE_GATE_METRIC=max \
+  CSKCACHE_PROFILE_ENABLED=1 \
   TASKS=doc_coauthoring_design_doc \
   bash scripts/07_cskcache/run_real_agent.sh --overwrite

@@ -186,3 +186,19 @@ vLLM:
 ```bash
 bash scripts/07_cskcache/run_real_agent.sh --dry-run
 ```
+
+## H2D microbenchmark
+
+After real-agent profiling, use the standalone matrix to diagnose profiling
+overhead, pageable versus pinned CPU allocations, and zero versus nonzero
+position shift without running an agent or vLLM server:
+
+```bash
+bash scripts/07_cskcache/h2d_microbenchmark/run.sh
+```
+
+The eight conditions run in independent Python processes and write raw and
+summary artifacts under external storage. See
+`scripts/07_cskcache/h2d_microbenchmark/README.md` for timing, correctness,
+resume, and output semantics. Pinned allocation is only a diagnostic condition;
+the benchmark does not introduce a production storage tier.

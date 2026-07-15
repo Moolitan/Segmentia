@@ -6,13 +6,14 @@
 
 当前主线围绕 Segmentia 实验展开，主要涉及以下路径：
 
-- `scripts/`：实验脚本、评估脚本、绘图脚本，以及 vLLM 启停脚本。
+- `scripts/`：实验计划表、实验脚本、评估脚本、绘图脚本，以及 vLLM 启停脚本。Segmentia 06 脚本必须按研究内容组织在 `scripts/06_context_free_segment_cache/` 的子目录中。
 - `results/`：实验输出、decode 结果、评估指标、图表和分析总结。
 - `src/traces/`：实验使用的 trace、system prompt 和 tools 配置。trace 来自 Claude 实际使用 skills 的过程追踪，用来避免重新运行 agent 时引入额外系统问题，从而提高实验效率。
 - `scripts/vllm_start.sh`、`scripts/vllm_stop.sh`：启动和停止实验用 vLLM server。
 - `/home/wsh/vllm`：当前使用的本地 vLLM 修改版，负责 `context_segment_cache` 的实际注入、保存、RoPE 修正和 prefix-cache 行为。
 
 除非用户明确要求，不要把未讨论、未使用的旧目录写进本文档，也不要主动整理这些目录。
+
 
 ## 2. 环境与运行前提
 
@@ -51,6 +52,59 @@ embedding model path: /mnt/Large_Language_Model_Lab_1/模型/rag_models/BAAI-bge
 - agent 负责写好代码、shell 脚本、结果目录结构和文档。
 - 默认由用户亲自启动实验运行；agent 不主动启动长时间 vLLM 实验、不主动跑 overnight / diagnostic 全量实验。
 - agent 可以做轻量静态验证，例如 `python -m py_compile`、`bash -n`、路径解析检查；这些验证不得启动 vLLM decode 实验。
+
+### 2.1 Segmentia replay 与 prefix-cache 隔离边界
+
+Segmentia 的 decode / diagnostic / attention probe replay 不是简单把所有 selected cases 放到同一个 vLLM server 里跑。凡是实验需要复现 trace 中多轮 skill 复用状态，必须遵守以下服务生命周期：
+
+```text
+for mode in [recompute, rope, ...]:
+  for task in task_order:
+    restart vLLM
+    clear prefix cache
+    run this task's cases in invocation_index order
+```
+
+也就是说，vLLM server 生命周期和 prefix-cache 隔离边界是：
+
+```text
+(mode, task)
+```
+
+不是：
+
+```text
+mode
+```
+
+更不是把所有 task 的 selected cases 混在同一个 server 生命周期里。不同 mode 必须重启；不同 task 也必须重启。task 内部必须按 trace 的真实轮次顺序 replay，通常按 `invocation_index` 从小到大排序。这样 prefix cache 只保留同一个 task 内前面轮次自然产生的前缀 KV，不会跨 task 污染。
+
+`rope` mode 下的 skill KV 复用语义必须特别注意：
+
+- 当前轮次只对当前 case 的 `target_start` / `target_end` 显式注入一次。
+- 如果后续轮次的 prompt 共同前缀包含前面轮次的 skill span，后续轮次应通过 vLLM prefix cache 复用前面轮次已经注入后的 KV。
+- 后续轮次不能把前面轮次的历史 skill span 再作为当前 `targets` 显式注入一遍。
+- 当前轮次自己的 skill span 仍然通过 `context_segment_cache.targets` 注入，`mode=rope` 时只对 key 做 RoPE position correction，value 直接复用 offline context-free skill value。
+
+因此，正确状态推进是：
+
+```text
+task 内第 10 次 invocation:
+  replay 第 10 次 trace messages
+  对第 10 次当前 target span 做 rope 注入
+  prefix cache 留下第 10 次注入后的前缀 KV
+
+task 内第 20 次 invocation:
+  replay 第 20 次 trace messages
+  第 10 次 skill span 若属于共同前缀，则从 prefix cache 继承已注入 KV
+  只对第 20 次当前 target span 做新的 rope 注入
+```
+
+实现任何 replay wrapper 前，必须先复述并检查以上三点：
+
+- 服务重启边界是否是 `(mode, task)`。
+- task 内是否按 `invocation_index` 顺序 replay。
+- 后续轮次是否通过 prefix cache 继承历史注入 KV，而不是对历史 skill span 重复显式注入。
 
 ## 3. Development 跟踪文档
 

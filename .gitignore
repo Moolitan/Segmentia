@@ -1,5 +1,6 @@
 results.tar.gz
 results/
+agent_md/
 log/
 workspace/*
 eval_outputs/
@@ -16,3 +17,4 @@ scripts/04_kv_cache_research/reports/
 scripts/04_kv_cache_research/prompts/
 scripts/04_kv_cache_research/results/
 /src/
+

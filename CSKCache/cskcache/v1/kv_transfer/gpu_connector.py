@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 import torch
 
 from cskcache.profiling import LoadTrace, NullLoadTrace
+from cskcache.v1.async_load import GpuPrefetchHandle, submit_gpu_prefetch
 from cskcache.v1.compute.reuse import prepare_reuse_slice
 from cskcache.v1.metadata import CSKCacheEntry, CSKLoadPlan
 from cskcache.v1.rope import find_rotary_embedding
@@ -35,8 +36,16 @@ class KVConnectorInterface(ABC):
         plan: CSKLoadPlan,
         block_ids: list[int],
         trace: LoadTrace | NullLoadTrace | None = None,
+        prefetch_stream: torch.cuda.Stream | None = None,
     ) -> tuple[int, int, int]:
-        """Scatter every entry layer and return expected/scattered/skipped counts."""
+        """Scatter every entry layer and return expected/scattered/skipped counts.
+
+        ``prefetch_stream`` is an optional opt-in: when given, layer i+1's
+        H2D copy + RoPE correction runs on that stream while layer i's
+        scatter runs on the caller's current stream, so the two overlap
+        instead of running strictly back-to-back. Omitting it (the default)
+        reproduces the exact original sequential behavior.
+        """
 
     @abstractmethod
     def reuse_slice(
@@ -77,6 +86,20 @@ class VLLMPagedGPUConnector(KVConnectorInterface):
         self._block_size = block_size
         self._kv_caches: dict[str, torch.Tensor] = {}
         self._rope: object | None = None
+        self._prefetch_stream: torch.cuda.Stream | None = None
+
+    def get_prefetch_stream(self) -> torch.cuda.Stream:
+        """Lazily create and cache one background CUDA stream for the life
+        of this connector, used by ``to_gpu()``'s optional pipelined path.
+        Not part of ``KVConnectorInterface``: callers that want pipelining
+        duck-type-check for this method (``getattr(gpu, "get_prefetch_stream",
+        None)``) rather than requiring every connector implementation to
+        support it.
+        """
+        if self._prefetch_stream is None:
+            device = next(iter(self._kv_caches.values())).device
+            self._prefetch_stream = torch.cuda.Stream(device=device)
+        return self._prefetch_stream
 
     def bind_kv_caches(self, kv_caches: dict[str, torch.Tensor]) -> None:
         self._kv_caches = kv_caches
@@ -128,6 +151,7 @@ class VLLMPagedGPUConnector(KVConnectorInterface):
         plan: CSKLoadPlan,
         block_ids: list[int],
         trace: LoadTrace | NullLoadTrace | None = None,
+        prefetch_stream: torch.cuda.Stream | None = None,
     ) -> tuple[int, int, int]:
         expected_layers = set(entry.kv_by_layer)
         available_layers = set(self._kv_caches)
@@ -145,9 +169,29 @@ class VLLMPagedGPUConnector(KVConnectorInterface):
                 f"missing_layers={len(missing_layers)} missing=[{preview}]"
             )
 
-        scattered_layers = 0
         stage_trace = trace if trace is not None else NullLoadTrace()
-        for layer_name in entry.kv_by_layer:
+        layer_names = list(entry.kv_by_layer)
+        if prefetch_stream is None:
+            scattered_layers = self._scatter_sequential(
+                entry, plan, block_ids, layer_names, stage_trace
+            )
+        else:
+            scattered_layers = self._scatter_pipelined(
+                entry, plan, block_ids, layer_names, stage_trace, prefetch_stream
+            )
+        return len(expected_layers), scattered_layers, 0
+
+    def _scatter_sequential(
+        self,
+        entry: CSKCacheEntry,
+        plan: CSKLoadPlan,
+        block_ids: list[int],
+        layer_names: list[str],
+        stage_trace: LoadTrace | NullLoadTrace,
+    ) -> int:
+        """Original behavior: H2D+RoPE and scatter run back-to-back per layer."""
+        scattered_layers = 0
+        for layer_name in layer_names:
             target_cache = self._kv_caches[layer_name]
             key, value = self.reuse_slice(
                 entry,
@@ -169,4 +213,58 @@ class VLLMPagedGPUConnector(KVConnectorInterface):
                     value,
                 )
             scattered_layers += 1
-        return len(expected_layers), scattered_layers, 0
+        return scattered_layers
+
+    def _scatter_pipelined(
+        self,
+        entry: CSKCacheEntry,
+        plan: CSKLoadPlan,
+        block_ids: list[int],
+        layer_names: list[str],
+        stage_trace: LoadTrace | NullLoadTrace,
+        prefetch_stream: torch.cuda.Stream,
+    ) -> int:
+        """Layer i+1's H2D+RoPE (reuse_slice) runs on prefetch_stream while
+        layer i's scatter -- the only step that touches the shared paged
+        cache -- runs on the caller's current stream. Each layer's source
+        tensors and freshly-allocated (key, value) are private to that
+        layer, so there is nothing for the two streams to race on; the only
+        ordering that matters (layer i's scatter must see layer i's own
+        already-ready key/value) is enforced by GpuPrefetchHandle.result()'s
+        cross-stream wait.
+        """
+
+        def fetch(layer_name: str) -> GpuPrefetchHandle:
+            target_cache = self._kv_caches[layer_name]
+            return submit_gpu_prefetch(
+                lambda: self.reuse_slice(
+                    entry,
+                    layer_name=layer_name,
+                    source_offset=plan.source_offset,
+                    length=plan.length,
+                    target_start=plan.start,
+                    device=target_cache.device,
+                    trace=stage_trace,
+                ),
+                prefetch_stream,
+            )
+
+        scattered_layers = 0
+        pending = fetch(layer_names[0])
+        for index, layer_name in enumerate(layer_names):
+            target_cache = self._kv_caches[layer_name]
+            key, value = pending.result()
+            if index + 1 < len(layer_names):
+                pending = fetch(layer_names[index + 1])
+            with stage_trace.cuda_stage("scatter_span", target_cache.device):
+                scatter_span(
+                    target_cache,
+                    block_ids,
+                    plan.start,
+                    plan.end,
+                    self._block_size,
+                    key,
+                    value,
+                )
+            scattered_layers += 1
+        return scattered_layers

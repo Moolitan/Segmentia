@@ -88,7 +88,7 @@ def test_direct_reuse_ready_at_frontier() -> None:
     n, load_async = eng.get_num_new_matched_tokens("r1", skill, 0, signal)
     assert n == 4 and load_async is False
     eng.update_reuse_after_alloc("r1", ([0, 1],), num_external_tokens=4)
-    requests, probes, saves = eng.build_meta({"r1": 0})
+    requests, probes, saves, _ = eng.build_meta({"r1": 0})
     assert len(requests) == 1 and not probes and not saves
     assert requests[0].plan.cache_id == "skill"
     assert requests[0].plan.start == 0 and requests[0].plan.end == 4
@@ -125,7 +125,7 @@ def test_reuse_signal_middle_injection() -> None:
     assert eng.cap_prefill_before_reuse("r1", prompt, 3, 10, signal) == 0
     assert eng.get_boundary_reuse_load_tokens("r1", prompt, 3) == 4
     eng.update_reuse_after_alloc("r1", ([0, 1],), num_external_tokens=4)
-    requests, probes, saves = eng.build_meta({"r1": 0})
+    requests, probes, saves, _ = eng.build_meta({"r1": 0})
     assert len(requests) == 1
     assert not probes and not saves
     assert requests[0].plan.start == 3 and requests[0].plan.end == 7
@@ -162,7 +162,7 @@ def test_multiple_reuse_entries_load_in_prompt_order() -> None:
     assert eng.cap_prefill_before_reuse("r1", prompt, 0, 20, signal) == 2
     assert eng.get_boundary_reuse_load_tokens("r1", prompt, 2) == 4
     eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=4)
-    requests, _, _ = eng.build_meta({"r1": 0})
+    requests, _, _, _ = eng.build_meta({"r1": 0})
     assert [(item.plan.cache_id, item.plan.start, item.plan.end) for item in requests] == [
         ("first", 2, 6)
     ]
@@ -170,7 +170,7 @@ def test_multiple_reuse_entries_load_in_prompt_order() -> None:
     assert eng.cap_prefill_before_reuse("r1", prompt, 6, 20, signal) == 2
     assert eng.get_boundary_reuse_load_tokens("r1", prompt, 8) == 3
     eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=3)
-    requests, _, _ = eng.build_meta({"r1": 0})
+    requests, _, _, _ = eng.build_meta({"r1": 0})
     assert [(item.plan.cache_id, item.plan.start, item.plan.end) for item in requests] == [
         ("second", 8, 11)
     ]
@@ -283,7 +283,7 @@ def test_probe_fsm_pass_then_load() -> None:
     # The probe span is normal prefill, so vLLM allocates blocks for it
     # (num_external_tokens=0 since nothing is loaded yet).
     eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=0)
-    _, probes, saves = eng.build_meta({"r1": 2})
+    _, probes, saves, _ = eng.build_meta({"r1": 2})
     assert len(probes) == 1 and probes[0].start == 2 and probes[0].end == 4
     assert not saves
     assert state.phase == CSKProbePhase.WAIT_PROBE
@@ -294,7 +294,7 @@ def test_probe_fsm_pass_then_load() -> None:
     assert state.phase == CSKProbePhase.NEED_LOAD
     assert eng.get_boundary_reuse_load_tokens("r1", prompt, 4) == 4  # [4,8)
     eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=4)
-    requests, _, saves = eng.build_meta({"r1": 0})
+    requests, _, saves, _ = eng.build_meta({"r1": 0})
     assert requests[0].plan.start == 4 and requests[0].plan.source_offset == 2
     assert not saves
 
@@ -361,7 +361,7 @@ def test_probe_fsm_advances_to_second_reuse_entry() -> None:
     assert eng.cap_prefill_before_reuse("r1", prompt, 0, 20, signal) == 1
     assert eng.cap_prefill_before_reuse("r1", prompt, 1, 20, signal) == 1
     eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=0)
-    _, probes, _ = eng.build_meta({"r1": 1})
+    _, probes, _, _ = eng.build_meta({"r1": 1})
     assert [(probe.cache_id, probe.start, probe.end) for probe in probes] == [
         ("first", 1, 2)
     ]
@@ -371,7 +371,7 @@ def test_probe_fsm_advances_to_second_reuse_entry() -> None:
     )
     assert eng.get_boundary_reuse_load_tokens("r1", prompt, 2) == 3
     eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=3)
-    requests, _, _ = eng.build_meta({"r1": 0})
+    requests, _, _, _ = eng.build_meta({"r1": 0})
     assert requests[0].plan.cache_id == "first"
 
     assert eng.cap_prefill_before_reuse("r1", prompt, 5, 20, signal) == 1

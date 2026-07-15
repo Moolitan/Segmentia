@@ -56,7 +56,7 @@ def test_offline_save_waits_for_full_span_and_persists() -> None:
             _signal(),
         )
         assert "r1" in engine._pending_saves
-        requests, probes, saves = engine.build_meta({"r1": 2})
+        requests, probes, saves, _ = engine.build_meta({"r1": 2})
         assert not requests and not probes and not saves
 
         engine.update_save_after_alloc(
@@ -66,7 +66,7 @@ def test_offline_save_waits_for_full_span_and_persists() -> None:
             ([0],),
             _signal(),
         )
-        requests, probes, saves = engine.build_meta({"r1": 2})
+        requests, probes, saves, _ = engine.build_meta({"r1": 2})
         assert not requests and not probes and len(saves) == 1
 
         key = torch.arange(24, dtype=torch.float32).reshape(4, 2, 3)

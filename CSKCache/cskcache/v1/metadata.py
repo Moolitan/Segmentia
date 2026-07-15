@@ -161,6 +161,23 @@ class CSKProbeMeta:
 
 
 @dataclass(frozen=True)
+class CSKPrefetchHint:
+    """Worker instruction: start warming ``cache_id``'s entry into memory now.
+
+    Emitted once per request, as early as the scheduler knows which cache_id
+    a probe-gated span will need -- typically during gap prefill, well before
+    the probe/anchor forward pass actually reaches that span. The worker is
+    free to ignore it: it only unlocks an optional background prefetch (see
+    ``cskcache.v1.async_load``) and never changes correctness, since every
+    consumer of the prefetched entry falls back to a normal synchronous
+    ``storage.get()`` if no prefetch was started or it hasn't finished yet.
+    """
+
+    req_id: str
+    cache_id: str
+
+
+@dataclass(frozen=True)
 class CSKSaveMeta:
     """Worker instruction for persisting a freshly-prefilled token span."""
 

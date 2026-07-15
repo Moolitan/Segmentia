@@ -46,6 +46,11 @@ class CSKCacheConfig:
     cpu_max_bytes: int | None = None
     disk_dir: Path | None = None
     capture_only: bool = False
+    # Opt-in: pipeline each layer's H2D+RoPE (async_load.gpu_prefetch) against
+    # the previous layer's scatter into the paged cache during worker load,
+    # instead of running the two strictly back-to-back. Off by default until
+    # validated against a real profiling run.
+    gpu_prefetch_enabled: bool = False
 
     def __post_init__(self) -> None:
         if self.probe_tokens <= 0:
@@ -82,6 +87,7 @@ class CSKCacheConfig:
             cpu_max_bytes=None if cpu_max_bytes is None else int(cpu_max_bytes),
             disk_dir=Path(str(disk_dir)) if disk_dir else None,
             capture_only=_coerce_bool(pick("capture_only"), False),
+            gpu_prefetch_enabled=_coerce_bool(pick("gpu_prefetch_enabled"), False),
         )
 
     @classmethod
@@ -104,6 +110,7 @@ class CSKCacheConfig:
                 "cpu_max_bytes": pick("cpu_max_bytes"),
                 "disk_dir": pick("disk_dir"),
                 "capture_only": pick("capture_only"),
+                "gpu_prefetch_enabled": pick("gpu_prefetch_enabled"),
             }
         )
 
@@ -134,6 +141,7 @@ class CSKCacheConfig:
             "cpu_max_bytes": extra.get("cskcache.cpu_max_bytes"),
             "disk_dir": extra.get("cskcache.disk_dir") or os.environ.get("CSKCACHE_DISK_DIR"),
             "capture_only": extra.get("cskcache.capture_only"),
+            "gpu_prefetch_enabled": extra.get("cskcache.gpu_prefetch_enabled"),
         }
         env_fallback = cls.from_env()
         # For probe/gate scalars, prefer explicit extra-config, else env value.
@@ -171,6 +179,11 @@ class CSKCacheConfig:
                     merged["capture_only"]
                     if merged["capture_only"] is not None
                     else env_fallback.capture_only
+                ),
+                "gpu_prefetch_enabled": (
+                    merged["gpu_prefetch_enabled"]
+                    if merged["gpu_prefetch_enabled"] is not None
+                    else env_fallback.gpu_prefetch_enabled
                 ),
             }
         )

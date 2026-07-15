@@ -29,7 +29,9 @@ class _RecordingGPUConnector:
     def set_model(self, model) -> None:
         return
 
-    def to_gpu(self, entry, plan, block_ids, trace=None) -> tuple[int, int, int]:
+    def to_gpu(
+        self, entry, plan, block_ids, trace=None, prefetch_stream=None
+    ) -> tuple[int, int, int]:
         self.loaded.append((entry.cache_id, plan.start, plan.end))
         layers = len(entry.kv_by_layer)
         return layers, layers, 0
@@ -85,7 +87,7 @@ def test_reuse_lifecycle_logs_once_and_includes_worker_completion() -> None:
         assert engine.cap_prefill_before_reuse("r1", prompt, 0, 32, signal) == 2
         assert engine.get_boundary_reuse_load_tokens("r1", prompt, 2) == 4
         engine.update_reuse_after_alloc("r1", ([0, 1],), 4)
-        requests, _, _ = engine.build_meta({"r1": 0})
+        requests, _, _, _ = engine.build_meta({"r1": 0})
         engine.load(requests)
         engine.on_finished(["r1"])
     finally:

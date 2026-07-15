@@ -21,6 +21,7 @@ from typing import Iterable
 
 import torch
 
+from cskcache.v1.async_load import PrefetchRegistry, submit_disk_prefetch
 from cskcache.v1.compute import CSKProbeAccumulator, CSKProbeDecision
 from cskcache.logging import init_logger
 from cskcache.profiling import LoadTrace, NullLoadTrace, Profiler
@@ -36,6 +37,7 @@ from cskcache.v1.metadata import (
     CSKCacheMode,
     CSKCacheReuseSignal,
     CSKLoadPlan,
+    CSKPrefetchHint,
     CSKProbeMeta,
     CSKReqMeta,
     CSKSaveMeta,
@@ -113,6 +115,11 @@ class CSKCacheEngine:
         self._save_accumulators: dict[
             str, tuple[CSKSaveMeta, dict[str, tuple[torch.Tensor, torch.Tensor]]]
         ] = {}
+        # Worker-side background disk prefetch, keyed by (req_id, cache_id).
+        # Purely additive: nothing reads this unless capture_probes() finds a
+        # handle waiting, and everything falls back to a synchronous
+        # storage.get() if it doesn't.
+        self._prefetch_registry = PrefetchRegistry()
 
     # ---- introspection ---------------------------------------------------
 
@@ -410,17 +417,25 @@ class CSKCacheEngine:
     def build_meta(
         self,
         num_scheduled_tokens: Mapping[str, int],
-    ) -> tuple[list[CSKReqMeta], list[CSKProbeMeta], list[CSKSaveMeta]]:
+    ) -> tuple[
+        list[CSKReqMeta], list[CSKProbeMeta], list[CSKSaveMeta], list[CSKPrefetchHint]
+    ]:
         """Package scheduler decisions into plain worker carriers.
 
         Consumes one-shot ``_plans`` / ``_allocated_blocks`` so a plan is never
         replayed, and advances probe states that just finished a probe/anchor
-        chunk. The integration layer wraps the returned lists into vLLM's
-        serializable ``KVConnectorMetadata``.
+        chunk. Also emits one ``CSKPrefetchHint`` per request the first time
+        its probe state is seen here -- typically during gap prefill, well
+        before the probe/anchor span is actually scheduled -- so the worker
+        can start warming that cache_id's entry in the background instead of
+        only discovering it needs it mid-forward-pass. The integration layer
+        wraps the returned lists into vLLM's serializable
+        ``KVConnectorMetadata``.
         """
         requests: list[CSKReqMeta] = []
         probes: list[CSKProbeMeta] = []
         saves: list[CSKSaveMeta] = []
+        prefetch_hints: list[CSKPrefetchHint] = []
         for req_id, scheduled in num_scheduled_tokens.items():
             plan = self._plans.pop(req_id, None)
             blocks = self._allocated_blocks.pop(req_id, None)
@@ -489,6 +504,11 @@ class CSKCacheEngine:
             state = self._probe_states.get(req_id)
             if state is None:
                 continue
+            if not state.prefetch_hint_sent:
+                prefetch_hints.append(
+                    CSKPrefetchHint(req_id=req_id, cache_id=state.cache_id)
+                )
+                state.prefetch_hint_sent = True
             if scheduled <= 0 or blocks is None:
                 continue
             if state.pending_capture == "probe":
@@ -516,7 +536,7 @@ class CSKCacheEngine:
                 state.pending_capture = None
                 state.phase = CSKProbePhase.NEED_LOAD
                 state.load_start = state.anchor_end
-        return requests, probes, saves
+        return requests, probes, saves, prefetch_hints
 
     def on_worker_decisions(self, decisions: Iterable[CSKProbeDecision]) -> None:
         """Advance probe states from worker gate decisions (was update_connector_output)."""
@@ -669,9 +689,18 @@ class CSKCacheEngine:
                     entry_tokens=entry.length,
                     expected_layers=len(entry.kv_by_layer),
                 )
+            prefetch_stream = None
+            if self._config.gpu_prefetch_enabled:
+                get_prefetch_stream = getattr(self._gpu, "get_prefetch_stream", None)
+                if get_prefetch_stream is not None:
+                    prefetch_stream = get_prefetch_stream()
             started = time.perf_counter()
             expected_layers, scattered_layers, skipped_layers = self._gpu.to_gpu(
-                entry, plan, request.block_ids[0], trace=trace
+                entry,
+                plan,
+                request.block_ids[0],
+                trace=trace,
+                prefetch_stream=prefetch_stream,
             )
             if scattered_layers != expected_layers or skipped_layers != 0:
                 raise RuntimeError(
@@ -708,6 +737,20 @@ class CSKCacheEngine:
             )
             self._profiler.finish(trace)
 
+    def submit_prefetch(self, req_id: str, cache_id: str) -> None:
+        """Best-effort: start warming ``cache_id``'s entry in the background.
+
+        Safe to call more than once for the same (req_id, cache_id) pair
+        (deduplicated by ``PrefetchRegistry``), and safe for the handle to
+        never be consumed (e.g. the request is aborted before its probe
+        runs) -- an unclaimed handle is just dropped, no worse than today's
+        behavior of never having started the read at all.
+        """
+        self._prefetch_registry.get_or_submit(
+            (req_id, cache_id),
+            lambda: submit_disk_prefetch(self._storage, cache_id),
+        )
+
     def capture_probes(
         self,
         probes: Iterable[CSKProbeMeta],
@@ -723,7 +766,12 @@ class CSKCacheEngine:
                 target_start=probe.start,
                 target_end=probe.end,
             )
-            entry = self._storage.get(probe.cache_id, trace=trace)
+            handle = self._prefetch_registry.pop((probe.req_id, probe.cache_id))
+            if handle is not None:
+                with trace.cpu_stage("prefetch_wait"):
+                    entry = handle.result()
+            else:
+                entry = self._storage.get(probe.cache_id, trace=trace)
             if entry is None or layer_name not in entry.kv_by_layer:
                 continue
             if not probe.block_ids or probe.block_ids[0] is None:

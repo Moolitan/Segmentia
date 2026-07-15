@@ -42,6 +42,7 @@ class CSKProbeState:
     gap_completed_logged: bool = False
     probe_scheduled_logged: bool = False
     anchor_scheduled_logged: bool = False
+    prefetch_hint_sent: bool = False
 
     @property
     def length(self) -> int:

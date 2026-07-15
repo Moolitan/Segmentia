@@ -19,6 +19,7 @@ from cskcache.v1.metadata import (
     CSKCacheEntry,
     CSKCacheMode,
     CSKLoadPlan,
+    CSKPrefetchHint,
     CSKProbeMeta,
     CSKReqMeta,
 )
@@ -410,7 +411,7 @@ def test_engine_emits_direct_reuse_timeline() -> None:
         "r-direct-timeline", entry.token_ids, 0, signal
     )
     engine.update_reuse_after_alloc("r-direct-timeline", ([0],), matched)
-    requests, probes, saves = engine.build_meta({"r-direct-timeline": 4})
+    requests, probes, saves, _ = engine.build_meta({"r-direct-timeline": 4})
     engine.on_finished(["r-direct-timeline"])
 
     assert len(requests) == 1 and not probes and not saves
@@ -483,6 +484,116 @@ def test_anchor_completion_is_marked_after_anchor_forward_boundary() -> None:
     events = [event["event"] for event in timeline["events"]]
     assert events.index("anchor_metadata_built") < events.index("anchor_completed")
     assert events.index("anchor_completed") < events.index("load_planned")
+
+
+def test_build_meta_emits_prefetch_hint_during_gap_prefill_not_only_at_probe() -> None:
+    """The hint must reach the worker as early as the very first build_meta()
+    call after the probe state exists -- which can be during gap prefill,
+    strictly before the probe span is even scheduled. That lead time is the
+    whole point: it's what lets a background disk prefetch start before the
+    probe/anchor forward pass would otherwise trigger it mid-layer.
+    """
+    storage = StorageManager()
+    storage.put(_entry())
+    engine = CSKCacheEngine(
+        CSKCacheConfig(probe_enabled=True, probe_tokens=2, anchor_tokens=4),
+        storage,
+        block_size=4,
+    )
+    prompt = [1, 2, 3, 4, 10, 11, 12, 13]
+    signal = {
+        "cskcache": {
+            "cache_id": "skill",
+            "target_start": 4,
+            "target_end": 8,
+        }
+    }
+
+    # base=0 is still gap (state.start=4): the whole 4-token gap gets capped
+    # and scheduled in one step, nothing about the probe span yet.
+    capped = engine.cap_prefill_before_reuse("r1", prompt, 0, 8, signal)
+    assert capped == 4
+
+    _, probes, _, hints = engine.build_meta({"r1": capped})
+
+    assert hints == [CSKPrefetchHint(req_id="r1", cache_id="skill")]
+    assert probes == []  # confirms this is genuinely the gap step, not the probe step
+
+
+def test_build_meta_does_not_repeat_prefetch_hint_on_later_calls() -> None:
+    storage = StorageManager()
+    storage.put(_entry())
+    engine = CSKCacheEngine(
+        CSKCacheConfig(probe_enabled=True, probe_tokens=2, anchor_tokens=4),
+        storage,
+        block_size=4,
+    )
+    prompt = [1, 2, 10, 11, 12, 13]
+    signal = {
+        "cskcache": {
+            "cache_id": "skill",
+            "target_start": 2,
+            "target_end": 6,
+        }
+    }
+
+    assert engine.cap_prefill_before_reuse("r1", prompt, 0, 6, signal) == 2
+    assert engine.cap_prefill_before_reuse("r1", prompt, 2, 6, signal) == 2
+    engine.update_reuse_after_alloc("r1", ([0],), 0)
+
+    _, _, _, hints_first = engine.build_meta({"r1": 2})
+    assert hints_first == [CSKPrefetchHint(req_id="r1", cache_id="skill")]
+
+    _, _, _, hints_second = engine.build_meta({"r1": 2})
+    assert hints_second == []
+
+
+def test_capture_probes_consumes_prefetched_entry_via_prefetch_wait_stage() -> None:
+    """End-to-end: a hint from build_meta(), acted on via submit_prefetch()
+    (what start_load_kv() does before the forward pass runs), lets
+    capture_probes() consume an already-in-flight background disk read
+    instead of doing its own synchronous storage.get() -- visible as a
+    'prefetch_wait' stage instead of 'disk_deserialize'.
+    """
+    reporter = _RecordingReporter()
+    profiler = Profiler(ProfileConfig(enabled=True), reporter=reporter)
+    with tempfile.TemporaryDirectory() as tmp:
+        storage = StorageManager.with_disk(tmp, cpu_max_bytes=0)
+        storage.put(_entry(), persist=True)
+
+        connector = VLLMPagedGPUConnector(block_size=4)
+        kv_layer = torch.zeros(2, 1, 4, 1, 2)
+        connector.bind_kv_caches({"layer0": kv_layer})
+        engine = CSKCacheEngine(
+            CSKCacheConfig(),
+            storage,
+            block_size=4,
+            gpu_connector=connector,
+            profiler=profiler,
+        )
+
+        # Simulate the hint having reached start_load_kv(), which calls
+        # submit_prefetch() before self.model(...) -- and therefore before
+        # capture_probes() -- runs for this step.
+        engine.submit_prefetch("r-probe", "skill")
+
+        probe = CSKProbeMeta(
+            req_id="r-probe",
+            cache_id="skill",
+            start=0,
+            end=4,
+            source_offset=0,
+            block_ids=([0],),
+            tau=1.0,
+            gate_metric="kv_mean",
+        )
+        engine.capture_probes([probe], "layer0", kv_layer)
+        engine.decide_probes()
+
+        record = reporter.records[-1]
+        assert record["kind"] == "worker_probe_capture"
+        assert "prefetch_wait" in record["stage_ms"]
+        assert "disk_deserialize" not in record["stage_ms"]
 
 
 if __name__ == "__main__":

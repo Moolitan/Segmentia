@@ -34,7 +34,7 @@ from cskcache.integration.vllm.utils import load_vllm_config
 from cskcache.logging import init_logger
 from cskcache.v1.compute import CSKProbeDecision
 from cskcache.v1.core.cache_engine import CSKCacheEngine
-from cskcache.v1.metadata import CSKProbeMeta, CSKReqMeta, CSKSaveMeta
+from cskcache.v1.metadata import CSKPrefetchHint, CSKProbeMeta, CSKReqMeta, CSKSaveMeta
 from cskcache.v1.registry import CSKCacheRegistry, get_global_registry
 from cskcache.v1.storage.storage_manager import StorageManager
 
@@ -60,6 +60,7 @@ class CSKConnectorMetadata(KVConnectorMetadata):
     requests: list[CSKReqMeta] = field(default_factory=list)
     probes: list[CSKProbeMeta] = field(default_factory=list)
     saves: list[CSKSaveMeta] = field(default_factory=list)
+    prefetch_hints: list[CSKPrefetchHint] = field(default_factory=list)
 
 
 @dataclass
@@ -199,10 +200,15 @@ class CSKCacheConnectorV1Impl:
         self,
         scheduler_output: "SchedulerOutput",
     ) -> KVConnectorMetadata:
-        requests, probes, saves = self._engine.build_meta(
+        requests, probes, saves, prefetch_hints = self._engine.build_meta(
             scheduler_output.num_scheduled_tokens
         )
-        return CSKConnectorMetadata(requests=requests, probes=probes, saves=saves)
+        return CSKConnectorMetadata(
+            requests=requests,
+            probes=probes,
+            saves=saves,
+            prefetch_hints=prefetch_hints,
+        )
 
     def update_connector_output(self, connector_output: KVConnectorOutput) -> None:
         worker_meta = connector_output.kv_connector_worker_meta
@@ -236,6 +242,11 @@ class CSKCacheConnectorV1Impl:
                 self._kv_caches_bound = True
         metadata = self._parent._get_connector_metadata()
         assert isinstance(metadata, CSKConnectorMetadata)
+        # Runs before self.model(...) for this step, so a hint delivered this
+        # step still buys a head start over the probe/anchor forward pass
+        # that will eventually need this cache_id.
+        for hint in metadata.prefetch_hints:
+            self._engine.submit_prefetch(hint.req_id, hint.cache_id)
         # kv_connector_no_forward supplies no model in ForwardContext. The
         # engine therefore falls back to the model registered at worker init.
         model = getattr(forward_context, "model", None)

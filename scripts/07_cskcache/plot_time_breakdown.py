@@ -58,6 +58,7 @@ STAGE_ORDER = [
     "Anchor prefill",
     "Load dispatch",
     "Disk deserialize",
+    "Prefetch wait",
     "Storage lookup",
     "Key H2D",
     "Value H2D",
@@ -73,6 +74,11 @@ STAGE_COLORS = {
     "Anchor prefill": "#AA4499",
     "Load dispatch": "#117733",
     "Disk deserialize": "#882255",
+    # Background disk prefetch (cskcache.v1.async_load.disk_prefetch): time
+    # capture_probes() actually blocked on handle.result(), as opposed to
+    # "Disk deserialize" which is the old fully-synchronous storage.get().
+    # The two are mutually exclusive per occurrence -- whichever path ran.
+    "Prefetch wait": "#D95F02",
     "Storage lookup": "#CC6677",
     "Key H2D": "#88CCEE",
     "Value H2D": "#999933",
@@ -226,9 +232,20 @@ def build_occurrences(
 
         probe_parts: dict[str, float] = {}
         disk_ms = stage_value(probe, "disk_deserialize")
+        prefetch_wait_ms = stage_value(probe, "prefetch_wait")
         if disk_ms:
+            # Fully-synchronous storage.get(): no prefetch hint was consumed
+            # for this occurrence (e.g. profiling run predates async_load, or
+            # the hint never arrived in time).
             probe_parts["Disk deserialize"] = disk_ms
+        elif prefetch_wait_ms:
+            # A background disk_prefetch handle existed and capture_probes()
+            # blocked on it via handle.result(); this is how much of the
+            # read was NOT hidden behind gap/probe compute.
+            probe_parts["Prefetch wait"] = prefetch_wait_ms
         else:
+            # Neither: the entry was already resident (CPU-tier hit), so
+            # there was nothing to wait on either way.
             probe_parts["Storage lookup"] = stage_value(probe, "storage_get")
         probe_parts.update(
             {

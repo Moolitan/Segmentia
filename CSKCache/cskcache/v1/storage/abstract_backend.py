@@ -60,5 +60,24 @@ class StorageBackendInterface(ABC):
     def size_bytes(self) -> int:
         """Total KV footprint held by this tier, in bytes."""
 
+    def get_metadata(
+        self,
+        cache_id: str,
+        trace: LoadTrace | NullLoadTrace | None = None,
+    ) -> tuple[int, int] | None:
+        """Return (length, nbytes) for an entry, or None if this tier does
+        not hold it.
+
+        The default implementation just calls ``get()`` and derives both
+        numbers from the materialized entry. Backends that can answer this
+        without loading the KV tensors (e.g. from an on-disk sidecar) should
+        override it — the scheduler-side reuse check only needs these two
+        numbers, not the tensors themselves.
+        """
+        entry = self.get(cache_id, trace=trace)
+        if entry is None:
+            return None
+        return entry.length, entry_nbytes(entry)
+
     def __contains__(self, cache_id: str) -> bool:
         return self.contains(cache_id)

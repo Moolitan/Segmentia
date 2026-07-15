@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -188,6 +189,87 @@ def test_lru_eviction_order() -> None:
         assert mgr._cpu.contains("a")
         assert mgr.contains("b")  # still retrievable from disk
         print("verified: b left CPU but remains retrievable from disk")
+
+
+def test_get_metadata_answers_without_reading_payload_file() -> None:
+    """
+    A metadata-only lookup must not need the .pt payload at all: deleting it
+    and keeping only the .json sidecar should still let get_metadata()
+    answer correctly, proving it never touches the KV tensors.
+    """
+    _print_test(
+        "test_get_metadata_answers_without_reading_payload_file",
+        "Delete the .pt payload, keep the sidecar, and confirm get_metadata() "
+        "still returns the right (length, nbytes) while a real get() fails.",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        disk = LocalDiskBackend(tmp)
+        entry = _make_entry("meta-only", length=7)
+        disk.put(entry)
+        payload_path, _sidecar_path = disk._paths("meta-only")
+        payload_path.unlink()
+        print(f"deleted payload file, remaining files={sorted(p.name for p in Path(tmp).iterdir())}")
+        metadata = disk.get_metadata("meta-only")
+        assert metadata == (entry.length, entry_nbytes(entry))
+        print(f"get_metadata still answered: {metadata}")
+        try:
+            disk.get("meta-only")
+            raise AssertionError("expected get() to fail without the payload file")
+        except FileNotFoundError:
+            print("confirmed: get() needs the payload file and fails without it")
+
+
+def test_storage_manager_get_metadata_does_not_promote_disk_hit() -> None:
+    """
+    Unlike get(), a disk-tier metadata hit must not pull the entry into the
+    CPU tier -- promoting it would defeat the point of a metadata-only path.
+    """
+    _print_test(
+        "test_storage_manager_get_metadata_does_not_promote_disk_hit",
+        "Disk-only entry: get_metadata() must answer without CPU promotion.",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        disk = LocalDiskBackend(tmp)
+        entry = _make_entry("disk-only", length=6)
+        disk.put(entry)
+        mgr = StorageManager(cpu_backend=LocalCPUBackend(), disk_backend=disk)
+        assert not mgr._cpu.contains("disk-only")
+        metadata = mgr.get_metadata("disk-only")
+        assert metadata == (entry.length, entry_nbytes(entry))
+        assert not mgr._cpu.contains("disk-only")
+        print(f"get_metadata={metadata}; cpu tier still empty for this id")
+        # Sanity check: a real get() still promotes, proving the two paths differ.
+        got = mgr.get("disk-only")
+        assert got is not None
+        assert mgr._cpu.contains("disk-only")
+        print("confirmed real get() does promote, unlike get_metadata()")
+
+
+def test_get_metadata_falls_back_for_legacy_sidecar_without_length_field() -> None:
+    """
+    Sidecars written before the `length` field existed must still work:
+    get_metadata() falls back to a full get() rather than returning a wrong
+    or missing answer.
+    """
+    _print_test(
+        "test_get_metadata_falls_back_for_legacy_sidecar_without_length_field",
+        "Hand-write a pre-migration sidecar (no 'length' key) and confirm "
+        "get_metadata() still answers correctly via the get() fallback.",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        disk = LocalDiskBackend(tmp)
+        entry = _make_entry("legacy", length=5)
+        disk.put(entry)
+        _payload_path, sidecar_path = disk._paths("legacy")
+        legacy_sidecar = json.loads(sidecar_path.read_text())
+        assert "length" in legacy_sidecar
+        del legacy_sidecar["length"]
+        sidecar_path.write_text(json.dumps(legacy_sidecar))
+        print(f"rewrote sidecar without 'length': {legacy_sidecar}")
+        reopened = LocalDiskBackend(tmp)
+        metadata = reopened.get_metadata("legacy")
+        assert metadata == (entry.length, entry_nbytes(entry))
+        print(f"legacy sidecar still answered correctly via fallback: {metadata}")
 
 
 def test_registry_shim_uses_storage_manager() -> None:

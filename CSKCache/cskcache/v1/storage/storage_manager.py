@@ -103,6 +103,41 @@ class StorageManager:
             self._enforce_cpu_budget()
             return entry
 
+    def get_metadata(
+        self,
+        cache_id: str,
+        trace: LoadTrace | NullLoadTrace | None = None,
+    ) -> tuple[int, int] | None:
+        """Return (length, nbytes) without necessarily materializing the KV
+        tensors. CPU-tier hits are already fully resident, so the base-class
+        default (call get(), which is a plain dict lookup here) is cheap
+        enough. Disk-tier hits use LocalDiskBackend's sidecar-backed fast
+        path. Unlike get(), a disk-tier metadata hit is *not* promoted into
+        the CPU tier and does not record a policy access, since the whole
+        point is to avoid touching the KV tensors when only the length is
+        needed. Tier bookkeeping on the trace mirrors get() so profiling's
+        source_tier is still meaningful for a metadata-only lookup.
+        """
+        active_trace = trace if trace is not None and trace.enabled else None
+        metadata = self._cpu.get_metadata(cache_id)
+        if metadata is not None:
+            if active_trace is not None:
+                active_trace.record_tier("cpu")
+            self._policy.record_access(cache_id)
+            return metadata
+        if self._disk is None:
+            if active_trace is not None:
+                active_trace.record_tier("miss")
+            return None
+        metadata = self._disk.get_metadata(cache_id, trace=active_trace)
+        if metadata is None:
+            if active_trace is not None:
+                active_trace.record_tier("miss")
+            return None
+        if active_trace is not None:
+            active_trace.record_tier("disk")
+        return metadata
+
     def put(self, entry: CSKCacheEntry, *, persist: bool = False) -> None:
         if persist:
             if self._disk is None:

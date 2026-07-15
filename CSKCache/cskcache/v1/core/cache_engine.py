@@ -1116,11 +1116,19 @@ class CSKCacheEngine:
         signal: CSKCacheReuseSignal,
         trace: LoadTrace | NullLoadTrace | None = None,
     ) -> ReuseSpan:
-        entry = self._storage.get(signal.cache_id, trace=trace)
-        if entry is None:
+        # The scheduler only needs the entry's length (to validate the reuse
+        # span) and its byte size (for trace metadata) — never the KV
+        # tensors themselves. get_metadata() answers this from the on-disk
+        # sidecar/CPU-tier entry without deserializing the full payload,
+        # unlike a plain get(). The worker's own load() call further down
+        # the pipeline still does a real get() when it actually needs the
+        # tensors.
+        metadata = self._storage.get_metadata(signal.cache_id, trace=trace)
+        if metadata is None:
             raise RuntimeError(
                 f"CSKCache reuse signal cache_id={signal.cache_id} is not loaded"
             )
+        entry_length, entry_bytes = metadata
 
         if signal.target_start is None or signal.target_end is None:
             raise ValueError(
@@ -1138,17 +1146,16 @@ class CSKCacheEngine:
                 f"CSKCache reuse signal provides invalid target_start and target_end "
                 f"target=[{target_start},{target_end}), token_count={len(token_ids)}"
             )
-        if target_end - target_start != entry.length:
+        if target_end - target_start != entry_length:
             raise RuntimeError(
                 f"CSKCache reuse span length mismatch for {signal.cache_id}: "
-                f"target_length={target_end - target_start}, entry_length={entry.length}"
+                f"target_length={target_end - target_start}, entry_length={entry_length}"
             )
         if trace is not None and trace.enabled:
-            full_entry_bytes = entry_nbytes(entry)
             trace.set(
-                bytes=full_entry_bytes,
-                entry_bytes=full_entry_bytes,
-                entry_tokens=entry.length,
+                bytes=entry_bytes,
+                entry_bytes=entry_bytes,
+                entry_tokens=entry_length,
             )
 
         return ReuseSpan(

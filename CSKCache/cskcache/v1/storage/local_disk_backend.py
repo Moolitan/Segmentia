@@ -67,8 +67,10 @@ class LocalDiskBackend(StorageBackendInterface):
         self._root = Path(root)
         self._root.mkdir(parents=True, exist_ok=True)
         self._device = device
-        # cache_id -> (payload_path, nbytes), rebuilt from sidecars on startup.
-        self._index: dict[str, tuple[Path, int]] = {}
+        # cache_id -> (payload_path, nbytes, length), rebuilt from sidecars on
+        # startup. length is None for sidecars written before that field
+        # existed, which get_metadata() treats as "no cheap answer".
+        self._index: dict[str, tuple[Path, int, int | None]] = {}
         self._scan_existing()
 
     def _paths(self, cache_id: str) -> tuple[Path, Path]:
@@ -81,11 +83,12 @@ class LocalDiskBackend(StorageBackendInterface):
                 meta = json.loads(sidecar.read_text())
                 cache_id = str(meta["cache_id"])
                 nbytes = int(meta["nbytes"])
+                length = int(meta["length"]) if "length" in meta else None
             except Exception:
                 continue
             payload_path = sidecar.with_suffix(".pt")
             if payload_path.exists():
-                self._index[cache_id] = (payload_path, nbytes)
+                self._index[cache_id] = (payload_path, nbytes, length)
 
     def contains(self, cache_id: str) -> bool:
         return cache_id in self._index
@@ -98,7 +101,7 @@ class LocalDiskBackend(StorageBackendInterface):
         record = self._index.get(cache_id)
         if record is None:
             return None
-        payload_path, nbytes = record
+        payload_path, nbytes, _length = record
         if trace is None or not trace.enabled:
             payload = torch.load(payload_path, map_location=self._device or "cpu")
             return payload_to_entry(payload, device=self._device)
@@ -106,6 +109,27 @@ class LocalDiskBackend(StorageBackendInterface):
         with trace.cpu_stage("disk_deserialize"):
             payload = torch.load(payload_path, map_location=self._device or "cpu")
             return payload_to_entry(payload, device=self._device)
+
+    def get_metadata(
+        self,
+        cache_id: str,
+        trace: LoadTrace | NullLoadTrace | None = None,
+    ) -> tuple[int, int] | None:
+        """Return (length, nbytes) straight from the sidecar-backed index,
+        without torch.load-ing the KV tensors.
+
+        Only sidecars written before the `length` field existed fall back to
+        a full get() (via the base-class default), which also means they pay
+        the deserialize cost every call since a metadata-only lookup never
+        promotes into the CPU tier.
+        """
+        record = self._index.get(cache_id)
+        if record is None:
+            return None
+        _, nbytes, length = record
+        if length is not None:
+            return length, nbytes
+        return super().get_metadata(cache_id, trace=trace)
 
     def put(self, entry: CSKCacheEntry) -> None:
         payload_path, sidecar = self._paths(entry.cache_id)
@@ -117,16 +141,17 @@ class LocalDiskBackend(StorageBackendInterface):
                     "cache_id": entry.cache_id,
                     "nbytes": nbytes,
                     "num_tokens": len(entry.token_ids),
+                    "length": entry.length,
                 }
             )
         )
-        self._index[entry.cache_id] = (payload_path, nbytes)
+        self._index[entry.cache_id] = (payload_path, nbytes, entry.length)
 
     def remove(self, cache_id: str) -> bool:
         record = self._index.pop(cache_id, None)
         if record is None:
             return False
-        payload_path, _ = record
+        payload_path, _, _ = record
         payload_path.unlink(missing_ok=True)
         payload_path.with_suffix(".json").unlink(missing_ok=True)
         return True
@@ -135,4 +160,4 @@ class LocalDiskBackend(StorageBackendInterface):
         return tuple(self._index.keys())
 
     def size_bytes(self) -> int:
-        return sum(nbytes for _, nbytes in self._index.values())
+        return sum(nbytes for _, nbytes, _length in self._index.values())

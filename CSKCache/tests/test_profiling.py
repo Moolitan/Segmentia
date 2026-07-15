@@ -22,6 +22,8 @@ from cskcache.v1.metadata import (
     CSKProbeMeta,
     CSKReqMeta,
 )
+from cskcache.v1.storage.local_cpu_backend import LocalCPUBackend
+from cskcache.v1.storage.local_disk_backend import LocalDiskBackend
 from cskcache.v1.storage.storage_manager import StorageManager
 
 
@@ -180,6 +182,53 @@ def test_scheduler_lookup_is_separate_from_worker_load() -> None:
     assert record["source_tier"] == "cpu"
     assert record["target_start"] == 0
     assert record["target_end"] == 4
+
+
+def test_scheduler_lookup_does_not_read_the_disk_payload_file() -> None:
+    """Scheduler-side lookup must answer from the on-disk sidecar/index alone.
+
+    Regression guard for the metadata-only reuse-span check: put a disk-only
+    entry, delete its .pt payload, and confirm get_num_new_matched_tokens()
+    still succeeds -- proving the scheduler never deserializes the KV
+    tensors just to validate a reuse span's length.
+    """
+    reporter = _RecordingReporter()
+    profiler = Profiler(ProfileConfig(enabled=True), reporter=reporter)
+    with tempfile.TemporaryDirectory() as tmp:
+        disk = LocalDiskBackend(tmp)
+        entry = _entry()
+        disk.put(entry)
+        storage = StorageManager(cpu_backend=LocalCPUBackend(), disk_backend=disk)
+        # Engine construction builds the token matcher from every entry's
+        # token_ids (storage.all_entries()), which is unrelated to the
+        # scheduler reuse-span lookup this test targets, so it legitimately
+        # needs the real payload. Delete it only after construction, to
+        # isolate just the get_num_new_matched_tokens() call path below.
+        engine = CSKCacheEngine(CSKCacheConfig(), storage, block_size=4, profiler=profiler)
+        payload_path, _sidecar_path = disk._paths("skill")
+        payload_path.unlink()
+        assert not payload_path.exists()
+        signal = {
+            "cskcache": {
+                "cache_id": "skill",
+                "target_start": 0,
+                "target_end": 4,
+            }
+        }
+
+        assert engine.get_num_new_matched_tokens(
+            "r-lookup", entry.token_ids, 0, signal
+        ) == (4, False)
+
+        assert len(reporter.records) == 1
+        record = reporter.records[0]
+        assert record["kind"] == "scheduler_lookup"
+        assert record["source_tier"] == "disk"
+        assert record["target_start"] == 0
+        assert record["target_end"] == 4
+        # The metadata-only path must not have promoted the entry into the
+        # CPU tier either -- that would silently trigger a real get() later.
+        assert not storage._cpu.contains("skill")
 
 
 def test_probe_capture_aggregates_layers_and_stage_breakdown() -> None:

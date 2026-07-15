@@ -231,6 +231,66 @@ def test_scheduler_lookup_does_not_read_the_disk_payload_file() -> None:
         assert not storage._cpu.contains("skill")
 
 
+def test_scheduler_lookup_resolves_distinct_lengths_for_multiple_cache_ids() -> None:
+    """A single request can reuse more than one cache_id via the `entries`
+    signal form. Regression guard for get_metadata(): give the two entries
+    deliberately different lengths, so that if their metadata ever got
+    cross-wired (e.g. a bug that reused the wrong index's answer), the
+    length-mismatch check in _reuse_from_signal() would catch it immediately
+    instead of silently reusing the wrong data.
+    """
+    reporter = _RecordingReporter()
+    profiler = Profiler(ProfileConfig(enabled=True), reporter=reporter)
+    with tempfile.TemporaryDirectory() as tmp:
+        disk = LocalDiskBackend(tmp)
+
+        def make_entry(cache_id: str, length: int) -> CSKCacheEntry:
+            key = torch.arange(length * 2, dtype=torch.float32).reshape(length, 1, 2)
+            return CSKCacheEntry(
+                cache_id=cache_id,
+                source_start=0,
+                source_end=length,
+                token_ids=list(range(100 + length, 100 + 2 * length)),
+                kv_by_layer={"layer0": (key, key + 100)},
+            )
+
+        alpha = make_entry("alpha", length=4)
+        beta = make_entry("beta", length=6)
+        disk.put(alpha)
+        disk.put(beta)
+
+        storage = StorageManager(cpu_backend=LocalCPUBackend(), disk_backend=disk)
+        engine = CSKCacheEngine(CSKCacheConfig(), storage, block_size=4, profiler=profiler)
+        token_ids = list(range(10))
+        signal = {
+            "cskcache": {
+                "entries": [
+                    {"cache_id": "alpha", "target_start": 0, "target_end": 4},
+                    {"cache_id": "beta", "target_start": 4, "target_end": 10},
+                ]
+            }
+        }
+
+        # alpha starts exactly at the frontier, so its length is what comes
+        # back here; beta is still resolved (and length-checked) internally
+        # by the same call, it just isn't the "next" span reported.
+        assert engine.get_num_new_matched_tokens("r-multi", token_ids, 0, signal) == (
+            4,
+            False,
+        )
+
+        lookups = [r for r in reporter.records if r["kind"] == "scheduler_lookup"]
+        assert len(lookups) == 2
+        by_cache_id = {r["cache_id"]: r for r in lookups}
+        assert by_cache_id["alpha"]["entry_tokens"] == 4
+        assert by_cache_id["beta"]["entry_tokens"] == 6
+        assert by_cache_id["alpha"]["source_tier"] == "disk"
+        assert by_cache_id["beta"]["source_tier"] == "disk"
+        # Neither disk hit should have promoted into the CPU tier.
+        assert not storage._cpu.contains("alpha")
+        assert not storage._cpu.contains("beta")
+
+
 def test_probe_capture_aggregates_layers_and_stage_breakdown() -> None:
     reporter = _RecordingReporter()
     profiler = Profiler(ProfileConfig(enabled=True), reporter=reporter)

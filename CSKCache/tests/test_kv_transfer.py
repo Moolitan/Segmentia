@@ -298,6 +298,67 @@ def test_to_gpu_pipelined_path_matches_sequential_path() -> None:
         assert torch.equal(sequential_caches[layer_name], pipelined_caches[layer_name])
 
 
+def test_to_gpu_timeline_requires_prefetch_stream() -> None:
+    conn = VLLMPagedGPUConnector(BLOCK_SIZE)
+    conn.bind_kv_caches({"layer0": _packed_cache()})
+    conn.set_model(None)
+    entry = _entry(4)
+    plan = CSKLoadPlan(
+        req_id="r-timeline-guard",
+        cache_id="skill",
+        mode=CSKCacheMode.REUSE,
+        start=0,
+        end=4,
+        token_ids=tuple(entry.token_ids),
+        source_offset=0,
+    )
+
+    with _raises(ValueError, "timeline recording only applies to the pipelined path"):
+        conn.to_gpu(entry, plan, block_ids=[0], timeline=[])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires a CUDA device")
+def test_to_gpu_timeline_records_one_h2d_and_scatter_interval_per_layer() -> None:
+    device = torch.device("cuda:0")
+    num_layers = 4
+    entry = _multi_layer_entry(num_layers, length=4, device=device)
+    plan = CSKLoadPlan(
+        req_id="r-timeline",
+        cache_id="skill",
+        mode=CSKCacheMode.REUSE,
+        start=0,
+        end=4,
+        token_ids=tuple(entry.token_ids),
+        source_offset=0,
+    )
+    caches = {
+        f"layer{i}": torch.zeros(2, NUM_BLOCKS, BLOCK_SIZE, HEADS, DIM, device=device)
+        for i in range(num_layers)
+    }
+    conn = VLLMPagedGPUConnector(BLOCK_SIZE)
+    conn.bind_kv_caches(caches)
+    conn.set_model(None)
+    prefetch_stream = torch.cuda.Stream(device=device)
+    timeline: list[dict] = []
+
+    counts = conn.to_gpu(
+        entry, plan, block_ids=[0], prefetch_stream=prefetch_stream, timeline=timeline
+    )
+    torch.cuda.synchronize(device)
+
+    assert counts == (num_layers, num_layers, 0)
+    assert len(timeline) == 2 * num_layers
+    h2d_events = [e for e in timeline if e["stage"] == "h2d_rope"]
+    scatter_events = [e for e in timeline if e["stage"] == "scatter"]
+    assert {e["layer"] for e in h2d_events} == set(caches)
+    assert {e["layer"] for e in scatter_events} == set(caches)
+    assert all(e["stream"] == "prefetch_stream" for e in h2d_events)
+    assert all(e["stream"] == "default_stream" for e in scatter_events)
+    for event in timeline:
+        assert event["start_ms"] <= event["end_ms"]
+        assert event["start_ms"] >= 0.0
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

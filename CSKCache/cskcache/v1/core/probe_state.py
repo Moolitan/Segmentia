@@ -6,25 +6,45 @@ from enum import Enum
 from cskcache.v1.compute import CSKProbeDecision
 
 
-class CSKProbePhase(str, Enum):
+class CSKReuseStage(str, Enum):
     """Scheduler-visible state machine for probe-gated reuse.
 
-    Probe mode does not immediately trust the offline skill K/V. It first lets
-    vLLM normally prefill a short probe prefix, gathers the real K/V from that
-    prefill on the worker, compares it to RoPE-corrected cached K/V, and then
-    either loads the remaining tail or recomputes an anchor prefix before
-    loading the tail.
+    The whole cached span is scattered into the paged cache immediately, as
+    soon as the span is discovered -- before any judgement about whether it
+    is still fresh. vLLM's own real forward pass then runs normally over the
+    probe prefix (and, if the gate fails, on to the recompute prefix),
+    naturally overwriting whatever was scattered at those positions. Once
+    that resolves, the scheduler frontier is advanced the rest of the way;
+    nothing beyond the (small, bounded) probe/recompute prefix is ever
+    reloaded or recomputed.
     """
 
-    NEED_PROBE = "need_probe"
-    WAIT_PROBE = "wait_probe"
-    NEED_ANCHOR = "need_anchor"
-    NEED_LOAD = "need_load"
+    LOADING = "loading"
+    """Span just discovered; bulk preload not dispatched yet."""
+
+    PROBING = "probing"
+    """Bulk preload dispatched; waiting for vLLM to really prefill the first
+    probe_len tokens."""
+
+    GATING = "gating"
+    """Probe tokens computed; waiting for the worker to turn the residual
+    into a pass/fail gate decision."""
+
+    RECOMPUTING = "recomputing"
+    """Gate failed; waiting for vLLM to really prefill on out to anchor_len
+    tokens."""
+
+    READY = "ready"
+    """Gate resolved (passed, or failed-and-recomputed). The frontier still
+    needs to be advanced to state.end; nothing left needs real computation
+    or a fresh load, since the rest of the span was already scattered in."""
+
     DONE = "done"
+    """Frontier confirmed at state.end."""
 
 
 @dataclass
-class CSKProbeState:
+class CSKReuseState:
     """Per-request scheduler state for a candidate probe-gated skill span."""
 
     req_id: str
@@ -35,13 +55,12 @@ class CSKProbeState:
     anchor_len: int
     tau: float
     gate_metric: str
-    phase: CSKProbePhase = CSKProbePhase.NEED_PROBE
-    pending_capture: str | None = None
-    load_start: int | None = None
+    stage: CSKReuseStage = CSKReuseStage.LOADING
+    pending_capture: bool = False
     decision: CSKProbeDecision | None = None
     gap_completed_logged: bool = False
     probe_scheduled_logged: bool = False
-    anchor_scheduled_logged: bool = False
+    recompute_scheduled_logged: bool = False
     prefetch_hint_sent: bool = False
 
     @property

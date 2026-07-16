@@ -456,6 +456,12 @@ def test_anchor_completion_is_marked_after_anchor_forward_boundary() -> None:
     }
 
     assert engine.cap_prefill_before_reuse("r-anchor", prompt, 0, 8, signal) == 2
+    assert engine.cap_prefill_before_reuse("r-anchor", prompt, 2, 8, signal) == 0  # LOADING
+    tokens, advance = engine.get_boundary_reuse_load_tokens("r-anchor", prompt, 2)
+    assert (tokens, advance) == (6, False)  # bulk preload, whole [2,8) span
+    engine.update_reuse_after_alloc("r-anchor", ([0],), 6)
+    engine.build_meta({"r-anchor": 0})
+
     assert engine.cap_prefill_before_reuse("r-anchor", prompt, 2, 8, signal) == 2
     engine.update_reuse_after_alloc("r-anchor", ([0],), 0)
     engine.build_meta({"r-anchor": 2})
@@ -467,7 +473,7 @@ def test_anchor_completion_is_marked_after_anchor_forward_boundary() -> None:
     )
     assert engine.cap_prefill_before_reuse("r-anchor", prompt, 4, 8, signal) == 2
     engine.update_reuse_after_alloc("r-anchor", ([0],), 0)
-    engine.build_meta({"r-anchor": 2})
+    engine.build_meta({"r-anchor": 2})  # last recompute chunk -> RECOMPUTING -> READY
     profiler.mark_timeline(
         req_id="r-anchor",
         cache_id="skill",
@@ -475,15 +481,16 @@ def test_anchor_completion_is_marked_after_anchor_forward_boundary() -> None:
         event="anchor_metadata_built",
     )
 
-    assert engine.get_boundary_reuse_load_tokens("r-anchor", prompt, 6) == 2
+    # [6,8) is already resident from the bulk preload; this only confirms it.
+    assert engine.get_boundary_reuse_load_tokens("r-anchor", prompt, 6) == (2, True)
     engine.on_finished(["r-anchor"])
 
     timeline = next(
         record for record in reporter.records if record["kind"] == "request_timeline"
     )
     events = [event["event"] for event in timeline["events"]]
-    assert events.index("anchor_metadata_built") < events.index("anchor_completed")
-    assert events.index("anchor_completed") < events.index("load_planned")
+    assert events.index("anchor_metadata_built") < events.index("reuse_confirmed")
+    assert events.index("reuse_confirmed") < events.index("load_planned")
 
 
 def test_build_meta_emits_prefetch_hint_during_gap_prefill_not_only_at_probe() -> None:
@@ -537,8 +544,12 @@ def test_build_meta_does_not_repeat_prefetch_hint_on_later_calls() -> None:
         }
     }
 
+    # Same gap-step timing as
+    # test_build_meta_emits_prefetch_hint_during_gap_prefill_not_only_at_probe:
+    # the hint is sent the first time build_meta() sees the reuse state at
+    # all, which is during gap prefill, well before the bulk preload or the
+    # probe span are dispatched.
     assert engine.cap_prefill_before_reuse("r1", prompt, 0, 6, signal) == 2
-    assert engine.cap_prefill_before_reuse("r1", prompt, 2, 6, signal) == 2
     engine.update_reuse_after_alloc("r1", ([0],), 0)
 
     _, _, _, hints_first = engine.build_meta({"r1": 2})

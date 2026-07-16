@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 from cskcache.v1.core.cache_engine import CSKCacheEngine
 from cskcache.v1.core.config import CSKCacheConfig
-from cskcache.v1.core.probe_state import CSKProbePhase
+from cskcache.v1.core.probe_state import CSKReuseStage
 from cskcache.v1.compute.gate import CSKProbeDecision, CSKProbeMetrics
 from cskcache.v1.metadata import CSKCacheEntry
 from cskcache.v1.storage.storage_manager import StorageManager
@@ -123,7 +123,7 @@ def test_reuse_signal_middle_injection() -> None:
     assert eng.cap_prefill_before_reuse("r1", prompt, 0, 10, signal) == 3
     # At the boundary, the chunk is held (0) so the next pass loads in-process.
     assert eng.cap_prefill_before_reuse("r1", prompt, 3, 10, signal) == 0
-    assert eng.get_boundary_reuse_load_tokens("r1", prompt, 3) == 4
+    assert eng.get_boundary_reuse_load_tokens("r1", prompt, 3) == (4, True)
     eng.update_reuse_after_alloc("r1", ([0, 1],), num_external_tokens=4)
     requests, probes, saves, _ = eng.build_meta({"r1": 0})
     assert len(requests) == 1
@@ -160,7 +160,7 @@ def test_multiple_reuse_entries_load_in_prompt_order() -> None:
     matched, _ = eng.get_num_new_matched_tokens("r1", prompt, 0, signal)
     assert matched == 0
     assert eng.cap_prefill_before_reuse("r1", prompt, 0, 20, signal) == 2
-    assert eng.get_boundary_reuse_load_tokens("r1", prompt, 2) == 4
+    assert eng.get_boundary_reuse_load_tokens("r1", prompt, 2) == (4, True)
     eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=4)
     requests, _, _, _ = eng.build_meta({"r1": 0})
     assert [(item.plan.cache_id, item.plan.start, item.plan.end) for item in requests] == [
@@ -168,7 +168,7 @@ def test_multiple_reuse_entries_load_in_prompt_order() -> None:
     ]
 
     assert eng.cap_prefill_before_reuse("r1", prompt, 6, 20, signal) == 2
-    assert eng.get_boundary_reuse_load_tokens("r1", prompt, 8) == 3
+    assert eng.get_boundary_reuse_load_tokens("r1", prompt, 8) == (3, True)
     eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=3)
     requests, _, _, _ = eng.build_meta({"r1": 0})
     assert [(item.plan.cache_id, item.plan.start, item.plan.end) for item in requests] == [
@@ -250,14 +250,18 @@ def test_no_reuse_signal_does_not_scan_prompt() -> None:
 def test_probe_fsm_pass_then_load() -> None:
     """Verify the probe-gated success path.
 
-    The skill span is [2, 8), with probe_tokens=2. The engine should prefill the
-    prefix [0, 2), then prefill the probe span [2, 4) normally so the worker can
-    compare recomputed KV against cached KV. When the worker reports that the
-    probe passed, the state machine should load only the remaining tail [4, 8).
+    The skill span is [2, 8). As soon as the frontier reaches 2 (the span
+    start), the whole span is bulk-preloaded from cache in one shot, without
+    advancing the frontier. vLLM then really prefills the probe span [2, 4)
+    so the worker can compare recomputed KV against cached KV -- this real
+    forward naturally overwrites whatever the bulk preload just scattered at
+    [2, 4). When the worker reports that the probe passed, only the frontier
+    needs confirming out to the end (8); [4, 8) is already resident from the
+    bulk preload and needs no second load.
 
-    Purpose: this covers the quality-protected fast path. CSKCache first checks
-    a small real recompute probe; if cached KV looks compatible, it skips the
-    rest of the skill by loading the tail from offline KV.
+    Purpose: this covers the quality-protected fast path. CSKCache first
+    checks a small real recompute probe; if cached KV looks compatible, the
+    rest of the skill never needed a second trip to the cache.
     """
     skill = [10, 11, 12, 13, 14, 15]
     prompt = [1, 2] + skill  # skill starts at frontier-reachable offset 2
@@ -276,41 +280,62 @@ def test_probe_fsm_pass_then_load() -> None:
     }
     # Prefix up to span start (2).
     assert eng.cap_prefill_before_reuse("r1", prompt, 0, 10, signal) == 2
-    # Probe prefix: only probe_tokens (2) allowed [2,4).
+    state = eng._reuse_states["r1"]
+    assert state.stage == CSKReuseStage.LOADING
+    # Frontier is at the span start but the bulk preload has not dispatched
+    # yet, so real prefill stays capped at 0 until it does.
+    assert eng.cap_prefill_before_reuse("r1", prompt, 2, 10, signal) == 0
+
+    # Bulk preload: the whole [2,8) span, scattered without advancing frontier.
+    tokens, advance = eng.get_boundary_reuse_load_tokens("r1", prompt, 2)
+    assert (tokens, advance) == (6, False)
+    assert state.stage == CSKReuseStage.PROBING
+    eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=6)
+    requests, _, _, _ = eng.build_meta({"r1": 0})
+    assert len(requests) == 1
+    assert requests[0].plan.start == 2 and requests[0].plan.end == 8
+    assert requests[0].plan.requires_scatter is True
+    assert state.stage == CSKReuseStage.PROBING  # bulk preload alone isn't "done"
+
+    # Now vLLM really prefills the probe prefix [2,4).
     assert eng.cap_prefill_before_reuse("r1", prompt, 2, 10, signal) == 2
-    state = eng._probe_states["r1"]
-    assert state.pending_capture == "probe"
+    assert state.pending_capture is True
     # The probe span is normal prefill, so vLLM allocates blocks for it
-    # (num_external_tokens=0 since nothing is loaded yet).
+    # (num_external_tokens=0 since nothing new is loaded here).
     eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=0)
     _, probes, saves, _ = eng.build_meta({"r1": 2})
     assert len(probes) == 1 and probes[0].start == 2 and probes[0].end == 4
     assert not saves
-    assert state.phase == CSKProbePhase.WAIT_PROBE
-    # Worker says the cached KV matches -> load the tail from probe_end (4).
+    assert state.stage == CSKReuseStage.GATING
+    # Worker says the cached KV matches -> nothing left to recompute.
     metrics = CSKProbeMetrics(1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, "max", ())
     passed = CSKProbeDecision("r1", "skill", True, 0.15, metrics)
     eng.on_worker_decisions([passed])
-    assert state.phase == CSKProbePhase.NEED_LOAD
-    assert eng.get_boundary_reuse_load_tokens("r1", prompt, 4) == 4  # [4,8)
+    assert state.stage == CSKReuseStage.READY
+    # Confirm-only: [4,8) was already scattered by the bulk preload.
+    tokens, advance = eng.get_boundary_reuse_load_tokens("r1", prompt, 4)
+    assert (tokens, advance) == (4, True)
     eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=4)
     requests, _, saves, _ = eng.build_meta({"r1": 0})
     assert requests[0].plan.start == 4 and requests[0].plan.source_offset == 2
+    assert requests[0].plan.requires_scatter is False
     assert not saves
+    assert state.stage == CSKReuseStage.DONE
 
 
-def test_probe_fsm_fail_needs_anchor() -> None:
+def test_probe_fsm_fail_needs_recompute() -> None:
     """Verify the probe-gated fallback path.
 
     This follows the same setup as the passing-probe test, but the worker
-    reports that the probe failed. The engine must not blindly load the tail.
-    Instead, it should enter NEED_ANCHOR and require additional normal prefill
-    up to anchor_end. With start=2 and anchor_tokens=4, anchor_end is 6; because
-    the probe already reached 4, the next capped chunk should be two tokens.
+    reports that the probe failed. The engine must not trust the bulk-preloaded
+    prefix. Instead, it should enter RECOMPUTING and require additional real
+    prefill up to anchor_end (2 + 4 = 6); because the probe already reached 4,
+    the next capped chunk should be two tokens. That real prefill overwrites
+    the bulk-preloaded [4, 6); [6, 8) still needs no second load.
 
     Purpose: this covers the safety path for cases where cached KV appears too
-    different from real recompute KV. The engine responds by recomputing more of
-    the skill before considering reuse.
+    different from real recompute KV. The engine responds by recomputing more
+    of the skill (bounded to anchor_tokens) before trusting the rest.
     """
     skill = [10, 11, 12, 13, 14, 15]
     prompt = [1, 2] + skill
@@ -328,14 +353,18 @@ def test_probe_fsm_fail_needs_anchor() -> None:
         }
     }
     eng.cap_prefill_before_reuse("r1", prompt, 0, 10, signal)
-    eng.cap_prefill_before_reuse("r1", prompt, 2, 10, signal)
+    eng.cap_prefill_before_reuse("r1", prompt, 2, 10, signal)  # still LOADING, 0
+    eng.get_boundary_reuse_load_tokens("r1", prompt, 2)  # dispatch bulk preload
+    eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=6)
+    eng.build_meta({"r1": 0})
+    eng.cap_prefill_before_reuse("r1", prompt, 2, 10, signal)  # probe prefix
     eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=0)
     eng.build_meta({"r1": 2})
     metrics = CSKProbeMetrics(1, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, "max", ())
     failed = CSKProbeDecision("r1", "skill", False, 0.15, metrics)
     eng.on_worker_decisions([failed])
-    assert eng._probe_states["r1"].phase == CSKProbePhase.NEED_ANCHOR
-    # Anchor recompute up to anchor_end (2 + 4 = 6).
+    assert eng._reuse_states["r1"].stage == CSKReuseStage.RECOMPUTING
+    # Recompute up to anchor_end (2 + 4 = 6).
     assert eng.cap_prefill_before_reuse("r1", prompt, 4, 10, signal) == 2
 
 
@@ -359,6 +388,12 @@ def test_probe_fsm_advances_to_second_reuse_entry() -> None:
     }
 
     assert eng.cap_prefill_before_reuse("r1", prompt, 0, 20, signal) == 1
+    assert eng.cap_prefill_before_reuse("r1", prompt, 1, 20, signal) == 0  # LOADING
+    tokens, advance = eng.get_boundary_reuse_load_tokens("r1", prompt, 1)
+    assert (tokens, advance) == (4, False)
+    eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=4)
+    eng.build_meta({"r1": 0})
+
     assert eng.cap_prefill_before_reuse("r1", prompt, 1, 20, signal) == 1
     eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=0)
     _, probes, _, _ = eng.build_meta({"r1": 1})
@@ -369,14 +404,14 @@ def test_probe_fsm_advances_to_second_reuse_entry() -> None:
     eng.on_worker_decisions(
         [CSKProbeDecision("r1", "first", True, 0.15, metrics)]
     )
-    assert eng.get_boundary_reuse_load_tokens("r1", prompt, 2) == 3
+    assert eng.get_boundary_reuse_load_tokens("r1", prompt, 2) == (3, True)
     eng.update_reuse_after_alloc("r1", ([0],), num_external_tokens=3)
     requests, _, _, _ = eng.build_meta({"r1": 0})
     assert requests[0].plan.cache_id == "first"
 
     assert eng.cap_prefill_before_reuse("r1", prompt, 5, 20, signal) == 1
-    assert eng.cap_prefill_before_reuse("r1", prompt, 6, 20, signal) == 1
-    assert eng._probe_states["r1"].cache_id == "second"
+    assert eng.cap_prefill_before_reuse("r1", prompt, 6, 20, signal) == 0  # LOADING
+    assert eng._reuse_states["r1"].cache_id == "second"
 
 
 if __name__ == "__main__":

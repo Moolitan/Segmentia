@@ -207,7 +207,7 @@ def test_request_finished_cleans_scheduler_state() -> None:
         impl._engine._pending_reuses,
         impl._engine._plans,
         impl._engine._allocated_blocks,
-        impl._engine._probe_states,
+        impl._engine._reuse_states,
         impl._engine._pending_saves,
         impl._engine._request_prompt_lengths,
         impl._engine._request_initial_frontiers,

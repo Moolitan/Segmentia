@@ -2,7 +2,7 @@
 
 This subpackage only knows how to run an existing blocking call (like
 ``StorageManager.get()``) on a background thread and hand back a small
-handle. It has no knowledge of ``CSKProbeState``, reuse signals, or any other
+handle. It has no knowledge of ``CSKReuseState``, reuse signals, or any other
 scheduling concept in ``cskcache.v1.core`` — callers decide when to submit
 work and when to block on the result, keeping this module swappable or
 removable without touching the engine's own logic.

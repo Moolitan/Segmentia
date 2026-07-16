@@ -26,7 +26,7 @@ from cskcache.v1.compute import CSKProbeAccumulator, CSKProbeDecision
 from cskcache.logging import init_logger
 from cskcache.profiling import LoadTrace, NullLoadTrace, Profiler
 from cskcache.v1.core.config import CSKCacheConfig
-from cskcache.v1.core.probe_state import CSKProbePhase, CSKProbeState
+from cskcache.v1.core.probe_state import CSKReuseStage, CSKReuseState
 from cskcache.v1.kv_transfer.gpu_connector import (
     KVConnectorInterface,
     VLLMPagedGPUConnector,
@@ -106,7 +106,7 @@ class CSKCacheEngine:
         self._allocated_blocks: dict[str, tuple[list[int], ...]] = {}
         self._reuse_spans: dict[str, tuple[ReuseSpan, ...]] = {}
         self._pending_reuses: dict[str, ReuseSpan] = {}
-        self._probe_states: dict[str, CSKProbeState] = {}
+        self._reuse_states: dict[str, CSKReuseState] = {}
         self._pending_saves: dict[str, _PendingSave] = {}
         self._request_prompt_lengths: dict[str, int] = {}
         self._request_initial_frontiers: dict[str, int] = {}
@@ -207,7 +207,7 @@ class CSKCacheEngine:
                 return 0
             return num_new_tokens
 
-        state = self._get_or_create_probe_state(
+        state = self._get_or_create_reuse_state(
             req_id, token_ids, base_num_computed_tokens, kv_transfer_params
         )
         if state is None:
@@ -217,10 +217,16 @@ class CSKCacheEngine:
         if base < state.start:
             return min(num_new_tokens, state.start - base)
         if base > state.end:
-            state.phase = CSKProbePhase.DONE
+            state.stage = CSKReuseStage.DONE
             return num_new_tokens
 
-        if state.phase == CSKProbePhase.NEED_PROBE:
+        if state.stage == CSKReuseStage.LOADING:
+            # The bulk preload is dispatched from get_boundary_reuse_load_tokens,
+            # which the scheduler checks before this method each step. Nothing
+            # to really compute yet; wait for that to flip the stage forward.
+            return 0
+
+        if state.stage == CSKReuseStage.PROBING:
             if base == state.start and not state.gap_completed_logged:
                 logger.info(
                     "gap prefill completed req_id=%s cache_id=%s frontier=%d",
@@ -236,13 +242,13 @@ class CSKCacheEngine:
                     event="gap_completed",
                 )
             if base >= state.probe_end:
-                state.phase = CSKProbePhase.WAIT_PROBE
+                state.stage = CSKReuseStage.GATING
                 return 0
             capped = min(num_new_tokens, state.probe_end - base)
             if not state.probe_scheduled_logged:
                 logger.info(
                     "probe scheduled req_id=%s cache_id=%s skill=[%d,%d) "
-                    "probe=[%d,%d) probe_tokens=%d anchor_end=%d "
+                    "probe=[%d,%d) probe_tokens=%d recompute_end=%d "
                     "tokens_after_skill=%d",
                     req_id,
                     state.cache_id,
@@ -263,41 +269,45 @@ class CSKCacheEngine:
                     metadata={"probe_tokens": state.probe_len},
                 )
             if base + capped >= state.probe_end:
-                state.pending_capture = "probe"
+                state.pending_capture = True
             return capped
 
-        if state.phase == CSKProbePhase.WAIT_PROBE:
+        if state.stage == CSKReuseStage.GATING:
             return 0
 
-        if state.phase == CSKProbePhase.NEED_ANCHOR:
+        if state.stage == CSKReuseStage.RECOMPUTING:
             if base >= state.anchor_end:
-                state.phase = CSKProbePhase.NEED_LOAD
-                state.load_start = state.anchor_end
+                state.stage = CSKReuseStage.READY
                 return 0
             capped = min(num_new_tokens, state.anchor_end - base)
-            if not state.anchor_scheduled_logged:
+            if not state.recompute_scheduled_logged:
                 logger.info(
-                    "anchor prefill scheduled req_id=%s cache_id=%s "
-                    "anchor=[%d,%d) anchor_tokens=%d",
+                    "recompute scheduled req_id=%s cache_id=%s "
+                    "recompute=[%d,%d) recompute_tokens=%d",
                     req_id,
                     state.cache_id,
                     base,
                     state.anchor_end,
                     state.anchor_end - base,
                 )
-                state.anchor_scheduled_logged = True
+                state.recompute_scheduled_logged = True
                 self._profiler.mark_timeline(
                     req_id=req_id,
                     cache_id=state.cache_id,
                     target_start=state.start,
-                    event="anchor_scheduled",
-                    metadata={"anchor_tokens": state.anchor_end - base},
+                    event="recompute_scheduled",
+                    metadata={"recompute_tokens": state.anchor_end - base},
                 )
             if base + capped >= state.anchor_end:
-                state.pending_capture = "anchor"
+                # Mirrors the PROBING branch: as soon as this step commits to
+                # scheduling the last recompute chunk, it is safe to consider
+                # recompute done -- vLLM guarantees scheduled tokens get
+                # computed. build_meta() advances the stage the moment it
+                # sees this, without waiting for a later confirming call here.
+                state.pending_capture = True
             return capped
 
-        if state.phase == CSKProbePhase.NEED_LOAD:
+        if state.stage == CSKReuseStage.READY:
             return 0
 
         return num_new_tokens
@@ -307,8 +317,21 @@ class CSKCacheEngine:
         req_id: str,
         token_ids: list[int],
         num_computed_tokens: int,
-    ) -> int:
-        """Return how many boundary tokens should be loaded without forward."""
+    ) -> tuple[int, bool]:
+        """Return (num_tokens, advance_frontier) for a load dispatched
+        without a real forward pass on the scheduler side this step.
+
+        advance_frontier tells the caller whether to immediately bump
+        request.num_computed_tokens by num_tokens. It is True everywhere
+        except the probe-gated bulk preload (CSKReuseStage.LOADING): that
+        call reserves blocks and scatters the *entire* span in one shot, but
+        the frontier must stay put so vLLM still runs a real forward pass
+        over the probe (and, if the gate fails, recompute) prefix -- that
+        real forward naturally overwrites whatever was just scattered at
+        those positions. Once the gate resolves (CSKReuseStage.READY), a
+        second call here only confirms the frontier the rest of the way to
+        state.end; nothing needs loading again because it is already there.
+        """
 
         boundary = self._pending_reuses.get(req_id)
         if boundary is not None and num_computed_tokens == boundary.start:
@@ -327,52 +350,89 @@ class CSKCacheEngine:
                 event="gap_completed",
             )
             self._pending_reuses.pop(req_id, None)
-            return boundary.length
+            return boundary.length, True
 
         if not self._config.probe_enabled:
-            return 0
-        state = self._probe_states.get(req_id)
-        if state is None or state.phase != CSKProbePhase.NEED_LOAD:
-            return 0
-        load_start = state.load_start
-        if load_start is None or num_computed_tokens != load_start:
-            return 0
-        logger.info(
-            "anchor completed req_id=%s cache_id=%s frontier=%d "
-            "recomputed_skill_tokens=%d load_target=[%d,%d) "
-            "source_offset=%d load_tokens=%d tokens_after_skill=%d",
-            req_id,
-            state.cache_id,
-            load_start,
-            load_start - state.start,
-            load_start,
-            state.end,
-            load_start - state.start,
-            state.end - load_start,
-            self._tokens_after_skill(req_id, state.end),
-        )
-        self._profiler.mark_timeline(
-            req_id=req_id,
-            cache_id=state.cache_id,
-            target_start=state.start,
-            event="anchor_completed",
-        )
-        length = state.end - load_start
-        if length <= 0:
-            state.phase = CSKProbePhase.DONE
-            return 0
-        target_token_ids = tuple(token_ids[load_start : state.end])
-        self._plans[req_id] = CSKLoadPlan(
-            req_id=req_id,
-            cache_id=state.cache_id,
-            mode=CSKCacheMode.REUSE,
-            start=load_start,
-            end=state.end,
-            token_ids=target_token_ids,
-            source_offset=load_start - state.start,
-        )
-        self._log_load_plan(self._plans[req_id], "probe")
-        return length
+            return 0, True
+        state = self._reuse_states.get(req_id)
+        if state is None:
+            return 0, True
+
+        if (
+            state.stage == CSKReuseStage.LOADING
+            and num_computed_tokens == state.start
+        ):
+            target_token_ids = tuple(token_ids[state.start : state.end])
+            self._plans[req_id] = CSKLoadPlan(
+                req_id=req_id,
+                cache_id=state.cache_id,
+                mode=CSKCacheMode.REUSE,
+                start=state.start,
+                end=state.end,
+                token_ids=target_token_ids,
+                source_offset=0,
+                requires_scatter=True,
+            )
+            state.stage = CSKReuseStage.PROBING
+            logger.info(
+                "bulk preload dispatched req_id=%s cache_id=%s target=[%d,%d) "
+                "tokens=%d probe_tokens=%d recompute_tokens=%d",
+                req_id,
+                state.cache_id,
+                state.start,
+                state.end,
+                state.length,
+                state.probe_len,
+                state.anchor_len,
+            )
+            self._profiler.mark_timeline(
+                req_id=req_id,
+                cache_id=state.cache_id,
+                target_start=state.start,
+                event="bulk_preload_dispatched",
+                metadata={"load_tokens": state.length},
+            )
+            return state.length, False
+
+        if state.stage == CSKReuseStage.READY:
+            length = state.end - num_computed_tokens
+            if length <= 0:
+                state.stage = CSKReuseStage.DONE
+                return 0, True
+            target_token_ids = tuple(token_ids[num_computed_tokens : state.end])
+            self._plans[req_id] = CSKLoadPlan(
+                req_id=req_id,
+                cache_id=state.cache_id,
+                mode=CSKCacheMode.REUSE,
+                start=num_computed_tokens,
+                end=state.end,
+                token_ids=target_token_ids,
+                source_offset=num_computed_tokens - state.start,
+                requires_scatter=False,
+            )
+            logger.info(
+                "reuse confirmed req_id=%s cache_id=%s frontier=%d "
+                "recomputed_skill_tokens=%d target=[%d,%d) tokens=%d "
+                "tokens_after_skill=%d",
+                req_id,
+                state.cache_id,
+                num_computed_tokens,
+                num_computed_tokens - state.start,
+                num_computed_tokens,
+                state.end,
+                length,
+                self._tokens_after_skill(req_id, state.end),
+            )
+            self._profiler.mark_timeline(
+                req_id=req_id,
+                cache_id=state.cache_id,
+                target_start=state.start,
+                event="reuse_confirmed",
+            )
+            self._log_load_plan(self._plans[req_id], "confirm")
+            return length, True
+
+        return 0, True
 
     def update_reuse_after_alloc(
         self,
@@ -467,9 +527,14 @@ class CSKCacheEngine:
                         "source_offset": plan.source_offset,
                     },
                 )
-                state = self._probe_states.get(req_id)
-                if state is not None:
-                    state.phase = CSKProbePhase.DONE
+                # Only the confirm plan (issued once the gate resolved) means
+                # this reuse span is actually finished. The bulk-preload plan
+                # also flows through here, but its state.stage is already
+                # PROBING (set by get_boundary_reuse_load_tokens) and must
+                # stay that way -- vLLM still owes it a real forward pass.
+                state = self._reuse_states.get(req_id)
+                if state is not None and state.stage == CSKReuseStage.READY:
+                    state.stage = CSKReuseStage.DONE
                 continue
 
             pending_save = self._pending_saves.get(req_id)
@@ -501,7 +566,7 @@ class CSKCacheEngine:
                     self._pending_saves.pop(req_id, None)
                 continue
 
-            state = self._probe_states.get(req_id)
+            state = self._reuse_states.get(req_id)
             if state is None:
                 continue
             if not state.prefetch_hint_sent:
@@ -511,7 +576,9 @@ class CSKCacheEngine:
                 state.prefetch_hint_sent = True
             if scheduled <= 0 or blocks is None:
                 continue
-            if state.pending_capture == "probe":
+            if not state.pending_capture:
+                continue
+            if state.stage == CSKReuseStage.PROBING:
                 probes.append(
                     CSKProbeMeta(
                         req_id=req_id,
@@ -524,26 +591,35 @@ class CSKCacheEngine:
                         gate_metric=state.gate_metric,
                     )
                 )
-                state.pending_capture = None
-                state.phase = CSKProbePhase.WAIT_PROBE
+                state.pending_capture = False
+                state.stage = CSKReuseStage.GATING
                 self._profiler.mark_timeline(
                     req_id=req_id,
                     cache_id=state.cache_id,
                     target_start=state.start,
                     event="probe_dispatched",
                 )
-            elif state.pending_capture == "anchor":
-                state.pending_capture = None
-                state.phase = CSKProbePhase.NEED_LOAD
-                state.load_start = state.anchor_end
+            elif state.stage == CSKReuseStage.RECOMPUTING:
+                # The last recompute chunk was just committed to this step's
+                # schedule; vLLM guarantees it will really run, so it is safe
+                # to consider the gate resolved without waiting for a later
+                # confirming call to cap_prefill_before_reuse.
+                state.pending_capture = False
+                state.stage = CSKReuseStage.READY
+                self._profiler.mark_timeline(
+                    req_id=req_id,
+                    cache_id=state.cache_id,
+                    target_start=state.start,
+                    event="recompute_completed",
+                )
         return requests, probes, saves, prefetch_hints
 
     def on_worker_decisions(self, decisions: Iterable[CSKProbeDecision]) -> None:
-        """Advance probe states from worker gate decisions (was update_connector_output)."""
+        """Advance reuse states from worker gate decisions (was update_connector_output)."""
 
         for decision in decisions:
-            state = self._probe_states.get(decision.req_id)
-            if state is None or state.phase != CSKProbePhase.WAIT_PROBE:
+            state = self._reuse_states.get(decision.req_id)
+            if state is None or state.stage != CSKReuseStage.GATING:
                 continue
             state.decision = decision
             self._profiler.mark_timeline(
@@ -554,15 +630,18 @@ class CSKCacheEngine:
                 metadata={"passed": decision.passed},
             )
             if decision.passed:
-                state.phase = CSKProbePhase.NEED_LOAD
-                state.load_start = state.probe_end
+                # Cached KV was already fresh; the bulk-preloaded tail from
+                # probe_end onward needs nothing further.
+                state.stage = CSKReuseStage.READY
             else:
-                state.phase = CSKProbePhase.NEED_ANCHOR
+                # Extend the real forward pass out to anchor_end; it will
+                # overwrite the bulk-preloaded [probe_end, anchor_end) slice.
+                state.stage = CSKReuseStage.RECOMPUTING
             logger.info(
                 "probe decision req_id=%s cache_id=%s passed=%s "
                 "gate=%.6f tau=%.6f metric=%s layers=%d "
                 "k_mean=%.6f v_mean=%.6f kv_mean=%.6f "
-                "next_phase=%s load_start=%s",
+                "next_stage=%s",
                 decision.req_id,
                 decision.cache_id,
                 decision.passed,
@@ -573,19 +652,18 @@ class CSKCacheEngine:
                 decision.metrics.k_mean,
                 decision.metrics.v_mean,
                 decision.metrics.kv_mean,
-                state.phase.value,
-                state.load_start,
+                state.stage.value,
             )
 
     def on_finished(self, req_ids: Iterable[str]) -> None:
         for req_id in req_ids:
             spans = self._reuse_spans.get(req_id, ())
-            state = self._probe_states.get(req_id)
-            final_phase = state.phase.value if state is not None else "none"
+            state = self._reuse_states.get(req_id)
+            final_stage = state.stage.value if state is not None else "none"
             had_state = any(
                 req_id in mapping
                 for mapping in (
-                    self._probe_states,
+                    self._reuse_states,
                     self._plans,
                     self._allocated_blocks,
                     self._probe_accumulators,
@@ -596,7 +674,7 @@ class CSKCacheEngine:
                 )
             )
             self._profiler.finish_request_timelines(req_id)
-            self._probe_states.pop(req_id, None)
+            self._reuse_states.pop(req_id, None)
             self._plans.pop(req_id, None)
             self._allocated_blocks.pop(req_id, None)
             self._probe_accumulators.pop(req_id, None)
@@ -610,7 +688,7 @@ class CSKCacheEngine:
                 remaining = sum(
                     req_id in mapping
                     for mapping in (
-                        self._probe_states,
+                        self._reuse_states,
                         self._plans,
                         self._allocated_blocks,
                         self._probe_accumulators,
@@ -624,10 +702,10 @@ class CSKCacheEngine:
                 )
                 logger.info(
                     "request finished req_id=%s reuse_entries=%d "
-                    "final_probe_phase=%s scheduler_state_remaining=%d",
+                    "final_reuse_stage=%s scheduler_state_remaining=%d",
                     req_id,
                     len(spans),
-                    final_phase,
+                    final_stage,
                     remaining,
                 )
 
@@ -662,6 +740,23 @@ class CSKCacheEngine:
             self._gpu.set_model(model)
         for request in requests:
             plan = request.plan
+            if not plan.requires_scatter:
+                # The confirm plan issued once a probe-gated span's gate
+                # resolved (CSKReuseStage.READY): [plan.start, plan.end) was
+                # already scattered by the earlier bulk-preload plan and, for
+                # whatever prefix vLLM's own forward pass touched, freshly
+                # overwritten by that forward. Nothing to move; the scheduler
+                # side already advanced the frontier.
+                logger.info(
+                    "KV already resident, confirming frontier only "
+                    "req_id=%s cache_id=%s target=[%d,%d) tokens=%d",
+                    plan.req_id,
+                    plan.cache_id,
+                    plan.start,
+                    plan.end,
+                    plan.length,
+                )
+                continue
             trace = self._profiler.start_worker_load(
                 req_id=plan.req_id,
                 cache_id=plan.cache_id,
@@ -1282,15 +1377,15 @@ class CSKCacheEngine:
             },
         )
 
-    def _get_or_create_probe_state(
+    def _get_or_create_reuse_state(
         self,
         req_id: str,
         token_ids: list[int],
         num_computed_tokens: int,
         kv_transfer_params: Mapping | None,
-    ) -> CSKProbeState | None:
-        state = self._probe_states.get(req_id)
-        if state is not None and state.phase != CSKProbePhase.DONE:
+    ) -> CSKReuseState | None:
+        state = self._reuse_states.get(req_id)
+        if state is not None and state.stage != CSKReuseStage.DONE:
             return state
 
         if req_id not in self._reuse_spans:
@@ -1302,7 +1397,7 @@ class CSKCacheEngine:
             return None
 
         length = reuse.length
-        state = CSKProbeState(
+        state = CSKReuseState(
             req_id=req_id,
             cache_id=reuse.cache_id,
             start=reuse.start,
@@ -1312,7 +1407,7 @@ class CSKCacheEngine:
             tau=self._config.probe_tau,
             gate_metric=self._config.gate_metric,
         )
-        self._probe_states[req_id] = state
+        self._reuse_states[req_id] = state
         self._log_gap_scheduled(req_id, reuse, num_computed_tokens)
         return state
 

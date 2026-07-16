@@ -105,8 +105,18 @@ class CSKLoadPlan:
     request slots [start, end).
 
     source_offset is measured in the cached entry. It is zero for full skill
-    reuse, and non-zero when probe-gated execution has already recomputed an
-    initial prefix and only the remaining tail should be loaded.
+    reuse. For probe-gated spans it is always zero too, since the entire span
+    is bulk-scattered up front (see CSKReuseStage.LOADING); a non-zero value
+    only appears when a later reuse span picks up mid-entry for some other
+    reason.
+
+    requires_scatter is False for the probe-gated "confirm" plan issued once
+    the gate resolves (CSKReuseStage.READY -> DONE): the KV for
+    [start, end) was already scattered by the earlier bulk-load plan and,
+    for any prefix real forward touched, freshly overwritten by vLLM's own
+    forward pass, so the worker only needs to confirm the frontier, not
+    scatter anything again. It defaults to True so every other call site
+    (offline direct reuse, non-probe boundary reuse) is unaffected.
     """
     req_id: str
     cache_id: str
@@ -115,6 +125,7 @@ class CSKLoadPlan:
     end: int
     token_ids: tuple[int, ...]
     source_offset: int = 0
+    requires_scatter: bool = True
 
     @property
     def length(self) -> int:

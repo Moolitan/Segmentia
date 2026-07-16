@@ -78,6 +78,25 @@ def parse_args() -> argparse.Namespace:
         "check whether a within-run speed step coincides with the GPU "
         "leaving its idle power state, not to explain the base benchmark.",
     )
+    parser.add_argument(
+        "--pipeline",
+        action="store_true",
+        help="Diagnostic only: run to_gpu() through its opt-in pipelined "
+        "path (layer i+1's H2D+RoPE on a second CUDA stream, overlapping "
+        "layer i's scatter) instead of the default sequential path, for "
+        "every warmup and measured iteration in this case.",
+    )
+    parser.add_argument(
+        "--timeline-output",
+        type=Path,
+        default=None,
+        help="Diagnostic only: requires --pipeline. After the measured "
+        "repetitions, run one more to_gpu() call with per-layer event "
+        "timestamps recorded, and write it as JSON to this path -- input "
+        "for plot_pipeline_timeline.py's Gantt-style visualization. Not "
+        "part of the timed statistics (recording the timeline itself adds "
+        "overhead).",
+    )
     return parser.parse_args()
 
 
@@ -90,6 +109,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--position-shift must be non-negative")
     if args.block_size <= 0:
         raise ValueError("--block-size must be positive")
+    if args.timeline_output is not None and not args.pipeline:
+        raise ValueError("--timeline-output requires --pipeline")
 
 
 def sample_gpu_clock(gpu_index: int) -> dict[str, Any]:
@@ -266,6 +287,8 @@ def run_iteration(
     block_ids: list[int],
     byte_count: int,
     device: torch.device,
+    prefetch_stream: torch.cuda.Stream | None = None,
+    timeline: list[dict] | None = None,
 ) -> dict[str, Any] | None:
     """Run one connector.to_gpu() call and time it. When measured=False
     (warmup iterations), the exact same path still runs in full to warm up
@@ -312,7 +335,12 @@ def run_iteration(
     wall_started = time.perf_counter()
     start_event.record(torch.cuda.current_stream(device))
     expected, scattered, skipped = connector.to_gpu(
-        entry, plan, block_ids, trace=trace
+        entry,
+        plan,
+        block_ids,
+        trace=trace,
+        prefetch_stream=prefetch_stream,
+        timeline=timeline,
     )
     end_event.record(torch.cuda.current_stream(device))
     end_event.synchronize()
@@ -445,6 +473,12 @@ def main() -> None:
     )
     byte_count = entry_nbytes(entry)
     profiling = args.profiling == "on"
+    # Diagnostic only (default None -> connector.to_gpu()'s original
+    # sequential path, unaffected). One stream is created once and reused
+    # for every iteration in this case, matching how a real worker would
+    # hold onto its prefetch stream across many loads rather than paying
+    # stream-creation cost per call.
+    prefetch_stream = torch.cuda.Stream(device=device) if args.pipeline else None
 
     for warmup_index in range(args.warmup):
         run_iteration(
@@ -457,6 +491,7 @@ def main() -> None:
             block_ids=block_ids,
             byte_count=byte_count,
             device=device,
+            prefetch_stream=prefetch_stream,
         )
     validate_scatter(connector, entry, plan, block_ids)
 
@@ -466,6 +501,7 @@ def main() -> None:
         "profiling": args.profiling,
         "memory": args.memory,
         "position_shift": args.position_shift,
+        "pipeline": args.pipeline,
         "warmup": args.warmup,
         "repetitions": args.repetitions,
         "cache_id": entry.cache_id,
@@ -500,6 +536,7 @@ def main() -> None:
                 block_ids=block_ids,
                 byte_count=byte_count,
                 device=device,
+                prefetch_stream=prefetch_stream,
             )
             assert record is not None
             record.update(
@@ -508,6 +545,7 @@ def main() -> None:
                     "profiling": args.profiling,
                     "memory": args.memory,
                     "position_shift": args.position_shift,
+                    "pipeline": args.pipeline,
                 }
             )
             if args.sample_gpu_clock:
@@ -522,6 +560,36 @@ def main() -> None:
         f"[completed] case_id={args.case_id} repetitions={args.repetitions} "
         f"median_ms={statistics.median(measured_wall):.3f} output={args.output}"
     )
+
+    if args.timeline_output is not None:
+        # One extra, untimed-for-statistics call whose only purpose is to
+        # capture per-layer event timestamps for a Gantt-style plot. The
+        # connector/entry/plan are already warm from the loop above, so
+        # this is the same steady-state path the measured iterations took.
+        timeline: list[dict] = []
+        torch.cuda.synchronize(device)
+        connector.to_gpu(
+            entry,
+            plan,
+            block_ids,
+            prefetch_stream=prefetch_stream,
+            timeline=timeline,
+        )
+        torch.cuda.synchronize(device)
+        args.timeline_output.parent.mkdir(parents=True, exist_ok=True)
+        args.timeline_output.write_text(
+            json.dumps(
+                {
+                    "case_id": args.case_id,
+                    "cache_id": entry.cache_id,
+                    "memory": args.memory,
+                    "num_layers": len(entry.kv_by_layer),
+                    "events": timeline,
+                },
+                sort_keys=True,
+            )
+        )
+        print(f"[timeline] events={len(timeline)} output={args.timeline_output}")
 
 
 if __name__ == "__main__":

@@ -37,6 +37,7 @@ class KVConnectorInterface(ABC):
         block_ids: list[int],
         trace: LoadTrace | NullLoadTrace | None = None,
         prefetch_stream: torch.cuda.Stream | None = None,
+        timeline: list[dict] | None = None,
     ) -> tuple[int, int, int]:
         """Scatter every entry layer and return expected/scattered/skipped counts.
 
@@ -45,6 +46,15 @@ class KVConnectorInterface(ABC):
         scatter runs on the caller's current stream, so the two overlap
         instead of running strictly back-to-back. Omitting it (the default)
         reproduces the exact original sequential behavior.
+
+        ``timeline`` is a diagnostic-only opt-in (only meaningful together
+        with ``prefetch_stream``): pass an empty list to have each layer's
+        H2D+RoPE and scatter intervals appended as
+        ``{"stream", "stage", "layer", "start_ms", "end_ms"}`` dicts,
+        offsets relative to the start of this call. Costs extra
+        ``torch.cuda.Event`` bookkeeping and one full ``synchronize()`` at
+        the end, so it's for building a timeline visualization, not
+        something to leave on in production.
         """
 
     @abstractmethod
@@ -152,6 +162,7 @@ class VLLMPagedGPUConnector(KVConnectorInterface):
         block_ids: list[int],
         trace: LoadTrace | NullLoadTrace | None = None,
         prefetch_stream: torch.cuda.Stream | None = None,
+        timeline: list[dict] | None = None,
     ) -> tuple[int, int, int]:
         expected_layers = set(entry.kv_by_layer)
         available_layers = set(self._kv_caches)
@@ -168,6 +179,11 @@ class VLLMPagedGPUConnector(KVConnectorInterface):
                 f"available_layers={len(available_layers)} "
                 f"missing_layers={len(missing_layers)} missing=[{preview}]"
             )
+        if timeline is not None and prefetch_stream is None:
+            raise ValueError(
+                "CSKCache to_gpu(): timeline recording only applies to the "
+                "pipelined path; pass prefetch_stream too, or drop timeline"
+            )
 
         stage_trace = trace if trace is not None else NullLoadTrace()
         layer_names = list(entry.kv_by_layer)
@@ -177,7 +193,13 @@ class VLLMPagedGPUConnector(KVConnectorInterface):
             )
         else:
             scattered_layers = self._scatter_pipelined(
-                entry, plan, block_ids, layer_names, stage_trace, prefetch_stream
+                entry,
+                plan,
+                block_ids,
+                layer_names,
+                stage_trace,
+                prefetch_stream,
+                timeline,
             )
         return len(expected_layers), scattered_layers, 0
 
@@ -223,6 +245,7 @@ class VLLMPagedGPUConnector(KVConnectorInterface):
         layer_names: list[str],
         stage_trace: LoadTrace | NullLoadTrace,
         prefetch_stream: torch.cuda.Stream,
+        timeline: list[dict] | None = None,
     ) -> int:
         """Layer i+1's H2D+RoPE (reuse_slice) runs on prefetch_stream while
         layer i's scatter -- the only step that touches the shared paged
@@ -233,11 +256,26 @@ class VLLMPagedGPUConnector(KVConnectorInterface):
         already-ready key/value) is enforced by GpuPrefetchHandle.result()'s
         cross-stream wait.
         """
+        t0 = None
+        # (stream_label, stage, layer_name, start_event, end_event); resolved
+        # to millisecond offsets in one pass after everything has completed,
+        # since event.elapsed_time() requires both events to have fired.
+        raw_events: list[
+            tuple[str, str, str, torch.cuda.Event, torch.cuda.Event]
+        ] = []
+        if timeline is not None:
+            t0 = torch.cuda.Event(enable_timing=True)
+            t0.record()
 
         def fetch(layer_name: str) -> GpuPrefetchHandle:
             target_cache = self._kv_caches[layer_name]
-            return submit_gpu_prefetch(
-                lambda: self.reuse_slice(
+
+            def do_fetch() -> tuple[torch.Tensor, torch.Tensor]:
+                start_event = end_event = None
+                if timeline is not None:
+                    start_event = torch.cuda.Event(enable_timing=True)
+                    start_event.record(prefetch_stream)
+                result = self.reuse_slice(
                     entry,
                     layer_name=layer_name,
                     source_offset=plan.source_offset,
@@ -245,9 +283,16 @@ class VLLMPagedGPUConnector(KVConnectorInterface):
                     target_start=plan.start,
                     device=target_cache.device,
                     trace=stage_trace,
-                ),
-                prefetch_stream,
-            )
+                )
+                if timeline is not None:
+                    end_event = torch.cuda.Event(enable_timing=True)
+                    end_event.record(prefetch_stream)
+                    raw_events.append(
+                        ("prefetch_stream", "h2d_rope", layer_name, start_event, end_event)
+                    )
+                return result
+
+            return submit_gpu_prefetch(do_fetch, prefetch_stream)
 
         scattered_layers = 0
         pending = fetch(layer_names[0])
@@ -256,6 +301,10 @@ class VLLMPagedGPUConnector(KVConnectorInterface):
             key, value = pending.result()
             if index + 1 < len(layer_names):
                 pending = fetch(layer_names[index + 1])
+            scatter_start = scatter_end = None
+            if timeline is not None:
+                scatter_start = torch.cuda.Event(enable_timing=True)
+                scatter_start.record()
             with stage_trace.cuda_stage("scatter_span", target_cache.device):
                 scatter_span(
                     target_cache,
@@ -266,5 +315,24 @@ class VLLMPagedGPUConnector(KVConnectorInterface):
                     key,
                     value,
                 )
+            if timeline is not None:
+                scatter_end = torch.cuda.Event(enable_timing=True)
+                scatter_end.record()
+                raw_events.append(
+                    ("default_stream", "scatter", layer_name, scatter_start, scatter_end)
+                )
             scattered_layers += 1
+
+        if timeline is not None:
+            torch.cuda.synchronize()
+            for stream_label, stage, layer_name, start_event, end_event in raw_events:
+                timeline.append(
+                    {
+                        "stream": stream_label,
+                        "stage": stage,
+                        "layer": layer_name,
+                        "start_ms": t0.elapsed_time(start_event),
+                        "end_ms": t0.elapsed_time(end_event),
+                    }
+                )
         return scattered_layers

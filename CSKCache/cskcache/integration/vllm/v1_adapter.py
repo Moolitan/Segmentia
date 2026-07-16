@@ -169,7 +169,9 @@ class CSKCacheConnectorV1Impl:
         self,
         request: "Request",
         num_computed_tokens: int,
-    ) -> int:
+    ) -> tuple[int, bool]:
+        """Return (num_tokens, advance_frontier); see CSKCacheEngine's
+        docstring on the same method for what advance_frontier means."""
         return self._engine.get_boundary_reuse_load_tokens(
             request.request_id,
             self._request_token_ids(request),

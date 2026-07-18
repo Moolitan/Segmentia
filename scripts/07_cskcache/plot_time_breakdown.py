@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot CSKCache request, probe, and tail-load time decomposition.
+"""Plot CSKCache request, probe, and bulk-preload time decomposition.
 
 The script reads profiler JSONL directly. It never embeds measured values in
 code, and it writes the normalized long-form data used by the figure
@@ -8,7 +8,7 @@ stacked groups.
 
 The figure is a single shared millisecond timeline per occurrence: row (a) is
 the reuse critical path, and rows (b)/(c) are drill-downs of the "Probe
-roundtrip" and "Tail KV load" segments, drawn at their true x-position inside
+roundtrip" and "Bulk preload" segments, drawn at their true x-position inside
 row (a) and linked to it with a shaded connector. This avoids the earlier
 version's independent per-panel axes, which stretched a 155 ms bar and a
 1062 ms bar to the same visual width.
@@ -47,15 +47,15 @@ DEFAULT_OUTPUT_DIR = (
 )
 
 # Fixed reading order + one hex per leaf stage. Stages shared between the
-# probe and tail-load drill-downs (Key H2D, Value H2D, RoPE, Storage lookup)
-# keep the same color in both rows. "Probe roundtrip" and "Tail KV load" are
+# probe and bulk-preload drill-downs (Key H2D, Value H2D, RoPE, Storage lookup)
+# keep the same color in both rows. "Probe roundtrip" and "Bulk preload" are
 # containers, not leaves: they are rendered as a hatched placeholder in row
 # (a) because they are decomposed in rows (b)/(c), so they never compete with
 # the legend below.
 STAGE_ORDER = [
     "Scheduler lookup",
     "Gap prefill",
-    "Anchor prefill",
+    "Recompute prefill",
     "Load dispatch",
     "Disk deserialize",
     "Prefetch wait",
@@ -71,7 +71,7 @@ STAGE_ORDER = [
 STAGE_COLORS = {
     "Scheduler lookup": "#4477AA",
     "Gap prefill": "#DDCC77",
-    "Anchor prefill": "#AA4499",
+    "Recompute prefill": "#AA4499",
     "Load dispatch": "#117733",
     "Disk deserialize": "#882255",
     # Background disk prefetch (cskcache.v1.async_load.disk_prefetch): time
@@ -88,7 +88,11 @@ STAGE_COLORS = {
     "Scatter": "#44AA99",
     "Other/control": "#999999",
 }
-CONTAINER_STAGES = {"Probe roundtrip", "Tail KV load"}
+# "Bulk preload" replaces the old "Tail KV load" name: since the redesign
+# (整体先搬，探针/重算用 vLLM 真前向覆盖，只确认不重搬), the whole span's KV
+# is scattered right after Gap prefill, not after Probe/Anchor -- it is no
+# longer a "tail" in the timeline, it is the second thing that happens.
+CONTAINER_STAGES = {"Probe roundtrip", "Bulk preload"}
 CONTAINER_FACE = "#E5E5E2"
 CONTAINER_EDGE = "#8A8A85"
 BAR_HEIGHT = 0.62
@@ -158,6 +162,53 @@ def stage_value(record: dict[str, Any], name: str) -> float:
     return float(record.get("host_stage_ms", {}).get(name, 0.0) or 0.0)
 
 
+# Mirrors cskcache/profiling/trace.py's TimelineTrace._DURATION_PAIRS.
+# Recomputed here from the raw `events` list instead of trusting the
+# timeline record's own pre-baked "stage_ms" field, because a profile
+# JSONL is a historical artifact: it may have been captured before
+# _DURATION_PAIRS last changed, in which case its "stage_ms" reflects
+# whatever (possibly stale) event pairing was live when it ran.
+_STAGE_DURATION_PAIRS = {
+    "gap_prefill": ("gap_scheduled", "bulk_preload_dispatched"),
+    "bulk_preload_wait": ("bulk_preload_dispatched", "gap_completed"),
+    "probe_roundtrip": ("probe_dispatched", "probe_decision_received"),
+    "recompute_prefill": ("recompute_scheduled", "recompute_completed"),
+    "load_dispatch": ("load_planned", "load_dispatched"),
+}
+
+
+def recompute_stage_ms(timeline: dict[str, Any]) -> dict[str, float]:
+    """Recompute named stage durations for one occurrence from its raw
+    events, taking the *last* occurrence of each event name --
+    "load_dispatched" fires twice (bulk-preload plan, then confirm plan),
+    and load_dispatch's pairing only makes sense against the later one.
+    """
+    offsets: dict[str, float] = {}
+    for item in timeline.get("events", []):
+        offsets[str(item["event"])] = float(item["offset_ms"])  # last wins
+    return {
+        name: offsets[end] - offsets[start]
+        for name, (start, end) in _STAGE_DURATION_PAIRS.items()
+        if start in offsets and end in offsets
+    }
+
+
+def last_event_wall_time_ns(timeline: dict[str, Any], event: str) -> int:
+    """Wall-clock ns of the last occurrence of `event` in a timeline record.
+
+    "load_dispatched" fires twice per probe-gated occurrence now (once for
+    the bulk-preload plan, once for the confirm plan), so callers that want
+    "when did this occurrence's own work actually finish" must take the
+    last match, not the first.
+    """
+    matches = [
+        item["wall_time_ns"] for item in timeline.get("events", []) if item.get("event") == event
+    ]
+    if not matches:
+        raise ValueError(f"No '{event}' event in timeline for {timeline.get('req_id')}")
+    return int(matches[-1])
+
+
 def nonnegative_other(total: float, components: dict[str, float]) -> float:
     remainder = total - sum(components.values())
     if remainder < -1.0:
@@ -209,22 +260,28 @@ def build_occurrences(
         ) or int(load.get("skipped_layers", -1)) != 0:
             raise ValueError(f"Incomplete load layers for {req_id} occurrence {index}")
 
+        # Chronological order matches the redesigned reuse flow: the whole
+        # span is bulk-preloaded right after Gap prefill (not after Probe/
+        # Anchor as before), so "Bulk preload" (the old "Tail KV load") now
+        # sits right after "Gap prefill", well before "Probe roundtrip".
+        stage_ms = recompute_stage_ms(timeline)
         request_parts = {
             "Scheduler lookup": float(lookup["total_ms"]),
-            "Gap prefill": float(timeline.get("stage_ms", {}).get("gap_prefill", 0.0)),
-            "Probe roundtrip": float(
-                timeline.get("stage_ms", {}).get("probe_roundtrip", 0.0)
-            ),
-            "Anchor prefill": float(
-                timeline.get("stage_ms", {}).get("anchor_prefill", 0.0)
-            ),
-            "Load dispatch": float(
-                timeline.get("stage_ms", {}).get("load_dispatch", 0.0)
-            ),
-            "Tail KV load": float(load["total_ms"]),
+            "Gap prefill": stage_ms.get("gap_prefill", 0.0),
+            "Bulk preload": float(load["total_ms"]),
+            "Probe roundtrip": stage_ms.get("probe_roundtrip", 0.0),
+            "Recompute prefill": stage_ms.get("recompute_prefill", 0.0),
+            "Load dispatch": stage_ms.get("load_dispatch", 0.0),
         }
+        # request_timeline's own "total_ms"/"request_finished" spans the
+        # whole vLLM request (set once, on_finished()), which can run well
+        # past this occurrence's own span if there are trailing tokens or a
+        # second reuse entry -- not what we want here. "reuse_confirmed"
+        # fires exactly once, right when this occurrence's own work is
+        # done, so anchor end-to-end on that instead.
         end_to_end_ms = (
-            int(load["finished_at_ns"]) - int(lookup["started_at_ns"])
+            last_event_wall_time_ns(timeline, "reuse_confirmed")
+            - int(lookup["started_at_ns"])
         ) / 1_000_000.0
         request_parts["Other/control"] = nonnegative_other(
             end_to_end_ms, request_parts
@@ -422,7 +479,7 @@ def draw_occurrence(ax: plt.Axes, occurrence: dict[str, Any]) -> None:
         (left, width) for name, left, width in spans_a if name == "Probe roundtrip"
     )
     load_left, load_width = next(
-        (left, width) for name, left, width in spans_a if name == "Tail KV load"
+        (left, width) for name, left, width in spans_a if name == "Bulk preload"
     )
 
     spans_b = draw_row(ax, y_b, occurrence["probe"], x0=probe_left, pad_ms=pad_ms)
@@ -452,7 +509,7 @@ def draw_occurrence(ax: plt.Axes, occurrence: dict[str, Any]) -> None:
         [
             f"(a) Reuse critical path\n{total_a:.0f} ms total",
             f"(b) Probe host path\n{b_total:.0f} ms",
-            f"(c) Tail-load host path\n{c_total:.0f} ms",
+            f"(c) Bulk-preload host path\n{c_total:.0f} ms",
         ],
         fontsize=7.5,
     )
@@ -474,13 +531,20 @@ def draw_occurrence(ax: plt.Axes, occurrence: dict[str, Any]) -> None:
     )
 
 
-def build_legend(fig: plt.Figure, occurrences: list[dict[str, Any]]) -> None:
+def draw_legend(ax: plt.Axes, occurrence: dict[str, Any]) -> None:
+    """Attach a legend directly under one occurrence's own axes.
+
+    Scoped to only the stages that occurrence actually uses (e.g. "Prefetch
+    wait" vs "Disk deserialize" vs "Storage lookup" are mutually exclusive
+    per occurrence), and placed via bbox_to_anchor in that axes' own
+    coordinate system so it stays attached to this subplot instead of
+    collecting at the bottom of the whole multi-occurrence figure.
+    """
     present: list[str] = []
-    for occurrence in occurrences:
-        for panel in ("request", "probe", "load"):
-            for name in occurrence[panel]:
-                if name not in present and name not in CONTAINER_STAGES:
-                    present.append(name)
+    for panel in ("request", "probe", "load"):
+        for name in occurrence[panel]:
+            if name not in present and name not in CONTAINER_STAGES:
+                present.append(name)
     ordered = [name for name in STAGE_ORDER if name in present]
     handles = [
         plt.Rectangle((0, 0), 1, 1, facecolor=STAGE_COLORS[name], edgecolor="white", linewidth=0.8)
@@ -492,29 +556,31 @@ def build_legend(fig: plt.Figure, occurrences: list[dict[str, Any]]) -> None:
         )
     )
     labels = ordered + ["Decomposed below (see child row)"]
-    fig.legend(
+    ax.legend(
         handles,
         labels,
-        loc="lower center",
-        ncol=5,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.22),
+        ncol=4,
         frameon=False,
-        fontsize=7.2,
-        columnspacing=1.1,
-        handlelength=1.3,
-        bbox_to_anchor=(0.5, -0.02),
+        fontsize=6.6,
+        columnspacing=1.0,
+        handlelength=1.2,
     )
 
 
 def plot(occurrences: list[dict[str, Any]], output_stem: Path) -> None:
     apply_publication_style()
     n = len(occurrences)
+    # Extra height per occurrence (vs. the old shared-legend layout) to fit
+    # each one's own legend row right below it.
     fig, axes = plt.subplots(
-        n, 1, figsize=(7.2, 3.6 * n + 0.9), squeeze=False, constrained_layout=False
+        n, 1, figsize=(7.2, 4.2 * n), squeeze=False, constrained_layout=False
     )
     for ax, occurrence in zip(axes[:, 0], occurrences):
         draw_occurrence(ax, occurrence)
-    build_legend(fig, occurrences)
-    fig.tight_layout(rect=(0.0, 0.10, 1.0, 1.0))
+        draw_legend(ax, occurrence)
+    fig.tight_layout(h_pad=4.5)
     output_stem.parent.mkdir(parents=True, exist_ok=True)
     save_figure(fig, str(output_stem))
     plt.close(fig)

@@ -161,10 +161,19 @@ class LoadTrace:
 class TimelineTrace:
     """Ordered scheduler milestones for one reusable skill occurrence."""
 
+    # bulk_preload_dispatched fires the instant the frontier reaches the
+    # span start (CSKReuseStage.LOADING -> PROBING), so it is the accurate
+    # end of "gap_prefill" -- the delayed gap_completed log (recorded a step
+    # later, inside cap_prefill_before_reuse) is not, since by then the
+    # worker has already finished scattering the whole span. Using
+    # gap_completed as bulk_preload's end instead is correct precisely
+    # because engine steps are sequential: that later step cannot start
+    # until the bulk-preload step's worker-side to_gpu() call has returned.
     _DURATION_PAIRS = {
-        "gap_prefill": ("gap_scheduled", "gap_completed"),
+        "gap_prefill": ("gap_scheduled", "bulk_preload_dispatched"),
+        "bulk_preload": ("bulk_preload_dispatched", "gap_completed"),
         "probe_roundtrip": ("probe_dispatched", "probe_decision_received"),
-        "anchor_prefill": ("anchor_scheduled", "anchor_completed"),
+        "recompute_prefill": ("recompute_scheduled", "recompute_completed"),
         "load_dispatch": ("load_planned", "load_dispatched"),
     }
 

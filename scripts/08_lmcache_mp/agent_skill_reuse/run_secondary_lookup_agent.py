@@ -4,8 +4,8 @@ This keeps the existing agent/benchmark plumbing from ``run_agent.py`` but
 changes the transport injector.  Whenever a skill guide enters the
 conversation, the immediately following LLM request is rendered locally with
 the same Qwen chat template used by vLLM.  The injector locates that guide's
-opening LMCache separator in the rendered token IDs and sends its first content
-token as ``lmcache_secondary_lookup.segment_start``.
+opening and closing LMCache separators in the rendered token IDs and sends the
+exact skill range as ``segment_start`` / ``segment_end``.
 
 Historical skill messages remain separator-wrapped, but only a newly observed
 skill result receives an explicit secondary lookup request.  Later requests
@@ -213,8 +213,8 @@ def locate_skill_segment_start(
     tools: Any,
     skill_tool_call_ids: set[str],
     target_tool_call_id: str,
-) -> tuple[int, int, list[int]]:
-    """Return ``(segment_start, rendered_length, separator_tokens)``.
+) -> tuple[int, int, int, list[int]]:
+    """Return ``(segment_start, segment_end, rendered_length, separator)``.
 
     Each wrapped skill tool message contributes exactly an opening and closing
     effective separator.  The target message's rank therefore determines its
@@ -246,12 +246,15 @@ def locate_skill_segment_start(
 
     target_rank = ordered_skill_ids.index(target_tool_call_id)
     opening = occurrences[2 * target_rank]
+    closing = occurrences[2 * target_rank + 1]
     segment_start = opening + len(separator)
-    if not 0 < segment_start < len(rendered_ids):
+    segment_end = closing + len(separator)
+    if not 0 < segment_start < segment_end <= len(rendered_ids):
         raise ValueError(
-            f"Invalid segment_start={segment_start} for prompt length={len(rendered_ids)}"
+            f"Invalid segment range [{segment_start}, {segment_end}) for "
+            f"prompt length={len(rendered_ids)}"
         )
-    return segment_start, len(rendered_ids), separator
+    return segment_start, segment_end, len(rendered_ids), separator
 
 
 class SecondaryLookupTransportInjector:
@@ -351,12 +354,18 @@ class SecondaryLookupTransportInjector:
 
             target_tool_call_id: str | None = None
             segment_start: int | None = None
+            segment_end: int | None = None
             rendered_token_count: int | None = None
             separator_tokens: list[int] | None = None
             secondary_config: dict[str, Any] | None = None
             if pending_in_request:
                 target_tool_call_id = pending_in_request[0]
-                segment_start, rendered_token_count, separator_tokens = (
+                (
+                    segment_start,
+                    segment_end,
+                    rendered_token_count,
+                    separator_tokens,
+                ) = (
                     locate_skill_segment_start(
                         tokenizer=self.tokenizer,
                         messages=messages,
@@ -372,6 +381,7 @@ class SecondaryLookupTransportInjector:
                 secondary_config = {
                     "lmcache_secondary_lookup": {
                         "segment_start": segment_start,
+                        "segment_end": segment_end,
                         "probe_only": False,
                     }
                 }
@@ -401,6 +411,7 @@ class SecondaryLookupTransportInjector:
                 ),
                 "rendered_token_count": rendered_token_count,
                 "segment_start": segment_start,
+                "segment_end": segment_end,
                 "effective_separator_tokens": separator_tokens,
                 "secondary_lookup_config": secondary_config,
                 "kv_transfer_params": extra_body["kv_transfer_params"],

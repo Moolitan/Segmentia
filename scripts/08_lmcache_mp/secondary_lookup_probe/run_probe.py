@@ -99,6 +99,7 @@ def build_token_layout(
     warm_prompt = skill + separator + warm_tail
     probe_prompt = unique_prefix + separator + skill + separator + suffix
     segment_start = len(unique_prefix) + len(separator)
+    segment_end = segment_start + len(skill) + len(separator)
     return {
         "encoded_separator_tokens": encoded_separator,
         "effective_separator_tokens": separator,
@@ -108,6 +109,7 @@ def build_token_layout(
         "warm_prompt_tokens": warm_prompt,
         "probe_prompt_tokens": probe_prompt,
         "segment_start": segment_start,
+        "segment_end": segment_end,
     }
 
 
@@ -357,6 +359,7 @@ def main() -> int:
         "kv_transfer_params": {
             "lmcache_secondary_lookup": {
                 "segment_start": layout["segment_start"],
+                "segment_end": layout["segment_end"],
                 "probe_only": not args.apply_external_kv,
             }
         },

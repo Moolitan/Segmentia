@@ -638,7 +638,7 @@ def main() -> None:
     )
 
     started = time.time()
-    status = "completed"
+    status = "running"
     error: dict[str, str] | None = None
     cache_validation: dict[str, Any] | None = None
     repeated_skills: list[str] = []
@@ -674,12 +674,17 @@ def main() -> None:
             injector=injector,
             repeated_skills=repeated_skills,
         )
+        status = "completed"
     except ReuseValidationError as exc:
         status = "no_go"
         error = {"type": type(exc).__name__, "message": str(exc)}
         raise
     except Exception as exc:
         status = "failed"
+        error = {"type": type(exc).__name__, "message": str(exc)}
+        raise
+    except BaseException as exc:
+        status = "interrupted"
         error = {"type": type(exc).__name__, "message": str(exc)}
         raise
     finally:

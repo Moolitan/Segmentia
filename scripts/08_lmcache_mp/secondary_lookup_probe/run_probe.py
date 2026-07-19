@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Drive one deterministic LMCache secondary-lookup probe.
+"""Drive one deterministic LMCache secondary-lookup probe or apply run.
 
 The driver warms one complete skill segment, then submits a probe request as
-pre-tokenized input. It never enables external KV application: the request is
-required to carry probe_only=true, and the final summary rejects any event that
-reports non-zero external_tokens_applied.
+pre-tokenized input. External KV application is enabled only by the explicit
+--apply-external-kv flag; the default remains the phase-2A probe-only mode.
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ from transformers import AutoTokenizer
 
 
 EVENT_MARKER = "SEGMENTIA_SECONDARY_LOOKUP_EVENT"
-EXPECTED_EVENT_ORDER = (
+PROBE_EVENT_ORDER = (
     "secondary_lookup_boundary",
     "secondary_lookup_initial_probe",
     "secondary_lookup_forward_complete",
@@ -31,6 +30,18 @@ EXPECTED_EVENT_ORDER = (
     "secondary_lookup_local_reattach",
     "secondary_lookup_unpinned",
 )
+APPLY_EVENT_ORDER = (
+    "secondary_lookup_boundary",
+    "secondary_lookup_initial_probe",
+    "secondary_lookup_forward_complete",
+    "secondary_lookup_pinned",
+    "secondary_lookup_requeued",
+    "secondary_lookup_external_apply",
+    "secondary_lookup_local_reattach",
+    "secondary_lookup_unpinned",
+    "secondary_lookup_blend_selection",
+)
+EXPECTED_EVENT_ORDER = PROBE_EVENT_ORDER
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -144,17 +155,18 @@ def parse_probe_events(
 
 
 def summarize_probe(
-    events: list[dict[str, Any]], expected_segment_start: int
+    events: list[dict[str, Any]], expected_segment_start: int, probe_only: bool = True
 ) -> dict[str, Any]:
     by_name: dict[str, list[dict[str, Any]]] = {}
     for event in events:
         by_name.setdefault(event["event"], []).append(event)
 
+    expected_event_order = PROBE_EVENT_ORDER if probe_only else APPLY_EVENT_ORDER
     checks: dict[str, bool] = {
-        "all_events_present": all(name in by_name for name in EXPECTED_EVENT_ORDER),
+        "all_events_present": all(name in by_name for name in expected_event_order),
     }
     if not checks["all_events_present"]:
-        missing = [name for name in EXPECTED_EVENT_ORDER if name not in by_name]
+        missing = [name for name in expected_event_order if name not in by_name]
         return {
             "status": "no_go",
             "checks": checks,
@@ -162,13 +174,18 @@ def summarize_probe(
             "event_count": len(events),
         }
 
-    selected = {name: by_name[name][-1] for name in EXPECTED_EVENT_ORDER}
+    selected = {name: by_name[name][-1] for name in expected_event_order}
     boundary = selected["secondary_lookup_boundary"]
     initial = selected["secondary_lookup_initial_probe"]
     forward = selected["secondary_lookup_forward_complete"]
     pinned = selected["secondary_lookup_pinned"]
     requeued = selected["secondary_lookup_requeued"]
-    external = selected["secondary_lookup_external_probe"]
+    external_event = (
+        "secondary_lookup_external_probe"
+        if probe_only
+        else "secondary_lookup_external_apply"
+    )
+    external = selected[external_event]
     local = selected["secondary_lookup_local_reattach"]
     unpinned = selected["secondary_lookup_unpinned"]
     cursor = boundary["lookup_cursor"]
@@ -189,14 +206,41 @@ def summarize_probe(
             == expected_segment_start,
             "segment_hit_crossed_cursor": isinstance(external["matched_end"], int)
             and external["matched_end"] > cursor,
-            "external_kv_not_applied": external["external_tokens_applied"] == 0,
             "local_apc_reattached": local["local_apc_reattached"] is True
             and local["local_apc_hit_tokens"] >= cursor,
             "temporary_pin_released": unpinned["pinned_block_count"] == 0,
-            "event_order": [selected[name]["log_line"] for name in EXPECTED_EVENT_ORDER]
-            == sorted(selected[name]["log_line"] for name in EXPECTED_EVENT_ORDER),
+            "event_order": [
+                selected[name]["log_line"] for name in expected_event_order
+            ]
+            == sorted(selected[name]["log_line"] for name in expected_event_order),
         }
     )
+    if probe_only:
+        checks["external_kv_not_applied"] = (
+            external["external_tokens_applied"] == 0
+        )
+    else:
+        blend = selected["secondary_lookup_blend_selection"]
+        checks.update(
+            {
+                "external_kv_applied": external["external_tokens_applied"]
+                == external["lmcache_cached_tokens"] - cursor
+                and external["external_tokens_applied"] > 0,
+                "secondary_ranges_exact": external["secondary_segment_start"]
+                == expected_segment_start
+                and external["secondary_load_start"] == cursor,
+                "worker_blended_only_external_suffix": blend["suffix_start"]
+                == cursor
+                and blend["suffix_end"] == external["lmcache_cached_tokens"]
+                and blend["candidate_count"]
+                == external["lmcache_cached_tokens"] - cursor
+                and blend["minimum_selected_position"] >= cursor
+                and blend["maximum_selected_position"]
+                < external["lmcache_cached_tokens"],
+                "suffix_selection_uses_configured_budget": blend["selected_count"]
+                == blend["base_recompute_budget"],
+            }
+        )
     return {
         "status": "go" if all(checks.values()) else "no_go",
         "checks": checks,
@@ -204,6 +248,7 @@ def summarize_probe(
         "segment_start": expected_segment_start,
         "lookup_cursor": cursor,
         "overlap_tokens": cursor - expected_segment_start,
+        "mode": "probe" if probe_only else "apply",
         "selected_events": selected,
     }
 
@@ -226,6 +271,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--suffix-tokens", type=int, default=64)
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--summarize-only", action="store_true")
+    parser.add_argument("--apply-external-kv", action="store_true")
     return parser.parse_args()
 
 
@@ -244,7 +290,9 @@ def main() -> int:
         with (args.run_dir / "events.jsonl").open("w", encoding="utf-8") as output:
             for event in events:
                 output.write(json.dumps(event, sort_keys=True) + "\n")
-        summary = summarize_probe(events, config["segment_start"])
+        summary = summarize_probe(
+            events, config["segment_start"], probe_only=config["probe_only"]
+        )
         _write_json(args.run_dir / "summary.json", summary)
         print(json.dumps(summary, indent=2, sort_keys=True))
         return 0 if summary["status"] == "go" else 1
@@ -272,7 +320,7 @@ def main() -> int:
         "unique_prefix_tokens": len(layout["unique_prefix_tokens"]),
         "suffix_tokens": len(layout["suffix_tokens"]),
         "segment_start": layout["segment_start"],
-        "probe_only": True,
+        "probe_only": not args.apply_external_kv,
     }
     _write_json(args.run_dir / "config.json", config)
     if args.prepare_only:
@@ -309,7 +357,7 @@ def main() -> int:
         "kv_transfer_params": {
             "lmcache_secondary_lookup": {
                 "segment_start": layout["segment_start"],
-                "probe_only": True,
+                "probe_only": not args.apply_external_kv,
             }
         },
     }
@@ -338,7 +386,11 @@ def main() -> int:
     with (args.run_dir / "events.jsonl").open("w", encoding="utf-8") as output:
         for event in events:
             output.write(json.dumps(event, sort_keys=True) + "\n")
-    summary = summarize_probe(events, layout["segment_start"])
+    summary = summarize_probe(
+        events,
+        layout["segment_start"],
+        probe_only=not args.apply_external_kv,
+    )
     _write_json(args.run_dir / "summary.json", summary)
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0 if summary["status"] == "go" else 1

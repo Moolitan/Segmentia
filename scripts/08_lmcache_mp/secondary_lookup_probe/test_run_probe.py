@@ -82,3 +82,76 @@ def test_parse_probe_events_accepts_vllm_internal_request_suffix(tmp_path):
 
     assert len(events) == 1
     assert events[0]["log_line"] == 1
+
+
+def _apply_events() -> list[dict]:
+    events = [
+        {
+            "event": name,
+            "request_id": "probe",
+            "log_line": index,
+        }
+        for index, name in enumerate(RUN_PROBE.APPLY_EVENT_ORDER, start=1)
+    ]
+    by_name = {event["event"]: event for event in events}
+    by_name["secondary_lookup_boundary"].update(
+        segment_start=33, lookup_cursor=48, alignment=16
+    )
+    by_name["secondary_lookup_initial_probe"].update(
+        lookup_start=0, matched_end=0
+    )
+    by_name["secondary_lookup_forward_complete"].update(
+        num_computed_tokens=48, num_in_flight_tokens=0
+    )
+    by_name["secondary_lookup_pinned"].update(pinned_block_count=3)
+    by_name["secondary_lookup_requeued"].update(
+        num_computed_tokens=0, num_in_flight_tokens=0
+    )
+    by_name["secondary_lookup_external_apply"].update(
+        lookup_start=33,
+        matched_end=801,
+        lmcache_cached_tokens=801,
+        external_tokens_applied=753,
+        secondary_segment_start=33,
+        secondary_load_start=48,
+    )
+    by_name["secondary_lookup_local_reattach"].update(
+        local_apc_reattached=True, local_apc_hit_tokens=48
+    )
+    by_name["secondary_lookup_unpinned"].update(pinned_block_count=0)
+    by_name["secondary_lookup_blend_selection"].update(
+        suffix_start=48,
+        suffix_end=801,
+        candidate_count=753,
+        minimum_selected_position=49,
+        maximum_selected_position=799,
+        base_recompute_budget=120,
+        selected_count=120,
+    )
+    return events
+
+
+def test_summarize_apply_go():
+    summary = RUN_PROBE.summarize_probe(
+        _apply_events(), expected_segment_start=33, probe_only=False
+    )
+
+    assert summary["status"] == "go"
+    assert summary["mode"] == "apply"
+    assert all(summary["checks"].values())
+
+
+def test_summarize_apply_rejects_selection_before_suffix_start():
+    events = _apply_events()
+    next(
+        event
+        for event in events
+        if event["event"] == "secondary_lookup_blend_selection"
+    )["minimum_selected_position"] = 47
+
+    summary = RUN_PROBE.summarize_probe(
+        events, expected_segment_start=33, probe_only=False
+    )
+
+    assert summary["status"] == "no_go"
+    assert summary["checks"]["worker_blended_only_external_suffix"] is False

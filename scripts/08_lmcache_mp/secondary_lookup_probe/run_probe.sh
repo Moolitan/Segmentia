@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Real single-request probe for vLLM APC requeue + LMCache segment lookup.
-# This script intentionally keeps probe_only=true and never applies external KV.
+# Real single-request validation for vLLM APC requeue + LMCache segment lookup.
+# Probe-only is the default; --apply-external-kv explicitly enables phase 2B.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -14,19 +14,28 @@ GPU_UTIL="${VLLM_GPU_UTIL:-0.85}"
 MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-4096}"
 BLOCK_SIZE="${VLLM_BLOCK_SIZE:-16}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
-RUN_DIR="${LMCACHE_SECONDARY_RUN_DIR:-/mnt/Large_Language_Model_Lab_1/wsh/Segmentia/output/08_lmcache_mp/secondary_lookup_runs/$RUN_ID}"
 READY_ATTEMPTS="${VLLM_READY_MAX_ATTEMPTS:-450}"
 READY_INTERVAL="${VLLM_READY_INTERVAL:-2}"
-VLLM_LOG="$RUN_DIR/vllm.log"
 SERVER_PID=""
 
 PREPARE_ONLY=0
-if [[ "${1:-}" == "--prepare-only" ]]; then
-  PREPARE_ONLY=1
-elif [[ "$#" -ne 0 ]]; then
-  echo "usage: $0 [--prepare-only]" >&2
-  exit 2
+APPLY_EXTERNAL_KV=0
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --prepare-only) PREPARE_ONLY=1 ;;
+    --apply-external-kv) APPLY_EXTERNAL_KV=1 ;;
+    *) echo "usage: $0 [--prepare-only] [--apply-external-kv]" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+if [[ "$APPLY_EXTERNAL_KV" == "1" ]]; then
+  RUN_KIND="secondary_lookup_apply_runs"
+else
+  RUN_KIND="secondary_lookup_runs"
 fi
+RUN_DIR="${LMCACHE_SECONDARY_RUN_DIR:-/mnt/Large_Language_Model_Lab_1/wsh/Segmentia/output/08_lmcache_mp/$RUN_KIND/$RUN_ID}"
+VLLM_LOG="$RUN_DIR/vllm.log"
 
 mkdir -p "$RUN_DIR"
 
@@ -55,6 +64,9 @@ DRIVER_ARGS=(
   --vllm-log "$VLLM_LOG"
   --blend-special-str "$LMCACHE_BLEND_SPECIAL_STR"
 )
+if [[ "$APPLY_EXTERNAL_KV" == "1" ]]; then
+  DRIVER_ARGS+=(--apply-external-kv)
+fi
 
 if [[ "$PREPARE_ONLY" == "1" ]]; then
   PYTHONPATH="$PYTHONPATH_VALUE" "$PYTHON_BIN" "$SCRIPT_DIR/run_probe.py" \
@@ -95,7 +107,7 @@ wait_vllm_ready() {
 }
 
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy || true
-echo "[vLLM] fresh boundary run_id=$RUN_ID cache=$RUN_DIR/lmcache_disk"
+echo "[vLLM] fresh boundary run_id=$RUN_ID mode=$RUN_KIND cache=$RUN_DIR/lmcache_disk"
 PYTHONPATH="$PYTHONPATH_VALUE" vllm serve "$MODEL_PATH" \
   --served-model-name "$SERVED_MODEL" \
   --api-key "$API_KEY" \

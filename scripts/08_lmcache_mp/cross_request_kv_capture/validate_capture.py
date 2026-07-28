@@ -15,6 +15,15 @@ from capture_common import atomic_write_json, sha256_text
 EVENT_MARKER = "SEGMENTIA_EVENT "
 PROFILE_MARKER = "SEGMENTIA_PROFILE_EVENT "
 LAYER_FILE_RE = re.compile(r"^(?P<key>.+)@(?P<layer>\d+)\.pt$")
+REHYDRATION_RE = re.compile(
+    r"Local disk rehydration complete: "
+    r"recovered_groups=(?P<groups>\d+) "
+    r"recovered_layers=(?P<layers>\d+) "
+    r"recovered_bytes=(?P<bytes>\d+) "
+    r"invalid_sidecars=(?P<invalid>\d+) "
+    r"incomplete_groups=(?P<incomplete>\d+) "
+    r"skipped_capacity_groups=(?P<capacity>\d+)"
+)
 
 
 def load_completed(path: Path, phase: str) -> dict[str, Any]:
@@ -59,14 +68,16 @@ def load_profile_events(path: Path) -> list[dict[str, Any]]:
     return events
 
 
-def external_apply_event(log_path: Path, record: dict[str, Any]) -> dict[str, Any]:
+def request_event(
+    log_path: Path, record: dict[str, Any], event_name: str
+) -> dict[str, Any]:
     response_id = record.get("response_id")
     if not isinstance(response_id, str) or not response_id:
         raise ValueError(f"Request record has no response_id: {record.get('phase')}")
     matches = [
         event
         for event in load_events(log_path)
-        if event.get("event") == "segmentia_lookup_external_apply"
+        if event.get("event") == event_name
         and isinstance(event.get("request_id"), str)
         and (
             event["request_id"] == response_id
@@ -75,17 +86,20 @@ def external_apply_event(log_path: Path, record: dict[str, Any]) -> dict[str, An
     ]
     if len(matches) != 1:
         raise ValueError(
-            f"Expected one external-apply event for response_id={response_id!r} "
+            f"Expected one {event_name!r} event for response_id={response_id!r} "
             f"in {log_path}, got {len(matches)}"
         )
     return matches[0]
 
 
 def require_cold_miss(record: dict[str, Any], event: dict[str, Any]) -> None:
+    cursor = event.get("lookup_cursor")
     if not (
-        event.get("lookup_start") == record["segment_start"]
-        and event.get("matched_end") == record["segment_start"]
-        and event.get("external_tokens_applied") == 0
+        event.get("external_tokens") == 0
+        and event.get("phase") == "local_fallback"
+        and isinstance(cursor, int)
+        and record["segment_start"] <= cursor < record["segment_start"] + 16
+        and event.get("retained_local_tokens") == cursor
     ):
         raise ValueError(
             f"Phase {record['phase']} is not a verified cold miss: event={event}"
@@ -93,13 +107,13 @@ def require_cold_miss(record: dict[str, Any], event: dict[str, Any]) -> None:
 
 
 def require_external_hit(record: dict[str, Any], event: dict[str, Any]) -> None:
+    cached_end = record["segment_end"] - len(record["effective_separator_tokens"])
     if not (
         event.get("lookup_start") == record["segment_start"]
         and isinstance(event.get("lookup_cursor"), int)
-        and isinstance(event.get("matched_end"), int)
-        and event["matched_end"] > event["lookup_cursor"]
-        and isinstance(event.get("external_tokens_applied"), int)
-        and event["external_tokens_applied"] > 0
+        and event.get("matched_end") == cached_end
+        and event.get("external_tokens_applied")
+        == cached_end - event["lookup_cursor"]
     ):
         raise ValueError(
             f"Phase {record['phase']} is not a verified external hit: event={event}"
@@ -111,6 +125,8 @@ def inspect_layer_files(
     cache_dir: Path,
     expected_layers: int,
     expected_bytes: int,
+    expected_start: int,
+    expected_tokens: int,
 ) -> dict[str, Any]:
     groups: dict[str, dict[int, Path]] = defaultdict(dict)
     unmatched: list[str] = []
@@ -145,6 +161,29 @@ def inspect_layer_files(
             f"Unexpected KV file sizes in {cache_dir}; expected={expected_bytes}, "
             f"bad={bad_sizes}"
         )
+    sidecars = {path.name for path in cache_dir.glob("*.pt.meta.json")}
+    expected_sidecars = {f"{path.name}.meta.json" for path in layers.values()}
+    if sidecars != expected_sidecars:
+        raise ValueError(
+            f"Sidecar set mismatch in {cache_dir}: "
+            f"missing={sorted(expected_sidecars - sidecars)} "
+            f"extra={sorted(sidecars - expected_sidecars)}"
+        )
+    for layer, path in layers.items():
+        sidecar_path = cache_dir / f"{path.name}.meta.json"
+        metadata = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        positions = metadata.get("cached_positions")
+        if not (
+            metadata.get("data_file") == path.name
+            and metadata.get("size") == expected_bytes
+            and metadata.get("shape") == [2, expected_tokens, 1024]
+            and positions
+            == {"kind": "range", "start": expected_start, "length": expected_tokens}
+        ):
+            raise ValueError(
+                f"Layer {layer} sidecar does not describe the expected Skill KV: "
+                f"{metadata}"
+            )
     return {
         "cache_dir": str(cache_dir.resolve()),
         "cache_key_prefix": key,
@@ -152,7 +191,40 @@ def inspect_layer_files(
         "layer_ids": sorted(layers),
         "bytes_per_layer": expected_bytes,
         "files": [str(layers[layer].resolve()) for layer in sorted(layers)],
+        "sidecars": [
+            str((cache_dir / f"{layers[layer].name}.meta.json").resolve())
+            for layer in sorted(layers)
+        ],
     }
+
+
+def require_rehydration_summary(
+    log_path: Path,
+    *,
+    expected_layers: int,
+    expect_recovered: bool,
+) -> dict[str, int]:
+    summaries = [
+        {name: int(value) for name, value in match.groupdict().items()}
+        for match in REHYDRATION_RE.finditer(
+            log_path.read_text(encoding="utf-8", errors="replace")
+        )
+    ]
+    if len(summaries) != 1:
+        raise ValueError(
+            f"Expected one rehydration summary in {log_path}, got {len(summaries)}"
+        )
+    summary = summaries[0]
+    if summary["invalid"] or summary["incomplete"] or summary["capacity"]:
+        raise ValueError(f"Rehydration rejected SSD metadata: {summary}")
+    if expect_recovered:
+        if summary["groups"] < 1 or summary["layers"] != expected_layers:
+            raise ValueError(
+                f"Expected a complete {expected_layers}-layer recovery: {summary}"
+            )
+    elif summary["groups"] != 0 or summary["layers"] != 0 or summary["bytes"] != 0:
+        raise ValueError(f"Fresh SSD namespace unexpectedly recovered data: {summary}")
+    return summary
 
 
 def main() -> None:
@@ -185,21 +257,17 @@ def main() -> None:
         == target_full["segment_token_ids"]
     ):
         raise ValueError("Source and target Skill segment token IDs differ")
-    reset_record = json.loads(
-        (case_dir / "prefix_cache_reset.json").read_text(encoding="utf-8")
+    source_log = case_dir / "source" / "vllm.log"
+    target_reuse_log = case_dir / "target_reuse" / "vllm.log"
+    target_full_log = case_dir / "target_full" / "vllm.log"
+    source_event = request_event(
+        source_log, source, "segmentia_lookup_complete"
     )
-    if reset_record != {"success": True}:
-        raise ValueError(
-            f"Local vLLM prefix cache was not cleanly reset: {reset_record}"
-        )
-
-    shared_log = case_dir / "shared_vllm.log"
-    source_event = external_apply_event(shared_log, source)
-    target_reuse_event = external_apply_event(
-        shared_log, target_reuse
+    target_reuse_event = request_event(
+        target_reuse_log, target_reuse, "segmentia_lookup_external_apply"
     )
-    target_full_event = external_apply_event(
-        case_dir / "target_full" / "vllm.log", target_full
+    target_full_event = request_event(
+        target_full_log, target_full, "segmentia_lookup_complete"
     )
     require_cold_miss(source, source_event)
     require_external_hit(target_reuse, target_reuse_event)
@@ -208,13 +276,21 @@ def main() -> None:
     segment_tokens = int(source["segment_token_count"])
     if any(int(record["segment_token_count"]) != segment_tokens for record in records):
         raise ValueError("Source and target Skill segment lengths differ")
+    separator_tokens = source.get("effective_separator_tokens")
+    if not isinstance(separator_tokens, list) or not separator_tokens:
+        raise ValueError("Request record has no effective separator token sequence")
+    if any(record.get("effective_separator_tokens") != separator_tokens for record in records):
+        raise ValueError("Source and target effective separators differ")
+    cached_tokens = segment_tokens - len(separator_tokens)
+    if cached_tokens <= 0:
+        raise ValueError("Skill content is empty after removing the closing separator")
     expected_bytes = (
-        2 * segment_tokens * args.kv_heads * args.head_dim * args.dtype_bytes
+        2 * cached_tokens * args.kv_heads * args.head_dim * args.dtype_bytes
     )
     response_id = target_reuse["response_id"]
     ssd_read_events = [
         event
-        for event in load_profile_events(shared_log)
+        for event in load_profile_events(target_reuse_log)
         if event.get("event") == "segmentia_storage_read"
         and event.get("storage_tier") == "ssd"
         and isinstance(event.get("request_id"), str)
@@ -233,15 +309,30 @@ def main() -> None:
             f"events={len(ssd_read_events)}/{args.layers} "
             f"bytes={total_ssd_bytes}/{expected_total_bytes}"
         )
+    rehydration = {
+        "source": require_rehydration_summary(
+            source_log, expected_layers=args.layers, expect_recovered=False
+        ),
+        "target_reuse": require_rehydration_summary(
+            target_reuse_log, expected_layers=args.layers, expect_recovered=True
+        ),
+        "target_full": require_rehydration_summary(
+            target_full_log, expected_layers=args.layers, expect_recovered=False
+        ),
+    }
     shared_storage = inspect_layer_files(
         cache_dir=case_dir / "shared_ssd",
         expected_layers=args.layers,
         expected_bytes=expected_bytes,
+        expected_start=source["segment_start"],
+        expected_tokens=cached_tokens,
     )
     target_full_storage = inspect_layer_files(
         cache_dir=case_dir / "target_full_ssd",
         expected_layers=args.layers,
         expected_bytes=expected_bytes,
+        expected_start=target_full["segment_start"],
+        expected_tokens=cached_tokens,
     )
     if Path(shared_storage["cache_key_prefix"]).name != Path(
         target_full_storage["cache_key_prefix"]
@@ -249,7 +340,7 @@ def main() -> None:
         raise ValueError("Source and target-full LMCache key prefixes differ")
 
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "completed",
         "case_id": source["case_id"],
         "skill": source["skill"],
@@ -275,12 +366,14 @@ def main() -> None:
             "full_event": target_full_event,
         },
         "segment_token_count": segment_tokens,
+        "cached_skill_token_count": cached_tokens,
         "segment_token_sha256": sha256_text(
             json.dumps(source["segment_token_ids"], separators=(",", ":"))
         ),
-        "kv_shape_per_layer": [2, segment_tokens, args.kv_heads, args.head_dim],
+        "kv_shape_per_layer": [2, cached_tokens, args.kv_heads, args.head_dim],
         "dtype_bytes": args.dtype_bytes,
-        "local_prefix_cache_reset": reset_record,
+        "service_lifecycle": "source_stop__target_reuse_restart__target_full_fresh",
+        "rehydration": rehydration,
         "target_reuse_ssd_read": {
             "event_count": len(ssd_read_events),
             "total_bytes": total_ssd_bytes,

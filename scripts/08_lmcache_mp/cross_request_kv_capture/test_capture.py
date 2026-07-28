@@ -34,6 +34,7 @@ class CaptureValidationTest(unittest.TestCase):
                     "segment_end": 7,
                     "segment_token_count": 3,
                     "segment_token_ids": [11, 12, 13],
+                    "effective_separator_tokens": [13],
                     "prompt_token_ids": (
                         [1, 2, 3, 4, 11, 12, 13]
                         if phase == "source"
@@ -41,22 +42,35 @@ class CaptureValidationTest(unittest.TestCase):
                     ),
                 }
                 (phase_dir / "request.json").write_text(json.dumps(record))
-                external = 2 if phase == "target_reuse" else 0
-                matched_end = 7 if phase == "target_reuse" else 4
-                event = {
-                    "event": "segmentia_lookup_external_apply",
-                    "request_id": f"{response_id}-engine",
-                    "lookup_start": 4,
-                    "lookup_cursor": 5,
-                    "matched_end": matched_end,
-                    "external_tokens_applied": external,
-                }
-                log_path = (
-                    case_dir / "shared_vllm.log"
-                    if phase in {"source", "target_reuse"}
-                    else phase_dir / "vllm.log"
-                )
+                if phase == "target_reuse":
+                    event = {
+                        "event": "segmentia_lookup_external_apply",
+                        "request_id": f"{response_id}-engine",
+                        "lookup_start": 4,
+                        "lookup_cursor": 5,
+                        "matched_end": 6,
+                        "external_tokens_applied": 1,
+                    }
+                else:
+                    event = {
+                        "event": "segmentia_lookup_complete",
+                        "request_id": f"{response_id}-engine",
+                        "lookup_cursor": 5,
+                        "external_tokens": 0,
+                        "phase": "local_fallback",
+                        "retained_local_tokens": 5,
+                    }
+                log_path = phase_dir / "vllm.log"
                 with log_path.open("a") as handle:
+                    recovered = 2 if phase == "target_reuse" else 0
+                    groups = 1 if phase == "target_reuse" else 0
+                    recovered_bytes = 24 if phase == "target_reuse" else 0
+                    handle.write(
+                        "Local disk rehydration complete: "
+                        f"recovered_groups={groups} recovered_layers={recovered} "
+                        f"recovered_bytes={recovered_bytes} invalid_sidecars=0 "
+                        "incomplete_groups=0 skipped_capacity_groups=0\n"
+                    )
                     handle.write(
                         "LMCache INFO: SEGMENTIA_EVENT " + json.dumps(event) + "\n"
                     )
@@ -67,7 +81,7 @@ class CaptureValidationTest(unittest.TestCase):
                                 "request_id": f"{response_id}-engine",
                                 "storage_tier": "ssd",
                                 "key_count": 1,
-                                "bytes": 12,
+                                "bytes": 8,
                                 "layer": layer,
                             }
                             handle.write(
@@ -76,16 +90,30 @@ class CaptureValidationTest(unittest.TestCase):
                                 + "\n"
                             )
 
-            expected_bytes = 2 * 3 * 1 * 2 * 1
-            (case_dir / "prefix_cache_reset.json").write_text(
-                json.dumps({"success": True})
-            )
+            expected_bytes = 2 * 2 * 1 * 2 * 1
             for cache_name in ("shared_ssd", "target_full_ssd"):
                 cache_dir = case_dir / cache_name
                 cache_dir.mkdir()
                 for layer in range(2):
                     (cache_dir / f"model@hash@bfloat16@{layer}.pt").write_bytes(
                         b"x" * expected_bytes
+                    )
+                    (
+                        cache_dir
+                        / f"model@hash@bfloat16@{layer}.pt.meta.json"
+                    ).write_text(
+                        json.dumps(
+                            {
+                                "data_file": f"model@hash@bfloat16@{layer}.pt",
+                                "size": expected_bytes,
+                                "shape": [2, 2, 1024],
+                                "cached_positions": {
+                                    "kind": "range",
+                                    "start": 4,
+                                    "length": 2,
+                                },
+                            }
+                        )
                     )
 
             subprocess.run(
@@ -109,7 +137,9 @@ class CaptureValidationTest(unittest.TestCase):
             )
             manifest = json.loads((case_dir / "manifest.json").read_text())
             self.assertEqual(manifest["status"], "completed")
-            self.assertEqual(manifest["kv_shape_per_layer"], [2, 3, 1, 2])
+            self.assertEqual(manifest["cached_skill_token_count"], 2)
+            self.assertEqual(manifest["kv_shape_per_layer"], [2, 2, 1, 2])
+            self.assertEqual(manifest["rehydration"]["target_reuse"]["layers"], 2)
 
 
 if __name__ == "__main__":

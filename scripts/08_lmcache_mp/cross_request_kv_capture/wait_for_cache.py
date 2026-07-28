@@ -25,7 +25,10 @@ def main() -> None:
     request = json.loads(args.request.read_text(encoding="utf-8"))
     if request.get("status") != "completed":
         raise ValueError(f"Request is not completed: {args.request}")
-    segment_tokens = int(request["segment_token_count"])
+    separator_tokens = request.get("effective_separator_tokens")
+    if not isinstance(separator_tokens, list) or not separator_tokens:
+        raise ValueError("Request record has no effective separator token sequence")
+    segment_tokens = int(request["segment_token_count"]) - len(separator_tokens)
     expected_bytes = (
         2 * segment_tokens * args.kv_heads * args.head_dim * args.dtype_bytes
     )
@@ -37,6 +40,8 @@ def main() -> None:
                 cache_dir=args.cache_dir,
                 expected_layers=args.layers,
                 expected_bytes=expected_bytes,
+                expected_start=int(request["segment_start"]),
+                expected_tokens=segment_tokens,
             )
         except ValueError as exc:
             last_error = str(exc)

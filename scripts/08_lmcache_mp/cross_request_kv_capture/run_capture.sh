@@ -6,8 +6,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-/home/wsh/miniconda3/envs/opencode/bin/python}"
-VLLM_BIN="${VLLM_BIN:-/home/wsh/miniconda3/envs/opencode/bin/vllm}"
+PYTHON_BIN="${PYTHON_BIN:-python}"
+VLLM_BIN="${VLLM_BIN:-vllm}"
 MODEL_PATH="${VLLM_MODEL_PATH:-/mnt/Large_Language_Model_Lab_1/llm_models/Qwen3-14B/Qwen/Qwen3-14B}"
 SERVED_MODEL="${VLLM_SERVED_NAME:-Qwen3}"
 PORT="${VLLM_PORT:-8100}"
@@ -26,12 +26,20 @@ RUN_DIR="$OUTPUT_ROOT/$RUN_ID"
 SEPARATOR="${LMCACHE_BLEND_SPECIAL_STR:-<|fim_pad|><|repo_name|>}"
 PYTHONPATH_VALUE="$ROOT/vllm:$ROOT/LMCache${PYTHONPATH:+:$PYTHONPATH}"
 
-if [[ ! -x "$PYTHON_BIN" ]]; then
-  echo "[error] PYTHON_BIN is not executable: $PYTHON_BIN" >&2
+if [[ "${CONDA_DEFAULT_ENV:-}" != "opencode" ]]; then
+  echo "[error] activate the opencode conda environment before running" >&2
   exit 2
 fi
-if [[ ! -x "$VLLM_BIN" ]]; then
-  echo "[error] VLLM_BIN is not executable: $VLLM_BIN" >&2
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  echo "[error] PYTHON_BIN is unavailable in opencode: $PYTHON_BIN" >&2
+  exit 2
+fi
+if ! command -v "$VLLM_BIN" >/dev/null 2>&1; then
+  echo "[error] VLLM_BIN is unavailable in opencode: $VLLM_BIN" >&2
+  exit 2
+fi
+if ! command -v nvcc >/dev/null 2>&1; then
+  echo "[error] nvcc is unavailable in opencode; FlashInfer warmup cannot run" >&2
   exit 2
 fi
 if [[ -e "$RUN_DIR" ]]; then
@@ -54,6 +62,7 @@ export LMCACHE_SEGMENTIA_RECOMPUTE_RATIOS="${LMCACHE_SEGMENTIA_RECOMPUTE_RATIOS:
 export LMCACHE_LOCAL_CPU="${LMCACHE_LOCAL_CPU:-False}"
 export LMCACHE_MAX_LOCAL_CPU_SIZE="${LMCACHE_MAX_LOCAL_CPU_SIZE:-5}"
 export LMCACHE_MAX_LOCAL_DISK_SIZE="${LMCACHE_MAX_LOCAL_DISK_SIZE:-50}"
+export LMCACHE_LOCAL_DISK_REHYDRATE="${LMCACHE_LOCAL_DISK_REHYDRATE:-True}"
 export SEGMENTIA_PROFILE=1
 
 SERVER_PID=""
@@ -85,26 +94,6 @@ wait_vllm_ready() {
     sleep "$READY_INTERVAL"
   done
   echo "[error] vLLM readiness timeout port=$PORT" >&2
-  return 1
-}
-
-reset_local_prefix_cache() {
-  local output_path="$1"
-  local attempt=0
-  while ((attempt < 30)); do
-    curl -sS -X POST \
-      --connect-timeout 3 --max-time 30 \
-      -H "Authorization: Bearer $API_KEY" \
-      -o "$output_path" \
-      "http://127.0.0.1:$PORT/reset_prefix_cache"
-    if jq -e '.success == true' "$output_path" >/dev/null; then
-      echo "[prefix-cache] local vLLM cache cleared; external LMCache preserved"
-      return 0
-    fi
-    attempt=$((attempt + 1))
-    sleep 1
-  done
-  echo "[error] local prefix cache reset failed: $output_path" >&2
   return 1
 }
 
@@ -197,16 +186,16 @@ for case_id in "${case_ids[@]}"; do
   mkdir -p "$shared_ssd" "$target_full_ssd"
 
   echo "[phase 1/3] case=$case_id source cold miss -> shared SSD"
-  start_server "$shared_ssd" "$case_dir/shared_vllm.log"
+  start_server "$shared_ssd" "$case_dir/source/vllm.log"
   send_phase "$case_id" source
   wait_for_ssd "$case_dir/source/request.json" "$shared_ssd"
-  # Isolate the two independent tasks without resetting the connector. The
-  # source Skill remains in LMCache/SSD, while vLLM prefix blocks cannot leak
-  # from source to target.
-  reset_local_prefix_cache "$case_dir/prefix_cache_reset.json"
-  echo "[phase 2/3] case=$case_id target cross-request SSD reuse"
+  cleanup_server
+
+  echo "[phase 2/3] case=$case_id restart -> rehydrate -> target SSD reuse"
+  start_server "$shared_ssd" "$case_dir/target_reuse/vllm.log"
   send_phase "$case_id" target_reuse
   cleanup_server
+
   echo "[phase 3/3] case=$case_id target isolated full recompute"
   start_server "$target_full_ssd" "$case_dir/target_full/vllm.log"
   send_phase "$case_id" target_full

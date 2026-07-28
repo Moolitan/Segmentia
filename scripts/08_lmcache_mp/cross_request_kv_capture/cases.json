@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "case_id": "doc_coauthoring_to_mcp_doc_coauthoring",
+      "skill": "doc-coauthoring",
+      "source_task": "doc_coauthoring_design_doc",
+      "target_task": "mcp_server_and_spec"
+    },
+    {
+      "case_id": "internal_comms_to_slack_internal_comms",
+      "skill": "internal-comms",
+      "source_task": "internal_comms_incident_update",
+      "target_task": "slack_launch_pack"
+    },
+    {
+      "case_id": "web_artifact_to_launch_theme_factory",
+      "skill": "theme-factory",
+      "source_task": "web_artifact_with_theme",
+      "target_task": "launch_poster_page_pack"
+    },
+    {
+      "case_id": "web_artifact_to_launch_web_artifacts_builder",
+      "skill": "web-artifacts-builder",
+      "source_task": "web_artifact_with_theme",
+      "target_task": "launch_poster_page_pack"
+    }
+  ]
+}

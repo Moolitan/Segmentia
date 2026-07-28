@@ -1,0 +1,116 @@
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+class CaptureValidationTest(unittest.TestCase):
+    def test_valid_triplet_writes_completed_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            case_dir = Path(temporary) / "case"
+            phases = ("source", "target_reuse", "target_full")
+            for phase in phases:
+                phase_dir = case_dir / phase
+                phase_dir.mkdir(parents=True)
+                response_id = f"chatcmpl-{phase}"
+                record = {
+                    "case_id": "case",
+                    "phase": phase,
+                    "status": "completed",
+                    "skill": "skill",
+                    "skill_sha256": "digest",
+                    "task": "source_task" if phase == "source" else "target_task",
+                    "turn": 1,
+                    "invocation": 2,
+                    "response_id": response_id,
+                    "segment_start": 4,
+                    "segment_end": 7,
+                    "segment_token_count": 3,
+                    "segment_token_ids": [11, 12, 13],
+                    "prompt_token_ids": (
+                        [1, 2, 3, 4, 11, 12, 13]
+                        if phase == "source"
+                        else [8, 9, 10, 4, 11, 12, 13]
+                    ),
+                }
+                (phase_dir / "request.json").write_text(json.dumps(record))
+                external = 2 if phase == "target_reuse" else 0
+                matched_end = 7 if phase == "target_reuse" else 4
+                event = {
+                    "event": "segmentia_lookup_external_apply",
+                    "request_id": f"{response_id}-engine",
+                    "lookup_start": 4,
+                    "lookup_cursor": 5,
+                    "matched_end": matched_end,
+                    "external_tokens_applied": external,
+                }
+                log_path = (
+                    case_dir / "shared_vllm.log"
+                    if phase in {"source", "target_reuse"}
+                    else phase_dir / "vllm.log"
+                )
+                with log_path.open("a") as handle:
+                    handle.write(
+                        "LMCache INFO: SEGMENTIA_EVENT " + json.dumps(event) + "\n"
+                    )
+                    if phase == "target_reuse":
+                        for layer in range(2):
+                            profile = {
+                                "event": "segmentia_storage_read",
+                                "request_id": f"{response_id}-engine",
+                                "storage_tier": "ssd",
+                                "key_count": 1,
+                                "bytes": 12,
+                                "layer": layer,
+                            }
+                            handle.write(
+                                "LMCache INFO: SEGMENTIA_PROFILE_EVENT "
+                                + json.dumps(profile)
+                                + "\n"
+                            )
+
+            expected_bytes = 2 * 3 * 1 * 2 * 1
+            (case_dir / "prefix_cache_reset.json").write_text(
+                json.dumps({"success": True})
+            )
+            for cache_name in ("shared_ssd", "target_full_ssd"):
+                cache_dir = case_dir / cache_name
+                cache_dir.mkdir()
+                for layer in range(2):
+                    (cache_dir / f"model@hash@bfloat16@{layer}.pt").write_bytes(
+                        b"x" * expected_bytes
+                    )
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_DIR / "validate_capture.py"),
+                    "--case-dir",
+                    str(case_dir),
+                    "--layers",
+                    "2",
+                    "--kv-heads",
+                    "1",
+                    "--head-dim",
+                    "2",
+                    "--dtype-bytes",
+                    "1",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            manifest = json.loads((case_dir / "manifest.json").read_text())
+            self.assertEqual(manifest["status"], "completed")
+            self.assertEqual(manifest["kv_shape_per_layer"], [2, 3, 1, 2])
+
+
+if __name__ == "__main__":
+    unittest.main()

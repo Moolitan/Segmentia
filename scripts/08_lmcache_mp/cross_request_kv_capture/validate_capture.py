@@ -26,6 +26,16 @@ REHYDRATION_RE = re.compile(
 )
 
 
+def file_has_nonzero_bytes(path: Path, chunk_bytes: int = 1024 * 1024) -> bool:
+    """Reject allocated-but-never-populated raw KV files without loading them."""
+
+    with path.open("rb") as handle:
+        while chunk := handle.read(chunk_bytes):
+            if any(chunk):
+                return True
+    return False
+
+
 def load_completed(path: Path, phase: str) -> dict[str, Any]:
     record = json.loads(path.read_text(encoding="utf-8"))
     if record.get("phase") != phase or record.get("status") != "completed":
@@ -161,6 +171,14 @@ def inspect_layer_files(
             f"Unexpected KV file sizes in {cache_dir}; expected={expected_bytes}, "
             f"bad={bad_sizes}"
         )
+    zero_layers = [
+        layer for layer, path in layers.items() if not file_has_nonzero_bytes(path)
+    ]
+    if zero_layers:
+        raise ValueError(
+            f"Raw KV files contain no populated values in {cache_dir}: "
+            f"layers={zero_layers}"
+        )
     sidecars = {path.name for path in cache_dir.glob("*.pt.meta.json")}
     expected_sidecars = {f"{path.name}.meta.json" for path in layers.values()}
     if sidecars != expected_sidecars:
@@ -279,7 +297,10 @@ def main() -> None:
     separator_tokens = source.get("effective_separator_tokens")
     if not isinstance(separator_tokens, list) or not separator_tokens:
         raise ValueError("Request record has no effective separator token sequence")
-    if any(record.get("effective_separator_tokens") != separator_tokens for record in records):
+    if any(
+        record.get("effective_separator_tokens") != separator_tokens
+        for record in records
+    ):
         raise ValueError("Source and target effective separators differ")
     cached_tokens = segment_tokens - len(separator_tokens)
     if cached_tokens <= 0:

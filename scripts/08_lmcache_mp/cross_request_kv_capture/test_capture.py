@@ -7,11 +7,22 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from validate_capture import file_has_nonzero_bytes
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
 class CaptureValidationTest(unittest.TestCase):
+    def test_raw_kv_zero_detection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            zero_path = Path(temporary) / "zero.pt"
+            nonzero_path = Path(temporary) / "nonzero.pt"
+            zero_path.write_bytes(b"\0" * 32)
+            nonzero_path.write_bytes(b"\0" * 31 + b"\1")
+            self.assertFalse(file_has_nonzero_bytes(zero_path, chunk_bytes=7))
+            self.assertTrue(file_has_nonzero_bytes(nonzero_path, chunk_bytes=7))
+
     def test_valid_triplet_writes_completed_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             case_dir = Path(temporary) / "case"

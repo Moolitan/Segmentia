@@ -14,6 +14,12 @@ from analyze_single_case import (
     singular_spectrum_metrics,
     tensor_metrics,
 )
+from calibration_ablation import (
+    deployable_windows,
+    diagnostic_windows,
+    offset_predictions_for_window,
+    summarize_rows,
+)
 
 
 class ContextResidualAnalysisTest(unittest.TestCase):
@@ -59,6 +65,62 @@ class ContextResidualAnalysisTest(unittest.TestCase):
         self.assertAlmostEqual(metrics["energy_rank_1"], 1.0, places=6)
         self.assertAlmostEqual(
             metrics["oracle_relative_error_rank_1"], 0.0, places=6
+        )
+
+    def test_deployable_windows_exclude_header_when_possible(self) -> None:
+        self.assertEqual(deployable_windows(8, 8), [("full_prefix", 0, 8)])
+        self.assertEqual(
+            deployable_windows(32, 8),
+            [
+                ("full_prefix", 0, 32),
+                ("body_prefix", 8, 32),
+                ("tail_body", 20, 32),
+            ],
+        )
+
+    def test_diagnostic_windows_are_bounded_and_deterministic(self) -> None:
+        first = diagnostic_windows(100, 16, 8, 19)
+        second = diagnostic_windows(100, 16, 8, 19)
+        self.assertEqual(first, second)
+        for _, start, end in first:
+            self.assertEqual(end - start, 16)
+            self.assertGreaterEqual(start, 0)
+            self.assertLessEqual(end, 100)
+
+    def test_arbitrary_calibration_window_predicts_only_masked_tokens(self) -> None:
+        source = torch.zeros(10, 2, 3)
+        target = source.clone()
+        target[:, 0] += 2.0
+        target[:, 1] -= 1.0
+        evaluation_mask = torch.arange(10) >= 6
+        evaluation_target, predictions = offset_predictions_for_window(
+            source, target, 2, 6, evaluation_mask
+        )
+        self.assertEqual(evaluation_target.shape[0], 4)
+        headwise = tensor_metrics(
+            predictions["headwise_offset"], evaluation_target
+        )
+        self.assertAlmostEqual(headwise["relative_l2"], 0.0, places=7)
+
+    def test_summary_counts_improved_layers(self) -> None:
+        rows = [
+            {
+                "kv_type": "K",
+                "baseline": "headwise_offset",
+                "relative_l2": 0.2,
+                "rmse": 0.1,
+                "cosine": 0.9,
+                "squared_error": 1.0 - improvement,
+                "direct_squared_error": 1.0,
+                "target_squared_norm": 4.0,
+            }
+            for improvement in (0.25, -0.5)
+        ]
+        summary = summarize_rows(rows, ("kv_type", "baseline"))
+        self.assertEqual(summary[0]["layers"], 2)
+        self.assertEqual(summary[0]["improved_layers"], 1)
+        self.assertAlmostEqual(
+            summary[0]["aggregate_improvement_vs_direct"], -0.125
         )
 
 

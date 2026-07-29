@@ -72,6 +72,11 @@ def main() -> None:
     parser.add_argument(
         "--phase", choices=("source", "target_reuse", "target_full"), required=True
     )
+    parser.add_argument(
+        "--endpoint-name",
+        choices=("source", "target"),
+        help="Override which prepared endpoint is replayed for this phase.",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--traces-dir", type=Path, default=ROOT / "src" / "traces")
     parser.add_argument("--skills-dir", type=Path, default=ROOT / "skills")
@@ -80,6 +85,11 @@ def main() -> None:
     parser.add_argument("--model", default="Qwen3")
     parser.add_argument("--api-key", default="EMPTY")
     parser.add_argument("--separator", required=True)
+    parser.add_argument(
+        "--correction-mode",
+        choices=("none", "prefix_k_headwise"),
+        default="none",
+    )
     parser.add_argument(
         "--prepare-only",
         action="store_true",
@@ -90,7 +100,9 @@ def main() -> None:
     if args.output.exists():
         raise FileExistsError(f"Replay output already exists: {args.output}")
     case = selected_case(args.prepared_cases, args.case_id)
-    endpoint_name = "source" if args.phase == "source" else "target"
+    endpoint_name = args.endpoint_name or (
+        "source" if args.phase == "source" else "target"
+    )
     endpoint = case[endpoint_name]
     skill = str(case["skill"])
     skill_content = (args.skills_dir / skill / "SKILL.md").read_text(encoding="utf-8")
@@ -132,6 +144,21 @@ def main() -> None:
         separator=args.separator,
     )
     request_id = f"segmentia-m0-{args.case_id}-{args.phase}"
+    segmentia_lookup: dict[str, Any] = {
+        "segment_start": segment_start,
+        "segment_end": segment_end,
+    }
+    if args.correction_mode == "prefix_k_headwise":
+        segmentia_lookup.update(
+            {
+                "correction_mode": "prefix_k_headwise",
+                "cache_end": segment_end - len(separator_ids),
+                "prefix_tokens": 256,
+                "calibration_start": 132,
+                "calibration_end": 256,
+                "minimum_reuse_tokens": 256,
+            }
+        )
     completion_payload: dict[str, Any] = {
         "model": args.model,
         "messages": messages,
@@ -141,10 +168,7 @@ def main() -> None:
         "request_id": request_id,
         "chat_template_kwargs": {"enable_thinking": True},
         "kv_transfer_params": {
-            "lmcache_segmentia_lookup": {
-                "segment_start": segment_start,
-                "segment_end": segment_end,
-            }
+            "lmcache_segmentia_lookup": segmentia_lookup
         },
     }
     record: dict[str, Any] = {
@@ -170,6 +194,7 @@ def main() -> None:
         "segment_end": segment_end,
         "segment_token_count": segment_end - segment_start,
         "segment_token_ids": prompt_ids[segment_start:segment_end],
+        "correction_mode": args.correction_mode,
         "request": completion_payload,
         "status": "prepared" if args.prepare_only else "sending",
     }

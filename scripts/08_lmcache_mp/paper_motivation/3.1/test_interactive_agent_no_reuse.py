@@ -1,0 +1,64 @@
+from __future__ import annotations
+
+import argparse
+import importlib.util
+from pathlib import Path
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+MODULE_PATH = SCRIPT_DIR / "interactive_agent_no_reuse.py"
+
+
+def load_module():
+    spec = importlib.util.spec_from_file_location(
+        "interactive_agent_no_reuse", MODULE_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_no_reuse_llm_options_have_no_kv_transfer_signal() -> None:
+    module = load_module()
+    args = argparse.Namespace(
+        served_model="Qwen3",
+        api_key="EMPTY",
+        base_url="http://127.0.0.1:8014",
+    )
+
+    options = module.build_llm_options(args)
+    rendered = repr(options)
+
+    assert "kv_transfer_params" not in rendered
+    assert "lmcache_segmentia_lookup" not in rendered
+
+
+def test_no_reuse_entry_has_no_segmentia_injection_path() -> None:
+    source = MODULE_PATH.read_text(encoding="utf-8")
+
+    assert "attach_skill_kv_injector" not in source
+    assert "install_skill_boundary" not in source
+    assert "lmcache_segmentia_lookup" not in source
+    assert '"/tokenize"' not in source
+
+
+def test_no_reuse_catalog_exposes_plain_skill_directories(tmp_path: Path) -> None:
+    module = load_module()
+    primary = tmp_path / "primary"
+    extra = tmp_path / "extra"
+    catalog = tmp_path / "catalog"
+    primary.mkdir()
+    extra.mkdir()
+    for index in range(99):
+        skill_dir = primary / f"skill_{index:03d}"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text(
+            f"# Skill {index}\n", encoding="utf-8"
+        )
+
+    result = module.build_skill_catalog(primary, extra, catalog)
+
+    assert result == catalog
+    assert len(list(catalog.iterdir())) == 99
+    assert all(path.is_symlink() for path in catalog.iterdir())

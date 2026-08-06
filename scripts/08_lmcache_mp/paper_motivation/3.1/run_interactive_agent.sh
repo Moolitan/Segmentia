@@ -42,7 +42,7 @@ export LMCACHE_USE_LAYERWISE=True
 #   fixed_correction    : 固定 anchor 纠错（centered 16 tokens）
 #   residual_correction : 残差闭环纠错（distributed_4x4 + closed_loop_global）
 #   proportional_correction : 比例前缀纠错（prefix-256 correction）
-SEGMENTIA_MODE="${SEGMENTIA_MODE:-residual_correction}"
+SEGMENTIA_MODE="${SEGMENTIA_MODE:-direct_reuse}"
 
 case "$SEGMENTIA_MODE" in
   no_reuse)

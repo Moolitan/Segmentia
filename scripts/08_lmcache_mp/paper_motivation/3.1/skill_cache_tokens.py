@@ -1,56 +1,38 @@
-"""Build the model-native token object cached for one Skill tool response."""
+"""Build the context-segment token object cached for one Skill."""
 from __future__ import annotations
 
+from html import escape
 from typing import Any
 
 
-CACHE_SCHEMA_VERSION = 2
-CACHE_OBJECT_TYPE = "qwen_tool_response"
-TOOL_RESPONSE_OPEN = "<tool_response>"
-TOOL_RESPONSE_CLOSE = "</tool_response>"
+CACHE_SCHEMA_VERSION = 3
+CACHE_OBJECT_TYPE = "qwen_context_segment"
+CONTEXT_SEGMENT_CLOSE = "</context_segment>"
 
 
-def qwen_tool_response_token_ids(tokenizer: Any, skill_text: str) -> list[int]:
-    """Return the complete native Qwen tool-response token span for a Skill."""
-    rendered = tokenizer.apply_chat_template(
-        [
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "skill",
-                            "arguments": '{"name":"segmentia-offline-prefill"}',
-                        },
-                    }
-                ],
-            },
-            {"role": "tool", "name": "skill", "content": skill_text},
-        ],
-        tokenize=False,
-        add_generation_prompt=False,
-        enable_thinking=True,
+def context_segment_text(skill_name: str, skill_text: str) -> str:
+    """Wrap one SKILL.md body in the canonical online/offline boundary."""
+    escaped_name = escape(skill_name, quote=True)
+    closing_newline = "" if skill_text.endswith("\n") else "\n"
+    return (
+        f'<context_segment skill_name="{escaped_name}">\n'
+        f"{skill_text}{closing_newline}{CONTEXT_SEGMENT_CLOSE}"
     )
-    token_ids = tokenizer.encode(rendered, add_special_tokens=False)
-    open_id = tokenizer.convert_tokens_to_ids(TOOL_RESPONSE_OPEN)
-    close_id = tokenizer.convert_tokens_to_ids(TOOL_RESPONSE_CLOSE)
-    open_positions = [
-        index for index, token_id in enumerate(token_ids) if token_id == open_id
-    ]
-    close_positions = [
-        index for index, token_id in enumerate(token_ids) if token_id == close_id
-    ]
-    if len(open_positions) != 1 or len(close_positions) != 1:
-        raise RuntimeError(
-            "Qwen chat template must render exactly one native tool response; "
-            f"open_positions={open_positions}, close_positions={close_positions}"
-        )
-    start = open_positions[0]
-    end = close_positions[0] + 1
-    if start >= end:
-        raise RuntimeError(
-            f"invalid Qwen tool-response token span: start={start}, end={end}"
-        )
-    return token_ids[start:end]
+
+
+def context_segment_cache_text(skill_name: str, skill_text: str) -> str:
+    """Return the exact cached text, including Qwen's boundary newline."""
+    return context_segment_text(skill_name, skill_text) + "\n"
+
+
+def qwen_context_segment_token_ids(
+    tokenizer: Any,
+    skill_name: str,
+    skill_text: str,
+) -> list[int]:
+    """Return the segment plus Qwen's trailing content-boundary newline."""
+    wrapped = context_segment_cache_text(skill_name, skill_text)
+    token_ids = tokenizer.encode(wrapped, add_special_tokens=False)
+    if not token_ids:
+        raise RuntimeError(f"empty context-segment token sequence for {skill_name}")
+    return token_ids

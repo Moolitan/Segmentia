@@ -18,7 +18,8 @@ from transformers import AutoTokenizer
 from skill_cache_tokens import (
     CACHE_OBJECT_TYPE,
     CACHE_SCHEMA_VERSION,
-    qwen_tool_response_token_ids,
+    context_segment_cache_text,
+    qwen_context_segment_token_ids,
 )
 
 
@@ -246,13 +247,14 @@ def main() -> None:
         )
 
     text = source_path.read_text(encoding="utf-8")
+    skill_name = source_path.parent.name
     tokenizer = AutoTokenizer.from_pretrained(
         args.model_path,
         local_files_only=True,
         trust_remote_code=True,
     )
     raw_skill_token_ids = tokenizer.encode(text, add_special_tokens=False)
-    token_ids = qwen_tool_response_token_ids(tokenizer, text)
+    token_ids = qwen_context_segment_token_ids(tokenizer, skill_name, text)
     if not raw_skill_token_ids:
         raise ValueError(f"empty token sequence: {source_path}")
     if len(token_ids) > args.max_input_tokens:
@@ -264,6 +266,7 @@ def main() -> None:
         "schema_version": CACHE_SCHEMA_VERSION,
         "status": "dry_run" if args.dry_run else "saving",
         "cache_id": args.cache_id,
+        "skill_name": skill_name,
         "skill_path": str(source_path),
         "cache_dir": str(args.cache_dir.resolve()),
         "staging_dir": str(args.staging_dir.resolve()),
@@ -272,11 +275,16 @@ def main() -> None:
         "raw_skill_token_count": len(raw_skill_token_ids),
         "saved_span": [0, len(token_ids)],
         "cache_object": CACHE_OBJECT_TYPE,
-        "cache_object_bounds": ["<tool_response>", "</tool_response>"],
+        "cache_object_bounds": [
+            f'<context_segment skill_name="{skill_name}">',
+            "</context_segment>\n",
+        ],
         "add_special_tokens": False,
-        "chat_template": True,
-        "chat_template_add_generation_prompt": False,
+        "chat_template": False,
         "separator_added_to_prompt": False,
+        "cache_object_text_sha256": hashlib.sha256(
+            context_segment_cache_text(skill_name, text).encode("utf-8")
+        ).hexdigest(),
         "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
         "token_ids_sha256": token_hash(token_ids),
     }

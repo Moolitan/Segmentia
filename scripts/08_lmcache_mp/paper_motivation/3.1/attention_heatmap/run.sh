@@ -10,11 +10,12 @@ VLLM_BIN="${VLLM_BIN:-vllm}"
 MODEL_PATH="${VLLM_MODEL_PATH:-/mnt/Large_Language_Model_Lab_1/llm_models/Qwen3-14B/Qwen/Qwen3-14B}"
 SERVED_MODEL="${VLLM_SERVED_NAME:-Qwen3}"
 SKILL_PATH="${SKILL_PATH:-$ROOT/skills/internal-comms/SKILL.md}"
+SKILLS_DIR="${SKILLS_DIR:-$ROOT/workspace/08_lmcache_mp/interactive_agent/.segmentia_skills}"
+WORKSPACE="${OPENHANDS_WORKSPACE:-$ROOT/workspace/08_lmcache_mp/interactive_agent}"
 POOL_DIR="${SKILL_SAVE_POOL_DIR:-/mnt/Large_Language_Model_Lab_1/wsh/skill_save_pool/Qwen3-14B}"
 OUTPUT_ROOT="${SEGMENTIA_ATTENTION_OUTPUT_ROOT:-/mnt/Large_Language_Model_Lab_1/wsh/Segmentia/output/08_lmcache_mp/paper_motivation_3_1_attention_heatmap}"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 RUN_DIR="$OUTPUT_ROOT/$RUN_ID"
-SPEC_PATH="$RUN_DIR/current_spec.json"
 PORT="${VLLM_PORT:-8014}"
 API_KEY="${VLLM_API_KEY:-EMPTY}"
 GPU_UTIL="${VLLM_GPU_UTIL:-0.9}"
@@ -27,6 +28,10 @@ if [[ "${CONDA_DEFAULT_ENV:-}" != "opencode" ]]; then
 fi
 if [[ ! -f "$SKILL_PATH" ]]; then
   echo "[error] missing Skill: $SKILL_PATH" >&2
+  exit 2
+fi
+if [[ ! -d "$SKILLS_DIR" ]]; then
+  echo "[error] missing OpenHands Skill catalog: $SKILLS_DIR" >&2
   exit 2
 fi
 if [[ ! -d "$POOL_DIR" ]]; then
@@ -42,7 +47,6 @@ export LMCACHE_LOCAL_CPU=False
 export LMCACHE_MAX_LOCAL_CPU_SIZE="${LMCACHE_MAX_LOCAL_CPU_SIZE:-5}"
 export LMCACHE_MAX_LOCAL_DISK_SIZE="${LMCACHE_MAX_LOCAL_DISK_SIZE:-1000}"
 export LMCACHE_FORCE_SKIP_SAVE=1
-export SEGMENTIA_ATTENTION_HEATMAP_SPEC="$SPEC_PATH"
 
 mkdir -p "$RUN_DIR"
 export MPLCONFIGDIR="$RUN_DIR/.matplotlib"
@@ -84,8 +88,11 @@ wait_ready() {
 run_mode() {
   local mode="$1"
   local mode_dir="$RUN_DIR/$mode"
+  local spec_path="$RUN_DIR/${mode}_spec.json"
   local server_log="$mode_dir/vllm.log"
   mkdir -p "$mode_dir"
+  rm -f "$spec_path"
+  export SEGMENTIA_ATTENTION_HEATMAP_SPEC="$spec_path"
   export SEGMENTIA_ATTENTION_HEATMAP_OUT_DIR="$mode_dir"
 
   if [[ "$mode" == "recompute" ]]; then
@@ -120,15 +127,23 @@ run_mode() {
   SERVER_PID=$!
   wait_ready
 
-  PYTHONPATH="$PYTHONPATH_VALUE" "$PYTHON_BIN" "$SCRIPT_DIR/run_attention_heatmap.py" capture \
-    --mode "$mode" \
-    --base-url "http://127.0.0.1:$PORT" \
-    --api-key "$API_KEY" \
-    --model "$SERVED_MODEL" \
-    --model-path "$MODEL_PATH" \
-    --skill-path "$SKILL_PATH" \
-    --output-dir "$RUN_DIR" \
-    --spec-path "$SPEC_PATH"
+  local capture_script="$SCRIPT_DIR/capture_${mode}.py"
+  local capture_args=(
+    --base-url "http://127.0.0.1:$PORT"
+    --api-key "$API_KEY"
+    --model "$SERVED_MODEL"
+    --output-dir "$RUN_DIR"
+    --spec-path "$spec_path"
+  )
+  if [[ "$mode" == "recompute" ]]; then
+    capture_args+=(
+      --model-path "$MODEL_PATH"
+      --skill-path "$SKILL_PATH"
+      --skills-dir "$SKILLS_DIR"
+      --workspace "$WORKSPACE"
+    )
+  fi
+  PYTHONPATH="$PYTHONPATH_VALUE" "$PYTHON_BIN" "$capture_script" "${capture_args[@]}"
 
   stop_server
 }
@@ -136,7 +151,7 @@ run_mode() {
 run_mode recompute
 run_mode direct
 
-PYTHONPATH="$PYTHONPATH_VALUE" "$PYTHON_BIN" "$SCRIPT_DIR/run_attention_heatmap.py" plot \
+PYTHONPATH="$PYTHONPATH_VALUE" "$PYTHON_BIN" "$SCRIPT_DIR/plot_attention_heatmap.py" \
   --output-dir "$RUN_DIR"
 
 echo "[done] $RUN_DIR"

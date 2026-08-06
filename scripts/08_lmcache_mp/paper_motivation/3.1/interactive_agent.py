@@ -18,7 +18,7 @@ from transformers import AutoTokenizer
 from skill_cache_tokens import (
     CACHE_OBJECT_TYPE,
     CACHE_SCHEMA_VERSION,
-    qwen_tool_response_token_ids,
+    qwen_context_segment_token_ids,
 )
 
 
@@ -61,7 +61,15 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=ROOT / "workspace" / "08_lmcache_mp" / "interactive_agent",
     )
-    parser.add_argument("--max-iterations", type=int, default=100)
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=2,
+        help=(
+            "Agent steps per user message. The default captures exactly the Skill "
+            "load step and the first post-Skill completion."
+        ),
+    )
     parser.add_argument("--check", action="store_true")
     return parser.parse_args()
 
@@ -124,32 +132,42 @@ def load_cached_skills(
         skill_path = record.get("skill_path")
         if not isinstance(skill_path, str):
             continue
-        if record.get("status") != "completed":
-            continue
-        if not manifest_path.with_name("COMPLETED").is_file():
-            continue
         manifests[Path(skill_path).resolve()] = (manifest_path, record)
 
     cached: dict[str, CachedSkill] = {}
-    missing: list[str] = []
+    unavailable: list[str] = []
     for skill_path in sorted(skills_dir.glob("*/SKILL.md")):
         name = skill_path.parent.name
         resolved = skill_path.resolve()
         found = manifests.get(resolved)
         if found is None:
-            missing.append(name)
+            unavailable.append(f"{name}:missing")
             continue
         manifest_path, record = found
         text = resolved.read_text(encoding="utf-8")
+        schema_version = record.get("schema_version")
+        if schema_version != CACHE_SCHEMA_VERSION:
+            unavailable.append(f"{name}:schema-{schema_version}")
+            continue
         if (
-            record.get("schema_version") != CACHE_SCHEMA_VERSION
-            or record.get("cache_object") != CACHE_OBJECT_TYPE
+            record.get("cache_object") != CACHE_OBJECT_TYPE
+            or record.get("skill_name") != name
         ):
             raise RuntimeError(
-                f"offline KV uses an incompatible cache object for Skill {name}; "
-                "rebuild the existing pool with run.sh --overwrite"
+                f"schema {CACHE_SCHEMA_VERSION} cache metadata is invalid for "
+                f"Skill {name}: {manifest_path}"
             )
-        token_ids = qwen_tool_response_token_ids(tokenizer, text)
+        if record.get("status") != "completed":
+            raise RuntimeError(
+                f"schema {CACHE_SCHEMA_VERSION} cache is not completed for "
+                f"Skill {name}: {manifest_path}"
+            )
+        if not manifest_path.with_name("COMPLETED").is_file():
+            raise RuntimeError(
+                f"schema {CACHE_SCHEMA_VERSION} cache has no COMPLETED marker "
+                f"for Skill {name}: {manifest_path}"
+            )
+        token_ids = qwen_context_segment_token_ids(tokenizer, name, text)
         token_digest = sha256_tokens(token_ids)
         if record.get("token_ids_sha256") != token_digest:
             raise RuntimeError(f"offline token hash is stale for Skill {name}")
@@ -167,15 +185,19 @@ def load_cached_skills(
             token_sha256=token_digest,
         )
 
-    if missing:
-        preview = ", ".join(missing[:12])
-        suffix = " ..." if len(missing) > 12 else ""
-        raise RuntimeError(
-            f"{len(missing)} exposed Skills have no completed offline KV: "
-            f"{preview}{suffix}"
-        )
     if not cached:
-        raise RuntimeError(f"no immediate SKILL.md directories found in {skills_dir}")
+        raise RuntimeError(
+            f"no compatible schema {CACHE_SCHEMA_VERSION} Skill KV found for "
+            f"the exposed catalog in {pool_dir}"
+        )
+    preview = ", ".join(unavailable[:8])
+    suffix = " ..." if len(unavailable) > 8 else ""
+    print(
+        f"[pool] cached schema{CACHE_SCHEMA_VERSION} Skills={len(cached)}; "
+        f"uncached/incompatible Skills={len(unavailable)}"
+        + (f" ({preview}{suffix})" if unavailable else ""),
+        flush=True,
+    )
     return cached
 
 
@@ -364,9 +386,8 @@ def create_agent(
         model=f"openai/{args.served_model}",
         api_key=SecretStr(args.api_key),
         base_url=f"{args.base_url.rstrip('/')}/v1",
-        temperature=0.6,
-        top_p=0.95,
-        top_k=20,
+        temperature=0,
+        top_p=1.0,
         stream=False,
         native_tool_calling=True,
         drop_params=True,
@@ -394,13 +415,20 @@ def create_agent(
         Tool(name=GrepTool.name),
         Tool(name=ApplyPatchTool.name),
         Tool(name=TaskTrackerTool.name),
-        Tool(name=SkillTool.name, params={"skills_dir": str(args.skills_dir)}),
+        Tool(
+            name=SkillTool.name,
+            params={
+                "skills_dir": str(args.skills_dir),
+                "context_segment_wrapper": True,
+            },
+        ),
     ]
     agent = Agent(
         llm=llm,
         tools=tools,
         include_default_tools=["FinishTool", "ThinkTool"],
         tool_concurrency_limit=1,
+        system_prompt_filename="system_prompt_skill.j2",
         agent_context=AgentContext(
             skills=list(skills.values()),
             load_public_skills=False,
@@ -432,8 +460,9 @@ def main() -> None:
     if args.check:
         create_agent(args, cached_skills)
         print(
-            f"[check] OpenHands agent config and completed offline KV for "
-            f"{len(cached_skills)} Skills from {args.skills_dir}"
+            f"[check] OpenHands agent config with "
+            f"{len(cached_skills)} cached schema{CACHE_SCHEMA_VERSION} Skills "
+            f"and 99 exposed Skills from {args.skills_dir}"
         )
         return
     llm, agent = create_agent(args, cached_skills)
@@ -448,7 +477,11 @@ def main() -> None:
         delete_on_close=True,
     )
     print(f"[ready] workspace={args.workspace}")
-    print(f"[ready] Skills={len(cached_skills)}; enter /exit to quit")
+    print(
+        f"[ready] cached schema{CACHE_SCHEMA_VERSION} Skills={len(cached_skills)}; "
+        f"exposed Skills=99; "
+        f"steps_per_message={args.max_iterations}; enter /exit to quit"
+    )
     try:
         while True:
             try:

@@ -22,9 +22,14 @@ class ActiveRows:
     mode: str
     query_rows: tuple[int, ...]
     query_positions: tuple[int, ...]
-    prefix_end: int
     skill_start: int
     skill_end: int
+    cross_key_start: int
+    cross_key_end: int
+    forward_query_start: int
+    forward_query_end: int
+    forward_key_start: int
+    forward_key_end: int
     prompt_end: int
 
 
@@ -75,9 +80,14 @@ class AttentionHeatmapProbe:
         skill_start = int(spec["skill_start"])
         skill_end = int(spec["skill_end"])
         prompt_end = int(spec["prompt_end"])
+        forward_query_start = int(spec["forward_query_start"])
+        forward_query_end = int(spec["forward_query_end"])
         wanted = [
             pos
-            for pos in range(skill_start, prompt_end)
+            for pos in (
+                *range(skill_start, skill_end),
+                *range(forward_query_start, forward_query_end),
+            )
             if computed <= pos < step_end
         ]
         if not wanted:
@@ -88,9 +98,14 @@ class AttentionHeatmapProbe:
             mode=str(spec["mode"]),
             query_rows=tuple(row_base + pos - computed for pos in wanted),
             query_positions=tuple(wanted),
-            prefix_end=skill_start,
             skill_start=skill_start,
             skill_end=skill_end,
+            cross_key_start=int(spec["cross_key_start"]),
+            cross_key_end=int(spec["cross_key_end"]),
+            forward_query_start=forward_query_start,
+            forward_query_end=forward_query_end,
+            forward_key_start=int(spec["forward_key_start"]),
+            forward_key_end=int(spec["forward_key_end"]),
             prompt_end=prompt_end,
         )
 
@@ -192,7 +207,9 @@ class AttentionHeatmapProbe:
             if active.skill_start <= pos < active.skill_end
         ]
         forward_positions = [
-            pos for pos in active.query_positions if active.skill_end <= pos
+            pos
+            for pos in active.query_positions
+            if active.forward_query_start <= pos < active.forward_query_end
         ]
         cross_indices = [
             i
@@ -202,18 +219,30 @@ class AttentionHeatmapProbe:
         forward_indices = [
             i
             for i, pos in enumerate(active.query_positions)
-            if active.skill_end <= pos
+            if active.forward_query_start <= pos < active.forward_query_end
         ]
 
         cross = (
-            rows[cross_indices, : active.prefix_end].numpy()
+            rows[
+                cross_indices,
+                active.cross_key_start : active.cross_key_end,
+            ].numpy()
             if cross_indices
-            else np.empty((0, active.prefix_end), dtype=np.float32)
+            else np.empty(
+                (0, active.cross_key_end - active.cross_key_start),
+                dtype=np.float32,
+            )
         )
         forward = (
-            rows[forward_indices, : active.prompt_end].numpy()
+            rows[
+                forward_indices,
+                active.forward_key_start : active.forward_key_end,
+            ].numpy()
             if forward_indices
-            else np.empty((0, active.prompt_end), dtype=np.float32)
+            else np.empty(
+                (0, active.forward_key_end - active.forward_key_start),
+                dtype=np.float32,
+            )
         )
         self._merge_layer(
             layer_index=layer_index,
@@ -222,9 +251,14 @@ class AttentionHeatmapProbe:
             cross_positions=np.asarray(cross_positions, dtype=np.int64),
             forward=forward,
             forward_positions=np.asarray(forward_positions, dtype=np.int64),
-            prefix_end=active.prefix_end,
             skill_start=active.skill_start,
             skill_end=active.skill_end,
+            cross_key_start=active.cross_key_start,
+            cross_key_end=active.cross_key_end,
+            forward_query_start=active.forward_query_start,
+            forward_query_end=active.forward_query_end,
+            forward_key_start=active.forward_key_start,
+            forward_key_end=active.forward_key_end,
             prompt_end=active.prompt_end,
         )
 

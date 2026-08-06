@@ -30,7 +30,15 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=ROOT / "workspace" / "08_lmcache_mp" / "interactive_agent",
     )
-    parser.add_argument("--max-iterations", type=int, default=100)
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=2,
+        help=(
+            "Agent steps per user message. The default captures exactly the Skill "
+            "load step and the first post-Skill completion."
+        ),
+    )
     parser.add_argument("--check", action="store_true")
     return parser.parse_args()
 
@@ -70,9 +78,8 @@ def build_llm_options(args: argparse.Namespace) -> dict[str, Any]:
         "model": f"openai/{args.served_model}",
         "api_key": SecretStr(args.api_key),
         "base_url": f"{args.base_url.rstrip('/')}/v1",
-        "temperature": 0.6,
-        "top_p": 0.95,
-        "top_k": 20,
+        "temperature": 0,
+        "top_p": 1.0,
         "stream": False,
         "native_tool_calling": True,
         "drop_params": True,
@@ -105,13 +112,20 @@ def create_agent(args: argparse.Namespace):
         Tool(name=GrepTool.name),
         Tool(name=ApplyPatchTool.name),
         Tool(name=TaskTrackerTool.name),
-        Tool(name=SkillTool.name, params={"skills_dir": str(args.skills_dir)}),
+        Tool(
+            name=SkillTool.name,
+            params={
+                "skills_dir": str(args.skills_dir),
+                "context_segment_wrapper": True,
+            },
+        ),
     ]
     agent = Agent(
         llm=llm,
         tools=tools,
         include_default_tools=["FinishTool", "ThinkTool"],
         tool_concurrency_limit=1,
+        system_prompt_filename="system_prompt_skill.j2",
         agent_context=AgentContext(
             skills=list(skills.values()),
             load_public_skills=False,
@@ -150,7 +164,10 @@ def main() -> None:
         delete_on_close=True,
     )
     print(f"[ready] workspace={args.workspace}")
-    print("[ready] mode=no_reuse; Skills=99; enter /exit to quit")
+    print(
+        f"[ready] mode=no_reuse; Skills=99; "
+        f"steps_per_message={args.max_iterations}; enter /exit to quit"
+    )
     try:
         while True:
             try:

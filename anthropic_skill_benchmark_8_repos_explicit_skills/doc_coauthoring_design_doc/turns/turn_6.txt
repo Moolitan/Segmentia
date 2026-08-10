@@ -1,2 +1,0 @@
-Now add a short rollout section.
-How should we introduce this safely without affecting all workloads at once?

@@ -42,6 +42,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--list", action="store_true", help="Print cache ID and path")
     parser.add_argument("--collection")
     parser.add_argument("--skill")
+    parser.add_argument(
+        "--exclude-skill",
+        action="append",
+        default=[],
+        help="Exclude one exact cache ID; may be repeated.",
+    )
     parser.add_argument("--cache-id")
     parser.add_argument("--skill-path", type=Path)
     parser.add_argument("--cache-dir", type=Path)
@@ -74,10 +80,12 @@ def discover_skills(
     skills_dir: Path,
     collection: str | None,
     selected_skill: str | None,
+    excluded_skills: set[str] | None = None,
 ) -> list[SkillSpec]:
     if not skills_dir.is_dir():
         raise FileNotFoundError(f"skills directory does not exist: {skills_dir}")
     found: dict[str, Path] = {}
+    excluded = excluded_skills or set()
     for source_path in sorted(skills_dir.rglob("SKILL.md")):
         cache_id = cache_id_for_path(skills_dir, source_path)
         if collection and cache_id.split("/", 1)[0] != collection:
@@ -86,6 +94,8 @@ def discover_skills(
             cache_id,
             cache_id.rsplit("/", 1)[-1],
         }:
+            continue
+        if cache_id in excluded:
             continue
         if cache_id in found:
             raise RuntimeError(
@@ -234,7 +244,12 @@ def require_one_skill_args(args: argparse.Namespace) -> None:
 def main() -> None:
     args = parse_args()
     if args.list:
-        for spec in discover_skills(args.skills_dir, args.collection, args.skill):
+        for spec in discover_skills(
+            args.skills_dir,
+            args.collection,
+            args.skill,
+            set(args.exclude_skill),
+        ):
             print(f"{spec.cache_id}\t{spec.source_path}")
         return
 

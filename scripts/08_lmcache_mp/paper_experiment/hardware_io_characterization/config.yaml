@@ -1,0 +1,31 @@
+run:
+  id: a6000_qwen3_14b_io_v1
+  raw_output_root: /mnt/Large_Language_Model_Lab_1/wsh/Segmentia/output/08_lmcache_mp/paper_experiment_hardware_io
+  result_dir: /home/wsh/openhands_code_research/results/problem_exploration/hardware_io_characterization
+
+skill_cache:
+  pool_dir: /mnt/Large_Language_Model_Lab_1/wsh/skill_save_pool/Qwen3-14B
+  cache_id: Auto-claude-code-research-in-sleep/paper-write
+  expected_layers: 40
+
+ssd:
+  repetitions: 5
+  thread_counts: [1, 4]
+  cold_method: posix_fadvise
+
+dram:
+  copy_size_mib: 256
+  pinned_copy_size_mib: 64
+  warmups: 3
+  repetitions: 20
+
+pcie:
+  device: 0
+  warmups: 5
+  repetitions: 20
+  layer_groups: [1, 4, 40]
+
+end_to_end:
+  warmups: 1
+  repetitions: 5
+  disk_states: [cold, warm]

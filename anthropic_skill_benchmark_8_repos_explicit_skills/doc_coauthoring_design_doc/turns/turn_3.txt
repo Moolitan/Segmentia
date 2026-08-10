@@ -1,2 +1,0 @@
-Now write the "Background" and "Goals" sections.
-Emphasize why automatic retry is needed now.

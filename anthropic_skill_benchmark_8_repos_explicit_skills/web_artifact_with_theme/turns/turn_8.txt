@@ -1,6 +1,0 @@
-Please explicitly reference and use the "theme-factory" skill and the "web-artifacts-builder" skill for this turn.
-
-Finally, provide the finished landing page plus a short note summarizing:
-- the main sections
-- the theme direction
-- the key design choices you made

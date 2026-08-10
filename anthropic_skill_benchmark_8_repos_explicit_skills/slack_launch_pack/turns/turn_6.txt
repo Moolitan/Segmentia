@@ -1,2 +1,0 @@
-Please make the announcement slightly clearer for platform engineers who care about what the feature actually does.
-Keep it short, but add a bit more substance.

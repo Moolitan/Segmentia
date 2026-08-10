@@ -1,6 +1,0 @@
-Please rewrite the update so it feels more polished and consistent across:
-- summary
-- impact
-- status
-- next steps
-- FAQ

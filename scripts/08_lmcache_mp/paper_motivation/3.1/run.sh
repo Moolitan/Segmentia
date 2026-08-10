@@ -22,6 +22,7 @@ PYTHONPATH_VALUE="$VLLM_ROOT:$LMCACHE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 COLLECTION=""
 SKILL=""
+EXCLUDED_SKILLS=()
 OVERWRITE=0
 DRY_RUN=0
 while (($#)); do
@@ -34,6 +35,10 @@ while (($#)); do
       SKILL="${2:?--skill requires a value}"
       shift 2
       ;;
+    --exclude-skill)
+      EXCLUDED_SKILLS+=("${2:?--exclude-skill requires a value}")
+      shift 2
+      ;;
     --overwrite)
       OVERWRITE=1
       shift
@@ -43,7 +48,7 @@ while (($#)); do
       shift
       ;;
     -h|--help)
-      echo "usage: $0 [--collection NAME] [--skill CACHE_ID_OR_NAME] [--overwrite] [--dry-run]"
+      echo "usage: $0 [--collection NAME] [--skill CACHE_ID_OR_NAME] [--exclude-skill CACHE_ID]... [--overwrite] [--dry-run]"
       exit 0
       ;;
     *)
@@ -133,6 +138,9 @@ start_server() {
 list_args=(--list --skills-dir "$ROOT/skills")
 [[ -z "$COLLECTION" ]] || list_args+=(--collection "$COLLECTION")
 [[ -z "$SKILL" ]] || list_args+=(--skill "$SKILL")
+for excluded_skill in "${EXCLUDED_SKILLS[@]}"; do
+  list_args+=(--exclude-skill "$excluded_skill")
+done
 mapfile -t skill_rows < <(
   PYTHONPATH="$PYTHONPATH_VALUE" "$PYTHON_BIN" \
     "$SCRIPT_DIR/prefill_skill_pool.py" "${list_args[@]}"

@@ -1,9 +1,0 @@
-The target readers are teammates working on agent infrastructure.
-Keep the total length within about 1.5 pages.
-
-Please propose an outline that includes at least:
-- Background
-- Goals
-- Proposed approach
-- Risks
-- Open questions

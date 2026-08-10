@@ -1,5 +1,0 @@
-Please revise the retry policy so it is more concrete.
-Include:
-- max retry count
-- retry delay strategy
-- what should be recorded in logs

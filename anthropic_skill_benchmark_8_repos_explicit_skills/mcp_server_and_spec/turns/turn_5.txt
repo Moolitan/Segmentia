@@ -1,3 +1,0 @@
-Please explicitly reference and use the "doc-coauthoring" skill for this turn.
-
-Now review this spec and point out 3 places where a real agent might still run into trouble when using the MCP server.

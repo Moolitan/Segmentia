@@ -1,2 +1,0 @@
-Please now think about pagination and filtering behavior.
-I want the MCP server to stay usable even if the issue list becomes large.

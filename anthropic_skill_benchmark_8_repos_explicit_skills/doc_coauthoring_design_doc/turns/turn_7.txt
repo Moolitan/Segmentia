@@ -1,2 +1,0 @@
-Please review the full draft from a reviewer's perspective.
-Point out 3 places that are still unclear or underspecified.

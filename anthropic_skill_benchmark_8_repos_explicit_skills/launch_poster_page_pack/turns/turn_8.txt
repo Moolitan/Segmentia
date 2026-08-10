@@ -1,6 +1,0 @@
-Please explicitly reference and use the "canvas-design", "theme-factory", and "web-artifacts-builder" skills for this turn.
-
-Finally, provide:
-1. the final poster asset
-2. the final event page
-3. a short summary of the visual system tying them together

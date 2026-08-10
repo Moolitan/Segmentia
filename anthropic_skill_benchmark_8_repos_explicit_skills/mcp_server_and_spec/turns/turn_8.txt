@@ -1,6 +1,0 @@
-Please explicitly reference and use the "doc-coauthoring" skill and the "mcp-builder" skill for this turn.
-
-Finally, provide:
-1. the final concise spec
-2. a compact implementation checklist
-3. the top 3 design decisions that matter most

@@ -1,2 +1,0 @@
-Now add a speaker section.
-Each speaker should have an avatar placeholder, name, and short bio.

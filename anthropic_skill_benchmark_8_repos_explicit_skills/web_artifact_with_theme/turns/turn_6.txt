@@ -1,2 +1,0 @@
-Please add a small registration-flow hint section near the call-to-action.
-It should briefly explain what happens after someone clicks the registration button.

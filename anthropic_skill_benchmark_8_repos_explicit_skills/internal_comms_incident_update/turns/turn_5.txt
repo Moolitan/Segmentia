@@ -1,2 +1,0 @@
-Please also make a version that is suitable for a daily internal status digest.
-It should be shorter and more summary-like.

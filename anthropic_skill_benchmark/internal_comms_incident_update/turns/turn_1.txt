@@ -1,4 +1,0 @@
-Please first read seed_files/incident_facts.md.
-
-Help me write an internal incident update.
-Use a calm and objective tone.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import sys
 from pathlib import Path
 
 
@@ -57,8 +58,34 @@ def test_no_reuse_catalog_exposes_plain_skill_directories(tmp_path: Path) -> Non
             f"# Skill {index}\n", encoding="utf-8"
         )
 
-    result = module.build_skill_catalog(primary, extra, catalog)
+    catalog_path, selector, count = module.build_skill_catalog(
+        primary,
+        extra,
+        catalog,
+    )
 
-    assert result == catalog
+    assert catalog_path == catalog
+    assert selector == "default:auto+standalone"
+    assert count == 99
     assert len(list(catalog.iterdir())) == 99
     assert all(path.is_symlink() for path in catalog.iterdir())
+
+
+def test_no_reuse_parse_args_accumulates_repeated_skills(monkeypatch) -> None:
+    module = load_module()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(MODULE_PATH),
+            "--skill",
+            "paper-writing",
+            "--skill",
+            "paper-plan",
+        ],
+    )
+
+    args = module.parse_args()
+
+    assert args.skill == ["paper-writing", "paper-plan"]
+    assert args.collection is None

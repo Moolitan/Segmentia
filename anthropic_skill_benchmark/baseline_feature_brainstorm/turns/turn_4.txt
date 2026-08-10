@@ -1,1 +1,0 @@
-If we can only build a minimal version this week, which 2 capabilities should we do first, and why?

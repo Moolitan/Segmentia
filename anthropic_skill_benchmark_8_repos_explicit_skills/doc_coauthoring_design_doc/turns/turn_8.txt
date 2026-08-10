@@ -1,5 +1,0 @@
-Please explicitly reference and use the "doc-coauthoring" skill for this turn.
-
-Finally, provide:
-1. the final concise design doc
-2. a 5-bullet summary for teammates who will not read the full document

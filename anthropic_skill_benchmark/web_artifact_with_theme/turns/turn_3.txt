@@ -1,1 +1,0 @@
-Add an FAQ section with 4 placeholder questions.

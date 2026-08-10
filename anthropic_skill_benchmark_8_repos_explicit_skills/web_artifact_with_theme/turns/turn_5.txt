@@ -1,3 +1,0 @@
-Please explicitly reference and use the "theme-factory" skill for this turn.
-
-Refine the typography and color hierarchy so that the page sections, headings, and buttons feel more consistent and readable.

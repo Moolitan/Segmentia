@@ -1,5 +1,0 @@
-Now create a short web page for the same event.
-It should include:
-- event introduction
-- agenda
-- registration entry

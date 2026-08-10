@@ -1,2 +1,0 @@
-Now refine the GIF direction so it feels more polished and less like a generic recovery animation.
-It should still work well for Slack.

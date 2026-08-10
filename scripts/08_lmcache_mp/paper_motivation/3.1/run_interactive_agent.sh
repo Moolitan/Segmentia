@@ -39,10 +39,8 @@ export LMCACHE_USE_LAYERWISE=True
 # Segmentia 模式选择（直接改这里即可，不用记命令行）
 #   no_reuse            : 关闭 Segmentia，走普通 prefill
 #   direct_reuse        : 直接复用 skill KV（无纠错）
-#   fixed_correction    : 固定 anchor 纠错（centered 16 tokens）
-#   residual_correction : 残差闭环纠错（distributed_4x4 + closed_loop_global）
-#   proportional_correction : 比例前缀纠错（prefix-256 correction）
-SEGMENTIA_MODE="${SEGMENTIA_MODE:-direct_reuse}"
+#   prefix_correction    : 3.2 节固定策略（重算前 256、[132,256) 校准、alpha=0.6）
+SEGMENTIA_MODE="${SEGMENTIA_MODE:-prefix_correction}"
 
 case "$SEGMENTIA_MODE" in
   no_reuse)
@@ -58,25 +56,17 @@ case "$SEGMENTIA_MODE" in
     export LMCACHE_ENABLE_SEGMENTIA=True
     export LMCACHE_EXTRA_CONFIG='{"local_disk_rehydrate_recursive":true,"segmentia_direct_reuse":true}'
     export LMCACHE_LOCAL_DISK_REHYDRATE=True
+    AGENT_MODE_ARGS+=(--segmentia-mode direct_reuse)
     ;;
-  fixed_correction)
+  prefix_correction)
     export LMCACHE_ENABLE_SEGMENTIA=True
-    export LMCACHE_EXTRA_CONFIG='{"local_disk_rehydrate_recursive":true,"segmentia_fixed_anchor_tokens":16,"segmentia_anchor_layout":"centered"}'
+    export LMCACHE_EXTRA_CONFIG='{"local_disk_rehydrate_recursive":true,"segmentia_prefix_correction":true,"segmentia_prefix_apply_correction":true,"segmentia_prefix_correction_alpha":0.6}'
     export LMCACHE_LOCAL_DISK_REHYDRATE=True
-    ;;
-  residual_correction)
-    export LMCACHE_ENABLE_SEGMENTIA=True
-    export LMCACHE_EXTRA_CONFIG='{"local_disk_rehydrate_recursive":true,"segmentia_fixed_anchor_tokens":16,"segmentia_anchor_layout":"distributed_4x4","segmentia_anchor_correction":"closed_loop_global"}'
-    export LMCACHE_LOCAL_DISK_REHYDRATE=True
-    ;;
-  proportional_correction)
-    export LMCACHE_ENABLE_SEGMENTIA=True
-    export LMCACHE_EXTRA_CONFIG='{"local_disk_rehydrate_recursive":true,"segmentia_prefix_correction":true,"segmentia_prefix_apply_correction":true}'
-    export LMCACHE_LOCAL_DISK_REHYDRATE=True
+    AGENT_MODE_ARGS+=(--segmentia-mode prefix_correction)
     ;;
   *)
     echo "[error] unknown SEGMENTIA_MODE: $SEGMENTIA_MODE" >&2
-    echo "[error] valid modes: no_reuse, direct_reuse, fixed_correction, residual_correction, proportional_correction" >&2
+    echo "[error] valid modes: no_reuse, direct_reuse, prefix_correction" >&2
     exit 2
     ;;
 esac
@@ -86,7 +76,7 @@ if [[ "$SEGMENTIA_MODE" != "no_reuse" ]]; then
     echo "[error] offline Skill pool does not exist: $POOL_DIR" >&2
     exit 2
   fi
-  AGENT_MODE_ARGS=(
+  AGENT_MODE_ARGS+=(
     --pool-dir "$POOL_DIR"
     --model-path "$MODEL_PATH"
   )
@@ -120,6 +110,7 @@ PYTHONPATH="$PYTHONPATH_VALUE" "$PYTHON_BIN" "$AGENT_SCRIPT" \
   --api-key "$API_KEY" \
   --workspace "$WORKSPACE" \
   "${AGENT_MODE_ARGS[@]}" \
+  "$@" \
   --check >"$AGENT_CHECK_LOG" 2>&1
 
 echo "[server] starting vLLM; log: $SERVER_LOG"

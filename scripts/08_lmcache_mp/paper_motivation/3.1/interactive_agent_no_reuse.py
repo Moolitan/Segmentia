@@ -14,6 +14,9 @@ DEFAULT_SKILLS_DIR = (
     ROOT / "skills" / "Auto-claude-code-research-in-sleep" / "skills"
 )
 DEFAULT_EXTRA_SKILLS_DIR = ROOT / "skills"
+AUTO_RESEARCH_COLLECTION = "Auto-claude-code-research-in-sleep"
+SUPERPOWERS_COLLECTION = "superpowers"
+SKILL_COLLECTIONS = (AUTO_RESEARCH_COLLECTION, SUPERPOWERS_COLLECTION)
 
 
 def parse_args() -> argparse.Namespace:
@@ -21,6 +24,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skills-dir", type=Path, default=DEFAULT_SKILLS_DIR)
     parser.add_argument(
         "--extra-skills-dir", type=Path, default=DEFAULT_EXTRA_SKILLS_DIR
+    )
+    selector = parser.add_mutually_exclusive_group()
+    selector.add_argument(
+        "--skill",
+        action="append",
+        help=(
+            "Expose one Skill, resolved across all supported sources. Repeat "
+            "--skill to expose a controlled multi-Skill catalog."
+        ),
+    )
+    selector.add_argument(
+        "--collection",
+        choices=SKILL_COLLECTIONS,
+        help="Expose every Skill in one multi-Skill collection.",
     )
     parser.add_argument("--served-model", default="Qwen3")
     parser.add_argument("--base-url", default="http://127.0.0.1:8014")
@@ -47,21 +64,69 @@ def build_skill_catalog(
     skills_dir: Path,
     extra_skills_dir: Path,
     catalog_dir: Path,
-) -> Path:
-    sources: dict[str, Path] = {}
-    for source_dir in (skills_dir, extra_skills_dir):
+    skills: list[str] | None = None,
+    collection: str | None = None,
+) -> tuple[Path, str, int]:
+    groups: dict[str, dict[str, Path]] = {
+        AUTO_RESEARCH_COLLECTION: {},
+        SUPERPOWERS_COLLECTION: {},
+        "standalone": {},
+    }
+    source_dirs = {
+        AUTO_RESEARCH_COLLECTION: skills_dir,
+        SUPERPOWERS_COLLECTION: extra_skills_dir / "superpowers" / "skills",
+        "standalone": extra_skills_dir,
+    }
+    all_sources: dict[str, Path] = {}
+    for group_name, source_dir in source_dirs.items():
         for skill_md in sorted(source_dir.glob("*/SKILL.md")):
             name = skill_md.parent.name
             resolved_dir = skill_md.parent.resolve()
-            previous = sources.get(name)
+            previous = all_sources.get(name)
             if previous is not None:
                 raise RuntimeError(
                     f"duplicate exposed Skill name {name!r}: "
                     f"{previous} and {resolved_dir}"
                 )
-            sources[name] = resolved_dir
-    if len(sources) != 99:
-        raise RuntimeError(f"expected 99 exposed Skills, found {len(sources)}")
+            groups[group_name][name] = resolved_dir
+            all_sources[name] = resolved_dir
+
+    if skills is not None:
+        duplicates = sorted({name for name in skills if skills.count(name) > 1})
+        if duplicates:
+            raise RuntimeError(
+                "duplicate --skill selection: " + ", ".join(duplicates)
+            )
+        sources = {}
+        for name in skills:
+            if name in SKILL_COLLECTIONS:
+                raise RuntimeError(
+                    f"{name!r} is a Skill collection; use "
+                    f"--collection {name} instead"
+                )
+            source = all_sources.get(name)
+            if source is None:
+                available = ", ".join(sorted(all_sources))
+                raise RuntimeError(
+                    f"unknown Skill {name!r}; available Skills: {available}"
+                )
+            sources[name] = source
+        selector = (
+            f"skill:{skills[0]}"
+            if len(skills) == 1
+            else "skills:" + ",".join(skills)
+        )
+    elif collection is not None:
+        sources = groups[collection]
+        selector = f"collection:{collection}"
+    else:
+        sources = {
+            **groups[AUTO_RESEARCH_COLLECTION],
+            **groups["standalone"],
+        }
+        selector = "default:auto+standalone"
+    if not sources:
+        raise RuntimeError(f"Skill selector {selector} matched no Skills")
 
     catalog_dir.mkdir(parents=True, exist_ok=True)
     for entry in catalog_dir.iterdir():
@@ -70,7 +135,7 @@ def build_skill_catalog(
         entry.unlink()
     for name, source_dir in sorted(sources.items()):
         (catalog_dir / name).symlink_to(source_dir, target_is_directory=True)
-    return catalog_dir
+    return catalog_dir, selector, len(sources)
 
 
 def build_llm_options(args: argparse.Namespace) -> dict[str, Any]:
@@ -141,15 +206,18 @@ def main() -> None:
     args.extra_skills_dir = args.extra_skills_dir.resolve()
     args.workspace = args.workspace.resolve()
     args.workspace.mkdir(parents=True, exist_ok=True)
-    args.skills_dir = build_skill_catalog(
+    args.skills_dir, selector, exposed_skill_count = build_skill_catalog(
         args.skills_dir,
         args.extra_skills_dir,
         args.workspace / ".segmentia_skills",
+        skills=args.skill,
+        collection=args.collection,
     )
     agent = create_agent(args)
     if args.check:
         print(
-            f"[check] no-reuse OpenHands agent config with 99 Skills "
+            f"[check] no-reuse OpenHands agent config with "
+            f"{exposed_skill_count} Skills selector={selector} "
             f"from {args.skills_dir}"
         )
         return
@@ -165,7 +233,8 @@ def main() -> None:
     )
     print(f"[ready] workspace={args.workspace}")
     print(
-        f"[ready] mode=no_reuse; Skills=99; "
+        f"[ready] mode=no_reuse; Skills={exposed_skill_count}; "
+        f"selector={selector}; "
         f"steps_per_message={args.max_iterations}; enter /exit to quit"
     )
     try:

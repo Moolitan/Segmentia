@@ -1,5 +1,0 @@
-Please explicitly reference and use the "brand-guidelines" skill for this turn.
-
-Please also read seed_files/brand_notes.md.
-
-Now make the GIF direction and the announcement feel like they belong to the same launch pack.

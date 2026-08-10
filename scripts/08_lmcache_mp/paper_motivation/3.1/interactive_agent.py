@@ -27,12 +27,24 @@ DEFAULT_SKILLS_DIR = (
     ROOT / "skills" / "Auto-claude-code-research-in-sleep" / "skills"
 )
 DEFAULT_EXTRA_SKILLS_DIR = ROOT / "skills"
+AUTO_RESEARCH_COLLECTION = "Auto-claude-code-research-in-sleep"
+SUPERPOWERS_COLLECTION = "superpowers"
+SKILL_COLLECTIONS = (AUTO_RESEARCH_COLLECTION, SUPERPOWERS_COLLECTION)
 DEFAULT_POOL = Path(
     "/mnt/Large_Language_Model_Lab_1/wsh/skill_save_pool/Qwen3-14B"
 )
 DEFAULT_MODEL = Path(
     "/mnt/Large_Language_Model_Lab_1/llm_models/Qwen3-14B/Qwen/Qwen3-14B"
 )
+SEGMENTIA_MODES = ("direct_reuse", "prefix_correction")
+PREFIX_CORRECTION_POLICY = {
+    "correction_mode": "prefix_k_headwise",
+    "prefix_tokens": 256,
+    "calibration_start": 132,
+    "calibration_end": 256,
+    "minimum_reuse_tokens": 256,
+    "correction_alpha": 0.6,
+}
 
 
 @dataclass(frozen=True)
@@ -51,11 +63,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--extra-skills-dir", type=Path, default=DEFAULT_EXTRA_SKILLS_DIR
     )
+    selector = parser.add_mutually_exclusive_group()
+    selector.add_argument(
+        "--skill",
+        action="append",
+        help=(
+            "Expose one Skill, resolved across all supported sources. Repeat "
+            "--skill to expose a controlled multi-Skill catalog."
+        ),
+    )
+    selector.add_argument(
+        "--collection",
+        choices=SKILL_COLLECTIONS,
+        help="Expose every Skill in one multi-Skill collection.",
+    )
     parser.add_argument("--pool-dir", type=Path, default=DEFAULT_POOL)
     parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL)
     parser.add_argument("--served-model", default="Qwen3")
     parser.add_argument("--base-url", default="http://127.0.0.1:8014")
     parser.add_argument("--api-key", default="EMPTY")
+    parser.add_argument(
+        "--segmentia-mode",
+        choices=SEGMENTIA_MODES,
+        default="direct_reuse",
+        help="Select direct reuse or the frozen Section 3.2 prefix correction.",
+    )
     parser.add_argument(
         "--workspace",
         type=Path,
@@ -92,21 +124,69 @@ def build_skill_catalog(
     skills_dir: Path,
     extra_skills_dir: Path,
     catalog_dir: Path,
-) -> Path:
-    sources: dict[str, Path] = {}
-    for source_dir in (skills_dir, extra_skills_dir):
+    skills: list[str] | None = None,
+    collection: str | None = None,
+) -> tuple[Path, str, int]:
+    groups: dict[str, dict[str, Path]] = {
+        AUTO_RESEARCH_COLLECTION: {},
+        SUPERPOWERS_COLLECTION: {},
+        "standalone": {},
+    }
+    source_dirs = {
+        AUTO_RESEARCH_COLLECTION: skills_dir,
+        SUPERPOWERS_COLLECTION: extra_skills_dir / "superpowers" / "skills",
+        "standalone": extra_skills_dir,
+    }
+    all_sources: dict[str, Path] = {}
+    for group_name, source_dir in source_dirs.items():
         for skill_md in sorted(source_dir.glob("*/SKILL.md")):
             name = skill_md.parent.name
             resolved_dir = skill_md.parent.resolve()
-            previous = sources.get(name)
+            previous = all_sources.get(name)
             if previous is not None:
                 raise RuntimeError(
                     f"duplicate exposed Skill name {name!r}: "
                     f"{previous} and {resolved_dir}"
                 )
-            sources[name] = resolved_dir
-    if len(sources) != 99:
-        raise RuntimeError(f"expected 99 exposed Skills, found {len(sources)}")
+            groups[group_name][name] = resolved_dir
+            all_sources[name] = resolved_dir
+
+    if skills is not None:
+        duplicates = sorted({name for name in skills if skills.count(name) > 1})
+        if duplicates:
+            raise RuntimeError(
+                "duplicate --skill selection: " + ", ".join(duplicates)
+            )
+        sources = {}
+        for name in skills:
+            if name in SKILL_COLLECTIONS:
+                raise RuntimeError(
+                    f"{name!r} is a Skill collection; use "
+                    f"--collection {name} instead"
+                )
+            source = all_sources.get(name)
+            if source is None:
+                available = ", ".join(sorted(all_sources))
+                raise RuntimeError(
+                    f"unknown Skill {name!r}; available Skills: {available}"
+                )
+            sources[name] = source
+        selector = (
+            f"skill:{skills[0]}"
+            if len(skills) == 1
+            else "skills:" + ",".join(skills)
+        )
+    elif collection is not None:
+        sources = groups[collection]
+        selector = f"collection:{collection}"
+    else:
+        sources = {
+            **groups[AUTO_RESEARCH_COLLECTION],
+            **groups["standalone"],
+        }
+        selector = "default:auto+standalone"
+    if not sources:
+        raise RuntimeError(f"Skill selector {selector} matched no Skills")
 
     catalog_dir.mkdir(parents=True, exist_ok=True)
     for entry in catalog_dir.iterdir():
@@ -115,13 +195,14 @@ def build_skill_catalog(
         entry.unlink()
     for name, source_dir in sorted(sources.items()):
         (catalog_dir / name).symlink_to(source_dir, target_is_directory=True)
-    return catalog_dir
+    return catalog_dir, selector, len(sources)
 
 
 def load_cached_skills(
     skills_dir: Path,
     pool_dir: Path,
     tokenizer: Any,
+    require_all: bool = False,
 ) -> dict[str, CachedSkill]:
     manifests: dict[Path, tuple[Path, dict[str, Any]]] = {}
     for manifest_path in sorted(pool_dir.rglob("manifest.json")):
@@ -185,6 +266,12 @@ def load_cached_skills(
             token_sha256=token_digest,
         )
 
+    if require_all and unavailable:
+        details = ", ".join(unavailable)
+        raise RuntimeError(
+            "explicit Skill selection requires compatible offline KV for every "
+            f"exposed Skill; unavailable: {details}"
+        )
     if not cached:
         raise RuntimeError(
             f"no compatible schema {CACHE_SCHEMA_VERSION} Skill KV found for "
@@ -290,6 +377,7 @@ def attach_skill_kv_injector(
     base_url: str,
     api_key: str,
     model: str,
+    segmentia_mode: str = "direct_reuse",
 ) -> None:
     # agent 每次发 LLM 请求时在 LLM 请求里注入 lmcache_segmentia_lookup
     original = getattr(llm, "_transport_call") # 把原始的 _transport_call 方法保存下来，让我们可以在 wrapper 里调用原始方法，相当于掉包
@@ -337,12 +425,19 @@ def attach_skill_kv_injector(
             if sha256_tokens(prompt_ids[span_start:span_end]) != pending.token_sha256:
                 raise RuntimeError(f"online token hash mismatch for Skill {pending.name}")
 
+            lookup = {
+                "segment_start": span_start,
+                "segment_end": span_end,
+            }
+            if segmentia_mode == "prefix_correction":
+                lookup.update(PREFIX_CORRECTION_POLICY)
+                lookup["cache_end"] = span_end
+            elif segmentia_mode != "direct_reuse":
+                raise ValueError(f"unsupported Segmentia mode: {segmentia_mode}")
+
             extra_body = dict(kwargs.get("extra_body") or {})
             extra_body["kv_transfer_params"] = {
-                "lmcache_segmentia_lookup": {
-                    "segment_start": span_start,
-                    "segment_end": span_end,
-                }
+                "lmcache_segmentia_lookup": lookup
             }
             kwargs["extra_body"] = extra_body
             print(
@@ -361,6 +456,7 @@ def attach_skill_kv_injector(
                     "segment_start": span_start,
                     "segment_end": span_end,
                     "token_count": len(pending.token_ids),
+                    "segmentia_mode": segmentia_mode,
                 }
             )
         return response
@@ -406,6 +502,7 @@ def create_agent(
         args.base_url,
         args.api_key,
         args.served_model,
+        args.segmentia_mode,
     )
 
     _, _, skills = load_skills_from_dir(str(args.skills_dir))
@@ -445,10 +542,12 @@ def main() -> None:
     args.pool_dir = args.pool_dir.resolve()
     args.workspace = args.workspace.resolve()
     args.workspace.mkdir(parents=True, exist_ok=True)
-    args.skills_dir = build_skill_catalog(
+    args.skills_dir, selector, exposed_skill_count = build_skill_catalog(
         args.skills_dir,
         args.extra_skills_dir,
         args.workspace / ".segmentia_skills",
+        skills=args.skill,
+        collection=args.collection,
     )
 
     tokenizer = AutoTokenizer.from_pretrained(
@@ -456,13 +555,19 @@ def main() -> None:
         local_files_only=True,
         trust_remote_code=True,
     )
-    cached_skills = load_cached_skills(args.skills_dir, args.pool_dir, tokenizer)
+    cached_skills = load_cached_skills(
+        args.skills_dir,
+        args.pool_dir,
+        tokenizer,
+        require_all=args.skill is not None or args.collection is not None,
+    )
     if args.check:
         create_agent(args, cached_skills)
         print(
             f"[check] OpenHands agent config with "
             f"{len(cached_skills)} cached schema{CACHE_SCHEMA_VERSION} Skills "
-            f"and 99 exposed Skills from {args.skills_dir}"
+            f"and {exposed_skill_count} exposed Skills "
+            f"selector={selector} from {args.skills_dir}"
         )
         return
     llm, agent = create_agent(args, cached_skills)
@@ -479,7 +584,7 @@ def main() -> None:
     print(f"[ready] workspace={args.workspace}")
     print(
         f"[ready] cached schema{CACHE_SCHEMA_VERSION} Skills={len(cached_skills)}; "
-        f"exposed Skills=99; "
+        f"exposed Skills={exposed_skill_count}; selector={selector}; "
         f"steps_per_message={args.max_iterations}; enter /exit to quit"
     )
     try:

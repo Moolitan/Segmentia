@@ -1,5 +1,0 @@
-Please continue this task by explicitly referencing and using the relevant skills.
-Please explicitly reference and use the "doc-coauthoring" skill for this turn.
-
-Now write the "Background" and "Goals" sections.
-Emphasize why automatic retry is needed now.

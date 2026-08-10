@@ -1,5 +1,0 @@
-Please keep using the relevant skills and follow them while refining the work.
-Please explicitly reference and use the "doc-coauthoring" skill for this turn.
-
-Now write the "Proposed approach" and "Risks" sections.
-Please explain why we should not do unlimited retries, and how to distinguish retryable vs non-retryable failures.

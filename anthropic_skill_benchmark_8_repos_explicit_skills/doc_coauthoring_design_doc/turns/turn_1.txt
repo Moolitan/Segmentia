@@ -1,6 +1,0 @@
-Please explicitly reference and use the "doc-coauthoring" skill for this turn.
-
-Please first read seed_files/system_background.md and seed_files/failure_examples.md.
-
-Help me co-write a short design doc about adding automatic retry for failed benchmark tasks.
-Start by guiding the structure and thinking process rather than writing the whole document at once.

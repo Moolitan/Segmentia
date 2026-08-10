@@ -1,3 +1,0 @@
-Please explicitly reference and use the "web-artifacts-builder" skill for this turn.
-
-Add an FAQ section with 4 placeholder questions.

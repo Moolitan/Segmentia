@@ -1,4 +1,0 @@
-Please explicitly reference and use the "theme-factory" skill for this turn.
-
-Now apply a unified theme to the whole page.
-The theme should feel clean, professional, and suitable for an internal technical event.

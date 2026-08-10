@@ -1,8 +1,0 @@
-Please explicitly reference and use the "brand-guidelines", "internal-comms", and "slack-gif-creator" skills for this turn.
-
-Finally, provide a polished final version suitable for actual internal rollout.
-It should include:
-- the main Slack announcement
-- a shorter fallback version
-- the GIF concept or output
-- a brief note on how the pieces fit together

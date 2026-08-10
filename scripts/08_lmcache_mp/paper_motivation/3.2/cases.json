@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "case_id": "doc_coauthoring_retry_design",
+      "skill": "doc-coauthoring",
+      "task_prompt": "src/task_prompt/doc-coauthoring-retry-design-doc.txt"
+    },
+    {
+      "case_id": "docx_convert_pdf",
+      "skill": "docx",
+      "task_prompt": "src/task_prompt/docx-convert-pdf-images.txt"
+    },
+    {
+      "case_id": "mcp_builder_issue_tracker",
+      "skill": "mcp-builder",
+      "task_prompt": "src/task_prompt/mcp-builder-issue-tracker-server.txt"
+    },
+    {
+      "case_id": "frontend_design_gpu_cache",
+      "skill": "frontend-design",
+      "task_prompt": "src/task_prompt/frontend-design-gpu-cache-dashboard.txt"
+    }
+  ]
+}

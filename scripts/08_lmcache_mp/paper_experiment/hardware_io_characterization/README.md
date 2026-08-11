@@ -10,7 +10,7 @@ offline pool.
 
 1. `01_hardware_topology.py`：采集 CPU、NUMA、SSD、GPU 和 PCIe 拓扑。
 2. `02_ssd_to_cpu.py`：读取真实 40 层 Skill KV，测量 cold/warm、1/4 线程的 SSD/page cache→CPU 性能。
-3. `03_cpu_memory.py`：测量本地 NUMA、跨 NUMA 和 pageable→pinned 内存拷贝。
+3. `03_cpu_memory.py`：使用 `libnuma` 固定并验证物理页归属，测量本地 NUMA、跨 NUMA 和 pageable→pinned 内存拷贝。
 4. `04_pcie_h2d.py`：测量 pageable/pinned、同步/异步 PCIe H2D 传输。
 5. `05_skill_kv_path.py`：测量真实 SSD/page cache→pinned CPU→GPU 的串行完整路径。
 
@@ -35,6 +35,12 @@ The five measurements are independent. Re-running one script atomically replaces
 only that script's JSON result in the configured run directory. Run
 `06_analyze_results.py` after the desired measurements finish.
 
+`04_pcie_h2d.py` executes pageable-sync, pinned-sync, and pinned-async in a
+deterministic cyclic order. Each warm-up or measured round runs all three modes,
+but rotates which mode is first, so GPU/PCIe power-state warm-up is not always
+credited to the mode that happens to run last. The modes remain serial rather
+than concurrent, and each JSON row still contains 20 samples for one mode.
+
 Raw output:
 
 ```text
@@ -52,3 +58,9 @@ results/problem_exploration/hardware_io_characterization/
 it does not write to `/proc/sys/vm/drop_caches`. The complete-path script uses
 one pinned layer buffer and one GPU layer buffer, so it measures the serial
 SSD→pinned→GPU baseline without allocating a 1.3-GiB staging object.
+
+`03_cpu_memory.py` requires the system `libnuma` library. It allocates pageable
+buffers with an explicit node policy and queries every page with `move_pages`
+before and after timing. A placement mismatch aborts the run before the result
+JSON is replaced; CPU affinity is restored and NUMA allocations are freed on
+all exit paths.

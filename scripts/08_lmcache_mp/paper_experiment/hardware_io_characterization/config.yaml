@@ -16,16 +16,16 @@ ssd:
 dram:
   copy_size_mib: 256
   pinned_copy_size_mib: 64
-  warmups: 3
+  warmups: 20
   repetitions: 20
 
 pcie:
   device: 0
-  warmups: 5
+  warmups: 20
   repetitions: 20
   layer_groups: [1, 4, 40]
 
 end_to_end:
-  warmups: 1
-  repetitions: 5
+  warmups: 5
+  repetitions: 10
   disk_states: [cold, warm]

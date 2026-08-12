@@ -49,7 +49,7 @@ def validate_case(
     if not (
         capture.get("status") == "completed"
         and capture.get("skill") == skill
-        and offline_manifest.get("schema_version") == 3
+        and offline_manifest.get("schema_version") in {3, 4}
         and offline_manifest.get("status") == "completed"
         and offline_manifest.get("skill_name") == skill
         and offline_manifest.get("token_count") == token_count

@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import json
+import time
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +21,109 @@ DEFAULT_EXTRA_SKILLS_DIR = ROOT / "skills"
 AUTO_RESEARCH_COLLECTION = "Auto-claude-code-research-in-sleep"
 SUPERPOWERS_COLLECTION = "superpowers"
 SKILL_COLLECTIONS = (AUTO_RESEARCH_COLLECTION, SUPERPOWERS_COLLECTION)
+SCHEDULE_REQUEST_PREFIX = "segmentia-window-"
+
+
+@dataclass(frozen=True)
+class SkillObservationTimestamp:
+    """Time at which one normal-Prefill Skill result becomes Agent-visible."""
+
+    skill_name: str
+    event_id: str
+    event_timestamp: str
+    action_id: str
+    tool_call_id: str
+    callback_unix_ns: int
+
+
+class NormalPrefillScheduleProbe:
+    """Pair pending Skill observations with the following LLM request."""
+
+    def __init__(self) -> None:
+        self.session_id = str(uuid.uuid4())
+        self._pending: list[SkillObservationTimestamp] = []
+        self.events: list[dict[str, Any]] = []
+        self.transport_events: list[dict[str, Any]] = []
+
+    def on_event(self, event: Any) -> None:
+        if (
+            event.__class__.__name__ != "ObservationEvent"
+            or getattr(event, "tool_name", None) != "skill"
+        ):
+            return
+        observation = getattr(event, "observation", None)
+        skill_name = str(getattr(observation, "skill_name", "")).strip()
+        if not skill_name or skill_name == "list":
+            return
+        self._pending.append(
+            SkillObservationTimestamp(
+                skill_name=skill_name,
+                event_id=str(getattr(event, "id", "")),
+                event_timestamp=str(getattr(event, "timestamp", "")),
+                action_id=str(getattr(event, "action_id", "")),
+                tool_call_id=str(getattr(event, "tool_call_id", "")),
+                callback_unix_ns=time.time_ns(),
+            )
+        )
+
+    def pop_for_next_request(self) -> list[SkillObservationTimestamp]:
+        observations = self._pending
+        self._pending = []
+        return observations
+
+
+def attach_normal_prefill_schedule_probe(
+    llm: Any, probe: NormalPrefillScheduleProbe
+) -> None:
+    """Tag every request and pair the post-Skill request with pending results."""
+    original = getattr(llm, "_transport_call")
+
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        observations = probe.pop_for_next_request()
+        wrapper_enter_unix_ns = time.time_ns()
+        request_token = f"{SCHEDULE_REQUEST_PREFIX}{uuid.uuid4().hex}"
+        request_id = f"chatcmpl-{request_token}"
+        extra_headers = dict(kwargs.get("extra_headers") or {})
+        if any(key.lower() == "x-request-id" for key in extra_headers):
+            raise RuntimeError("X-Request-Id is already set on the LLM request")
+        extra_headers["X-Request-Id"] = request_token
+        kwargs["extra_headers"] = extra_headers
+        transport_handoff_unix_ns = time.time_ns()
+
+        for observation in observations:
+            probe.events.append(
+                {
+                    "skill": observation.skill_name,
+                    "execution_mode": "normal_prefill",
+                    "request_id": request_id,
+                    "schedule_timing": {
+                        "status": "awaiting_scheduler_admission",
+                        "session_id": probe.session_id,
+                        "observation_event_id": observation.event_id,
+                        "observation_event_timestamp": observation.event_timestamp,
+                        "action_id": observation.action_id,
+                        "tool_call_id": observation.tool_call_id,
+                        "observation_callback_unix_ns": observation.callback_unix_ns,
+                        "request_wrapper_enter_unix_ns": wrapper_enter_unix_ns,
+                        "client_transport_handoff_unix_ns": (
+                            transport_handoff_unix_ns
+                        ),
+                    },
+                }
+            )
+        response = original(*args, **kwargs)
+        probe.transport_events.append(
+            {
+                "request_id": request_id,
+                "request_wrapper_enter_unix_ns": wrapper_enter_unix_ns,
+                "client_transport_handoff_unix_ns": transport_handoff_unix_ns,
+                "client_response_received_unix_ns": time.time_ns(),
+                "boundary": "client_transport_response_received",
+            }
+        )
+        return response
+
+    object.__setattr__(llm, "_transport_call", wrapped)
 
 
 def parse_args() -> argparse.Namespace:
@@ -55,6 +162,11 @@ def parse_args() -> argparse.Namespace:
             "Agent steps per user message. The default captures exactly the Skill "
             "load step and the first post-Skill completion."
         ),
+    )
+    parser.add_argument(
+        "--prompt-file",
+        type=Path,
+        help="Send the complete UTF-8 file as one user message, then exit.",
     )
     parser.add_argument("--check", action="store_true")
     return parser.parse_args()
@@ -159,7 +271,9 @@ def build_llm_options(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def create_agent(args: argparse.Namespace):
+def create_agent(
+    args: argparse.Namespace, schedule_probe: NormalPrefillScheduleProbe
+):
     from openhands.sdk import Agent, AgentContext, LLM, Tool
     from openhands.sdk.context.skills import load_skills_from_dir
     from openhands.tools.apply_patch import ApplyPatchTool
@@ -170,6 +284,7 @@ def create_agent(args: argparse.Namespace):
     from openhands.tools.terminal import TerminalTool
 
     llm = LLM(**build_llm_options(args))
+    attach_normal_prefill_schedule_probe(llm, schedule_probe)
     _, _, skills = load_skills_from_dir(str(args.skills_dir))
     tools = [
         Tool(name=TerminalTool.name, params={"terminal_type": "subprocess"}),
@@ -197,7 +312,7 @@ def create_agent(args: argparse.Namespace):
             load_user_skills=False,
         ),
     )
-    return agent
+    return llm, agent
 
 
 def main() -> None:
@@ -205,6 +320,10 @@ def main() -> None:
     args.skills_dir = args.skills_dir.resolve()
     args.extra_skills_dir = args.extra_skills_dir.resolve()
     args.workspace = args.workspace.resolve()
+    if args.prompt_file is not None:
+        args.prompt_file = args.prompt_file.resolve()
+        if not args.prompt_file.is_file():
+            raise FileNotFoundError(f"prompt file does not exist: {args.prompt_file}")
     args.workspace.mkdir(parents=True, exist_ok=True)
     args.skills_dir, selector, exposed_skill_count = build_skill_catalog(
         args.skills_dir,
@@ -213,7 +332,8 @@ def main() -> None:
         skills=args.skill,
         collection=args.collection,
     )
-    agent = create_agent(args)
+    schedule_probe = NormalPrefillScheduleProbe()
+    llm, agent = create_agent(args, schedule_probe)
     if args.check:
         print(
             f"[check] no-reuse OpenHands agent config with "
@@ -230,6 +350,7 @@ def main() -> None:
         max_iteration_per_run=args.max_iterations,
         stuck_detection=True,
         delete_on_close=True,
+        callbacks=[schedule_probe.on_event],
     )
     print(f"[ready] workspace={args.workspace}")
     print(
@@ -238,20 +359,45 @@ def main() -> None:
         f"steps_per_message={args.max_iterations}; enter /exit to quit"
     )
     try:
-        while True:
-            try:
-                message = input("\nYou> ").strip()
-            except EOFError:
-                break
-            if message in {"/exit", "/quit"}:
-                break
+        if args.prompt_file is not None:
+            message = args.prompt_file.read_text(encoding="utf-8").strip()
             if not message:
-                continue
+                raise ValueError(f"prompt file is empty: {args.prompt_file}")
             conversation.send_message(message)
             conversation.run()
+        else:
+            while True:
+                try:
+                    message = input("\nYou> ").strip()
+                except EOFError:
+                    break
+                if message in {"/exit", "/quit"}:
+                    break
+                if not message:
+                    continue
+                conversation.send_message(message)
+                conversation.run()
     finally:
         conversation.close()
-        print("[done] no-reuse conversation closed")
+        events_path = args.workspace / "normal_prefill_schedule_events.json"
+        events_path.write_text(
+            json.dumps(schedule_probe.events, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        transport_path = (
+            args.workspace / "normal_prefill_transport_events.json"
+        )
+        transport_path.write_text(
+            json.dumps(
+                schedule_probe.transport_events,
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        print(f"[done] normal-Prefill schedule events: {events_path}")
+        print(f"[done] normal-Prefill transport events: {transport_path}")
 
 
 if __name__ == "__main__":

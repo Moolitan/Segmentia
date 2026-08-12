@@ -25,6 +25,10 @@ AGENT_CHECK_LOG="$POOL_DIR/interactive_agent_check.log"
 AGENT_RUN_LOG="$POOL_DIR/interactive_agent_run.log"
 AGENT_SCRIPT="$SCRIPT_DIR/interactive_agent.py"
 AGENT_MODE_ARGS=()
+SCHEDULE_WINDOW_TRACE=""
+SKILL_ACTION_TRACE=""
+SKILL_LOCATOR_TRACE=""
+SKILL_EXECUTION_TRACE=""
 
 if [[ "${CONDA_DEFAULT_ENV:-}" != "opencode" ]]; then
   echo "[error] activate conda environment opencode first" >&2
@@ -35,6 +39,12 @@ export OPENHANDS_SUPPRESS_BANNER=1
 export PYTHONHASHSEED="${PYTHONHASHSEED:-0}"
 export LMCACHE_CHUNK_SIZE="${LMCACHE_CHUNK_SIZE:-256}"
 export LMCACHE_USE_LAYERWISE=True
+if [[ "${SEGMENTIA_FINE_TIMELINE:-0}" == "1" ]]; then
+  SKILL_EXECUTION_TRACE="$WORKSPACE/segmentia_skill_execution.jsonl"
+  export SEGMENTIA_SKILL_EXECUTION_TRACE_PATH="$SKILL_EXECUTION_TRACE"
+else
+  unset SEGMENTIA_SKILL_EXECUTION_TRACE_PATH || true
+fi
 
 # Segmentia 模式选择（直接改这里即可，不用记命令行）
 #   no_reuse            : 关闭 Segmentia，走普通 prefill
@@ -51,17 +61,33 @@ case "$SEGMENTIA_MODE" in
     SERVER_LOG="$WORKSPACE/no_reuse_vllm.log"
     AGENT_CHECK_LOG="$WORKSPACE/no_reuse_agent_check.log"
     AGENT_RUN_LOG="$WORKSPACE/no_reuse_agent_run.log"
+    SCHEDULE_WINDOW_TRACE="$WORKSPACE/normal_prefill_scheduler_admission.jsonl"
+    SKILL_ACTION_TRACE="$WORKSPACE/normal_prefill_skill_action_ready.jsonl"
+    export VLLM_SCHEDULE_WINDOW_TRACE_PATH="$SCHEDULE_WINDOW_TRACE"
+    export VLLM_SKILL_ACTION_TRACE_PATH="$SKILL_ACTION_TRACE"
     ;;
   direct_reuse)
     export LMCACHE_ENABLE_SEGMENTIA=True
     export LMCACHE_EXTRA_CONFIG='{"local_disk_rehydrate_recursive":true,"segmentia_direct_reuse":true}'
     export LMCACHE_LOCAL_DISK_REHYDRATE=True
+    SCHEDULE_WINDOW_TRACE="$WORKSPACE/segmentia_scheduler_admission.jsonl"
+    SKILL_ACTION_TRACE="$WORKSPACE/segmentia_skill_action_ready.jsonl"
+    SKILL_LOCATOR_TRACE="$WORKSPACE/segmentia_skill_locator.jsonl"
+    export VLLM_SCHEDULE_WINDOW_TRACE_PATH="$SCHEDULE_WINDOW_TRACE"
+    export VLLM_SKILL_ACTION_TRACE_PATH="$SKILL_ACTION_TRACE"
+    export VLLM_SEGMENTIA_SKILL_LOCATOR_TRACE_PATH="$SKILL_LOCATOR_TRACE"
     AGENT_MODE_ARGS+=(--segmentia-mode direct_reuse)
     ;;
   prefix_correction)
     export LMCACHE_ENABLE_SEGMENTIA=True
     export LMCACHE_EXTRA_CONFIG='{"local_disk_rehydrate_recursive":true,"segmentia_prefix_correction":true,"segmentia_prefix_apply_correction":true,"segmentia_prefix_correction_alpha":0.6}'
     export LMCACHE_LOCAL_DISK_REHYDRATE=True
+    SCHEDULE_WINDOW_TRACE="$WORKSPACE/segmentia_scheduler_admission.jsonl"
+    SKILL_ACTION_TRACE="$WORKSPACE/segmentia_skill_action_ready.jsonl"
+    SKILL_LOCATOR_TRACE="$WORKSPACE/segmentia_skill_locator.jsonl"
+    export VLLM_SCHEDULE_WINDOW_TRACE_PATH="$SCHEDULE_WINDOW_TRACE"
+    export VLLM_SKILL_ACTION_TRACE_PATH="$SKILL_ACTION_TRACE"
+    export VLLM_SEGMENTIA_SKILL_LOCATOR_TRACE_PATH="$SKILL_LOCATOR_TRACE"
     AGENT_MODE_ARGS+=(--segmentia-mode prefix_correction)
     ;;
   *)
@@ -101,6 +127,18 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 mkdir -p "$WORKSPACE"
+if [[ -n "$SCHEDULE_WINDOW_TRACE" ]]; then
+  : > "$SCHEDULE_WINDOW_TRACE"
+fi
+if [[ -n "$SKILL_ACTION_TRACE" ]]; then
+  : > "$SKILL_ACTION_TRACE"
+fi
+if [[ -n "$SKILL_LOCATOR_TRACE" ]]; then
+  : > "$SKILL_LOCATOR_TRACE"
+fi
+if [[ -n "$SKILL_EXECUTION_TRACE" ]]; then
+  : > "$SKILL_EXECUTION_TRACE"
+fi
 echo "[agent] running pre-flight check; log: $AGENT_CHECK_LOG"
 PYTHONPATH="$PYTHONPATH_VALUE" "$PYTHON_BIN" "$AGENT_SCRIPT" \
   --skills-dir "$SKILLS_DIR" \

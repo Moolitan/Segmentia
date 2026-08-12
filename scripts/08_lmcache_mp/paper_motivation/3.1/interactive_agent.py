@@ -6,8 +6,8 @@ import argparse
 import hashlib
 import json
 import os
-import urllib.error
-import urllib.request
+import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,6 +18,9 @@ from transformers import AutoTokenizer
 from skill_cache_tokens import (
     CACHE_OBJECT_TYPE,
     CACHE_SCHEMA_VERSION,
+    LOCATOR_KIND,
+    context_segment_start_marker_text,
+    qwen_context_segment_start_marker_token_ids,
     qwen_context_segment_token_ids,
 )
 
@@ -37,6 +40,7 @@ DEFAULT_MODEL = Path(
     "/mnt/Large_Language_Model_Lab_1/llm_models/Qwen3-14B/Qwen/Qwen3-14B"
 )
 SEGMENTIA_MODES = ("direct_reuse", "prefix_correction")
+SCHEDULE_REQUEST_PREFIX = "segmentia-window-"
 PREFIX_CORRECTION_POLICY = {
     "correction_mode": "prefix_k_headwise",
     "prefix_tokens": 256,
@@ -45,6 +49,12 @@ PREFIX_CORRECTION_POLICY = {
     "minimum_reuse_tokens": 256,
     "correction_alpha": 0.6,
 }
+try:
+    BOOT_ID = Path("/proc/sys/kernel/random/boot_id").read_text(
+        encoding="utf-8"
+    ).strip()
+except OSError:
+    BOOT_ID = ""
 
 
 @dataclass(frozen=True)
@@ -55,6 +65,105 @@ class CachedSkill:
     text: str
     token_ids: tuple[int, ...]
     token_sha256: str
+    start_marker_token_ids: tuple[int, ...]
+    start_marker_token_sha256: str
+
+
+@dataclass(frozen=True)
+class SkillObservationTimestamp:
+    """The instant when OpenHands makes one Skill result visible to the Agent."""
+
+    event_id: str
+    event_timestamp: str
+    action_id: str
+    tool_call_id: str
+    callback_unix_ns: int
+    callback_monotonic_ns: int
+
+
+class SkillScheduleWindowProbe:
+    """Pair Skill observations with the next completion transport handoff."""
+
+    def __init__(self) -> None:
+        self.session_id = str(uuid.uuid4())
+        self.fine_timeline_enabled = os.environ.get(
+            "SEGMENTIA_FINE_TIMELINE", "0"
+        ) == "1"
+        self._pending: dict[str, list[SkillObservationTimestamp]] = {}
+        self.transport_events: list[dict[str, Any]] = []
+        self.agent_timeline_events: list[dict[str, Any]] = []
+
+    def on_event(self, event: Any) -> None:
+        """Retain the source tool-call ID until request B is constructed."""
+        if (
+            self.fine_timeline_enabled
+            and event.__class__.__name__ == "ActionEvent"
+            and getattr(event, "tool_name", None) == "skill"
+        ):
+            self.agent_timeline_events.append(
+                {
+                    "boundary": "skill_action_event_callback",
+                    "action_id": str(getattr(event, "id", "")),
+                    "tool_call_id": str(getattr(event, "tool_call_id", "")),
+                    "boot_id": BOOT_ID,
+                    "monotonic_ns": time.monotonic_ns(),
+                    "unix_ns": time.time_ns(),
+                    "pid": os.getpid(),
+                }
+            )
+            return
+        if (
+            event.__class__.__name__ != "ObservationEvent"
+            or getattr(event, "tool_name", None) != "skill"
+        ):
+            return
+        observation = getattr(event, "observation", None)
+        skill_name = str(getattr(observation, "skill_name", "")).strip()
+        if not skill_name or skill_name == "list":
+            return
+        timestamp = SkillObservationTimestamp(
+            event_id=str(getattr(event, "id", "")),
+            event_timestamp=str(getattr(event, "timestamp", "")),
+            action_id=str(getattr(event, "action_id", "")),
+            tool_call_id=str(getattr(event, "tool_call_id", "")),
+            callback_unix_ns=time.time_ns(),
+            callback_monotonic_ns=time.monotonic_ns(),
+        )
+        if self.fine_timeline_enabled:
+            self.agent_timeline_events.append(
+                {
+                    "boundary": "skill_observation_event_callback",
+                    "skill_name": skill_name,
+                    "event_id": timestamp.event_id,
+                    "action_id": timestamp.action_id,
+                    "tool_call_id": timestamp.tool_call_id,
+                    "boot_id": BOOT_ID,
+                    "monotonic_ns": timestamp.callback_monotonic_ns,
+                    "unix_ns": timestamp.callback_unix_ns,
+                    "pid": os.getpid(),
+                }
+            )
+        self._pending.setdefault(skill_name, []).append(timestamp)
+
+    def pop_observation(self, skill_name: str) -> SkillObservationTimestamp | None:
+        observations = self._pending.get(skill_name)
+        if not observations:
+            return None
+        timestamp = observations.pop(0)
+        if not observations:
+            del self._pending[skill_name]
+        return timestamp
+
+    def peek_observation(self, skill_name: str) -> SkillObservationTimestamp | None:
+        """Return the pending Skill result without consuming it.
+
+        Request B must carry the tool-call ID produced by request A so vLLM can
+        join T0 with the later request entirely from its own traces.  The
+        observation stays pending until request B succeeds, preserving retry
+        behavior.
+        """
+        observations = self._pending.get(skill_name)
+        return observations[0] if observations else None
 
 
 def parse_args() -> argparse.Namespace:
@@ -101,6 +210,11 @@ def parse_args() -> argparse.Namespace:
             "Agent steps per user message. The default captures exactly the Skill "
             "load step and the first post-Skill completion."
         ),
+    )
+    parser.add_argument(
+        "--prompt-file",
+        type=Path,
+        help="Send the complete UTF-8 file as one user message, then exit.",
     )
     parser.add_argument("--check", action="store_true")
     return parser.parse_args()
@@ -254,6 +368,25 @@ def load_cached_skills(
             raise RuntimeError(f"offline token hash is stale for Skill {name}")
         if record.get("token_count") != len(token_ids):
             raise RuntimeError(f"offline token count is stale for Skill {name}")
+        locator = record.get("locator")
+        if not isinstance(locator, dict) or locator.get("kind") != LOCATOR_KIND:
+            raise RuntimeError(f"offline locator is missing for Skill {name}")
+        start_marker_token_ids = qwen_context_segment_start_marker_token_ids(
+            tokenizer, name
+        )
+        start_marker_digest = sha256_tokens(start_marker_token_ids)
+        if locator.get("start_marker_text") != context_segment_start_marker_text(
+            name
+        ):
+            raise RuntimeError(f"offline locator text is stale for Skill {name}")
+        if locator.get("start_marker_token_ids") != start_marker_token_ids:
+            raise RuntimeError(f"offline locator tokens are stale for Skill {name}")
+        if locator.get("start_marker_token_count") != len(start_marker_token_ids):
+            raise RuntimeError(f"offline locator count is stale for Skill {name}")
+        if locator.get("start_marker_token_ids_sha256") != start_marker_digest:
+            raise RuntimeError(f"offline locator hash is stale for Skill {name}")
+        if token_ids[: len(start_marker_token_ids)] != start_marker_token_ids:
+            raise RuntimeError(f"offline locator is not a prefix for Skill {name}")
         kv_dir = manifest_path.parent / "kv"
         if len(list(kv_dir.glob("*.pt.meta.json"))) != 40:
             raise RuntimeError(f"offline KV is incomplete for Skill {name}: {kv_dir}")
@@ -264,6 +397,8 @@ def load_cached_skills(
             text=text,
             token_ids=tuple(token_ids),
             token_sha256=token_digest,
+            start_marker_token_ids=tuple(start_marker_token_ids),
+            start_marker_token_sha256=start_marker_digest,
         )
 
     if require_all and unavailable:
@@ -310,73 +445,10 @@ def jsonable(value: Any) -> Any:
     return value
 
 
-def post_json(
-    base_url: str,
-    path: str,
-    api_key: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    request = urllib.request.Request(
-        f"{base_url.rstrip('/')}{path}",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=120) as response:
-            value = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"HTTP {exc.code} from {path}: {body}") from exc
-    if not isinstance(value, dict):
-        raise RuntimeError(f"expected JSON object from {path}")
-    return value
-
-
-def find_subsequence(haystack: list[int], needle: tuple[int, ...]) -> list[int]:
-    if not needle or len(needle) > len(haystack):
-        return []
-    first = needle[0]
-    width = len(needle)
-    return [
-        index
-        for index in range(len(haystack) - width + 1)
-        if haystack[index] == first
-        and tuple(haystack[index : index + width]) == needle
-    ]
-
-
-def tokenize_openhands_request(
-    base_url: str,
-    api_key: str,
-    model: str,
-    messages: list[dict[str, Any]],
-    tools: Any,
-) -> list[int]:
-    payload: dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "add_generation_prompt": True,
-        "chat_template_kwargs": {"enable_thinking": True},
-    }
-    if tools:
-        payload["tools"] = tools
-    response = post_json(base_url, "/tokenize", api_key, payload)
-    tokens = response.get("tokens")
-    if not isinstance(tokens, list) or not all(isinstance(item, int) for item in tokens):
-        raise RuntimeError("vLLM /tokenize returned invalid tokens")
-    return tokens
-
-
 def attach_skill_kv_injector(
     llm: Any,
     cached_skills: dict[str, CachedSkill],
-    base_url: str,
-    api_key: str,
-    model: str,
+    schedule_probe: SkillScheduleWindowProbe,
     segmentia_mode: str = "direct_reuse",
 ) -> None:
     # agent 每次发 LLM 请求时在 LLM 请求里注入 lmcache_segmentia_lookup
@@ -385,6 +457,17 @@ def attach_skill_kv_injector(
     events: list[dict[str, Any]] = []
 
     def wrapped(*args: Any, **kwargs: Any) -> Any:
+        # These OpenHands timestamps are retained only for legacy diagnostics.
+        # The formal T0--T3 experiment records every boundary inside vLLM.
+        wrapper_enter_unix_ns = time.time_ns()
+        wrapper_enter_monotonic_ns = time.monotonic_ns()
+        request_token = f"{SCHEDULE_REQUEST_PREFIX}{uuid.uuid4().hex}"
+        request_id = f"chatcmpl-{request_token}"
+        extra_headers = dict(kwargs.get("extra_headers") or {})
+        if any(key.lower() == "x-request-id" for key in extra_headers):
+            raise RuntimeError("X-Request-Id is already set on the LLM request")
+        extra_headers["X-Request-Id"] = request_token
+        kwargs["extra_headers"] = extra_headers
         messages = jsonable(kwargs.get("messages") or [])
         searchable = "\n".join(
             content_text(message.get("content"))
@@ -398,40 +481,43 @@ def attach_skill_kv_injector(
             and skill.text in searchable
         ]
         pending: CachedSkill | None = None
-        span_start = 0
-        span_end = 0
+        source_observation: SkillObservationTimestamp | None = None
         if candidates:
-            prompt_ids = tokenize_openhands_request(
-                base_url,
-                api_key,
-                model,
-                messages,
-                jsonable(kwargs.get("tools")),
-            )
-            matches: list[tuple[CachedSkill, int]] = []
-            for skill in candidates:
-                starts = find_subsequence(prompt_ids, skill.token_ids)
-                for start in starts:
-                    matches.append((skill, start))
-
-            if len(matches) != 1:
-                names = [skill.name for skill, _ in matches]
+            if len(candidates) != 1:
+                names = [skill.name for skill in candidates]
                 raise RuntimeError(
                     "one OpenHands request must introduce exactly one new cached "
-                    f"Skill; token matches={names}"
+                    f"Skill; content matches={names}"
                 )
-            pending, span_start = matches[0]
-            span_end = span_start + len(pending.token_ids)
-            if sha256_tokens(prompt_ids[span_start:span_end]) != pending.token_sha256:
-                raise RuntimeError(f"online token hash mismatch for Skill {pending.name}")
+            pending = candidates[0]
+            source_observation = schedule_probe.peek_observation(pending.name)
+            if source_observation is None:
+                raise RuntimeError(
+                    f"cached Skill {pending.name!r} has no pending Skill "
+                    "Observation for source tool-call correlation"
+                )
 
             lookup = {
-                "segment_start": span_start,
-                "segment_end": span_end,
+                "cache_id": pending.cache_id,
+                "skill_name": pending.name,
+                "source_tool_call_id": source_observation.tool_call_id,
+                "token_count": len(pending.token_ids),
+                "token_ids_sha256": pending.token_sha256,
+                "locator": {
+                    "kind": LOCATOR_KIND,
+                    "start_marker_token_ids": list(
+                        pending.start_marker_token_ids
+                    ),
+                    "start_marker_token_count": len(
+                        pending.start_marker_token_ids
+                    ),
+                    "start_marker_token_ids_sha256": (
+                        pending.start_marker_token_sha256
+                    ),
+                },
             }
             if segmentia_mode == "prefix_correction":
                 lookup.update(PREFIX_CORRECTION_POLICY)
-                lookup["cache_end"] = span_end
             elif segmentia_mode != "direct_reuse":
                 raise ValueError(f"unsupported Segmentia mode: {segmentia_mode}")
 
@@ -442,21 +528,90 @@ def attach_skill_kv_injector(
             kwargs["extra_body"] = extra_body
             print(
                 f"[Segmentia] inject Skill={pending.name} "
-                f"span=[{span_start},{span_end}) tokens={len(pending.token_ids)}",
+                f"locator=manifest tokens={len(pending.token_ids)}",
                 flush=True,
             )
 
+        dispatch_unix_ns = time.time_ns()
+        dispatch_monotonic_ns = time.monotonic_ns()
         response = original(*args, **kwargs)
+        response_received_unix_ns = time.time_ns()
+        response_received_monotonic_ns = time.monotonic_ns()
+        schedule_probe.transport_events.append(
+            {
+                "request_id": request_id,
+                "boot_id": BOOT_ID,
+                "request_wrapper_enter_unix_ns": wrapper_enter_unix_ns,
+                "request_wrapper_enter_monotonic_ns": wrapper_enter_monotonic_ns,
+                "client_transport_handoff_unix_ns": dispatch_unix_ns,
+                "client_transport_handoff_monotonic_ns": dispatch_monotonic_ns,
+                "client_response_received_unix_ns": response_received_unix_ns,
+                "client_response_received_monotonic_ns": (
+                    response_received_monotonic_ns
+                ),
+                "boundary": "client_transport_response_received",
+            }
+        )
         if pending is not None:
             injected.add(pending.name)
+            observation = schedule_probe.pop_observation(pending.name)
+            if observation is None:
+                schedule_timing: dict[str, Any] = {
+                    "status": "missing_skill_observation",
+                    "session_id": schedule_probe.session_id,
+                }
+            else:
+                if observation != source_observation:
+                    raise RuntimeError(
+                        "pending Skill Observation changed while request B was "
+                        "in flight"
+                    )
+                observation_to_wrapper_ns = (
+                    wrapper_enter_monotonic_ns - observation.callback_monotonic_ns
+                )
+                wrapper_prepare_ns = (
+                    dispatch_monotonic_ns - wrapper_enter_monotonic_ns
+                )
+                observation_to_dispatch_ns = (
+                    dispatch_monotonic_ns - observation.callback_monotonic_ns
+                )
+                schedule_timing = {
+                    "status": "ok",
+                    "session_id": schedule_probe.session_id,
+                    "observation_event_id": observation.event_id,
+                    "observation_event_timestamp": observation.event_timestamp,
+                    "action_id": observation.action_id,
+                    "tool_call_id": observation.tool_call_id,
+                    "observation_callback_unix_ns": observation.callback_unix_ns,
+                    "request_wrapper_enter_unix_ns": wrapper_enter_unix_ns,
+                    "completion_transport_handoff_unix_ns": dispatch_unix_ns,
+                    "client_transport_handoff_unix_ns": dispatch_unix_ns,
+                    "observation_callback_monotonic_ns": (
+                        observation.callback_monotonic_ns
+                    ),
+                    "request_wrapper_enter_monotonic_ns": (
+                        wrapper_enter_monotonic_ns
+                    ),
+                    "completion_transport_handoff_monotonic_ns": (
+                        dispatch_monotonic_ns
+                    ),
+                    "observation_to_wrapper_ms": observation_to_wrapper_ns / 1e6,
+                    "wrapper_prepare_ms": wrapper_prepare_ns / 1e6,
+                    "observation_to_dispatch_ms": (
+                        observation_to_dispatch_ns / 1e6
+                    ),
+                }
             events.append(
                 {
                     "skill": pending.name,
                     "cache_id": pending.cache_id,
-                    "segment_start": span_start,
-                    "segment_end": span_end,
+                    "request_id": request_id,
+                    "segment_start": None,
+                    "segment_end": None,
+                    "span_owner": "vllm_post_tokenization_locator",
                     "token_count": len(pending.token_ids),
                     "segmentia_mode": segmentia_mode,
+                    "schedule_timing": schedule_timing,
                 }
             )
         return response
@@ -468,6 +623,7 @@ def attach_skill_kv_injector(
 def create_agent(
     args: argparse.Namespace,
     cached_skills: dict[str, CachedSkill],
+    schedule_probe: SkillScheduleWindowProbe,
 ):
     from openhands.sdk import Agent, AgentContext, LLM, Tool
     from openhands.sdk.context.skills import load_skills_from_dir
@@ -499,9 +655,7 @@ def create_agent(
     attach_skill_kv_injector(
         llm,
         cached_skills,
-        args.base_url,
-        args.api_key,
-        args.served_model,
+        schedule_probe,
         args.segmentia_mode,
     )
 
@@ -562,7 +716,7 @@ def main() -> None:
         require_all=args.skill is not None or args.collection is not None,
     )
     if args.check:
-        create_agent(args, cached_skills)
+        create_agent(args, cached_skills, SkillScheduleWindowProbe())
         print(
             f"[check] OpenHands agent config with "
             f"{len(cached_skills)} cached schema{CACHE_SCHEMA_VERSION} Skills "
@@ -570,16 +724,29 @@ def main() -> None:
             f"selector={selector} from {args.skills_dir}"
         )
         return
-    llm, agent = create_agent(args, cached_skills)
+    schedule_probe = SkillScheduleWindowProbe()
+    llm, agent = create_agent(args, cached_skills, schedule_probe)
 
     from openhands.sdk import Conversation
 
+    conversation_options: dict[str, Any] = {
+        "agent": agent,
+        "workspace": str(args.workspace),
+        "max_iteration_per_run": args.max_iterations,
+        "stuck_detection": True,
+        "delete_on_close": True,
+        "callbacks": [schedule_probe.on_event],
+    }
+    # The fine-grained scheduling experiment measures callback latency.  Rich's
+    # default visualizer renders and prints the complete Skill observation before
+    # the experiment callback runs, so its terminal cost would be charged to the
+    # Agent control path.  Keep normal interactive runs unchanged and disable the
+    # visualizer only when the dedicated launcher explicitly requests it.
+    if os.environ.get("SEGMENTIA_DISABLE_VISUALIZER", "0") == "1":
+        conversation_options["visualizer"] = None
+
     conversation = Conversation(
-        agent=agent,
-        workspace=str(args.workspace),
-        max_iteration_per_run=args.max_iterations,
-        stuck_detection=True,
-        delete_on_close=True,
+        **conversation_options,
     )
     print(f"[ready] workspace={args.workspace}")
     print(
@@ -588,17 +755,24 @@ def main() -> None:
         f"steps_per_message={args.max_iterations}; enter /exit to quit"
     )
     try:
-        while True:
-            try:
-                message = input("\nYou> ").strip()
-            except EOFError:
-                break
-            if message in {"/exit", "/quit"}:
-                break
+        if args.prompt_file is not None:
+            message = args.prompt_file.read_text(encoding="utf-8").strip()
             if not message:
-                continue
+                raise ValueError(f"prompt file is empty: {args.prompt_file}")
             conversation.send_message(message)
             conversation.run()
+        else:
+            while True:
+                try:
+                    message = input("\nYou> ").strip()
+                except EOFError:
+                    break
+                if message in {"/exit", "/quit"}:
+                    break
+                if not message:
+                    continue
+                conversation.send_message(message)
+                conversation.run()
     finally:
         conversation.close()
         events_path = args.workspace / "segmentia_skill_events.json"
@@ -611,7 +785,29 @@ def main() -> None:
             + "\n",
             encoding="utf-8",
         )
+        transport_path = args.workspace / "segmentia_transport_events.json"
+        transport_path.write_text(
+            json.dumps(
+                schedule_probe.transport_events,
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        timeline_path = args.workspace / "segmentia_agent_timeline.json"
+        timeline_path.write_text(
+            json.dumps(
+                schedule_probe.agent_timeline_events,
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         print(f"[done] Segmentia events: {events_path}")
+        print(f"[done] Segmentia transport events: {transport_path}")
+        print(f"[done] Segmentia Agent timeline: {timeline_path}")
 
 
 if __name__ == "__main__":

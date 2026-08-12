@@ -16,6 +16,7 @@ def load_module():
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -89,3 +90,64 @@ def test_no_reuse_parse_args_accumulates_repeated_skills(monkeypatch) -> None:
 
     assert args.skill == ["paper-writing", "paper-plan"]
     assert args.collection is None
+
+
+def test_schedule_probe_tags_request_a_and_links_request_b() -> None:
+    module = load_module()
+
+    class FakeLLM:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def _transport_call(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            return "ok"
+
+    llm = FakeLLM()
+    probe = module.NormalPrefillScheduleProbe()
+    module.attach_normal_prefill_schedule_probe(llm, probe)
+
+    assert llm._transport_call(messages=[]) == "ok"
+    request_a_headers = llm.calls[0][1]["extra_headers"]
+    assert request_a_headers["X-Request-Id"].startswith(
+        module.SCHEDULE_REQUEST_PREFIX
+    )
+    assert probe.events == []
+    assert probe.transport_events[0]["request_id"] == (
+        f"chatcmpl-{request_a_headers['X-Request-Id']}"
+    )
+    assert probe.transport_events[0]["boundary"] == (
+        "client_transport_response_received"
+    )
+
+    observation = module.SkillObservationTimestamp(
+        skill_name="docx",
+        event_id="event-1",
+        event_timestamp="2026-08-11T00:00:00Z",
+        action_id="action-1",
+        tool_call_id="tool-call-1",
+        callback_unix_ns=1,
+    )
+    downstream = module.SkillObservationTimestamp(
+        skill_name="paper-compile",
+        event_id="event-2",
+        event_timestamp="2026-08-11T00:00:00Z",
+        action_id="action-2",
+        tool_call_id="tool-call-2",
+        callback_unix_ns=2,
+    )
+    probe._pending.extend((observation, downstream))
+    assert llm._transport_call(messages=[]) == "ok"
+
+    request_b_headers = llm.calls[1][1]["extra_headers"]
+    assert request_b_headers["X-Request-Id"].startswith(
+        module.SCHEDULE_REQUEST_PREFIX
+    )
+    assert request_b_headers != request_a_headers
+    assert [
+        event["schedule_timing"]["tool_call_id"] for event in probe.events
+    ] == ["tool-call-1", "tool-call-2"]
+    assert {event["request_id"] for event in probe.events} == {
+        f"chatcmpl-{request_b_headers['X-Request-Id']}"
+    }
+    assert len(probe.transport_events) == 2

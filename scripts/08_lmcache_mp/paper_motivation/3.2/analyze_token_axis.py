@@ -51,7 +51,7 @@ def validate_case(
     if not (
         capture.get("status") == "completed"
         and capture.get("skill") == skill
-        and manifest.get("schema_version") == 3
+        and manifest.get("schema_version") in {3, 4}
         and manifest.get("status") == "completed"
         and manifest.get("skill_name") == skill
         and manifest.get("token_count") == token_count

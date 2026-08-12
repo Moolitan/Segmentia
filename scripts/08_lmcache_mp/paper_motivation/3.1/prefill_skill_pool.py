@@ -18,7 +18,10 @@ from transformers import AutoTokenizer
 from skill_cache_tokens import (
     CACHE_OBJECT_TYPE,
     CACHE_SCHEMA_VERSION,
+    LOCATOR_KIND,
     context_segment_cache_text,
+    context_segment_start_marker_text,
+    qwen_context_segment_start_marker_token_ids,
     qwen_context_segment_token_ids,
 )
 
@@ -270,6 +273,9 @@ def main() -> None:
     )
     raw_skill_token_ids = tokenizer.encode(text, add_special_tokens=False)
     token_ids = qwen_context_segment_token_ids(tokenizer, skill_name, text)
+    start_marker_token_ids = qwen_context_segment_start_marker_token_ids(
+        tokenizer, skill_name
+    )
     if not raw_skill_token_ids:
         raise ValueError(f"empty token sequence: {source_path}")
     if len(token_ids) > args.max_input_tokens:
@@ -302,6 +308,13 @@ def main() -> None:
         ).hexdigest(),
         "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
         "token_ids_sha256": token_hash(token_ids),
+        "locator": {
+            "kind": LOCATOR_KIND,
+            "start_marker_text": context_segment_start_marker_text(skill_name),
+            "start_marker_token_ids": start_marker_token_ids,
+            "start_marker_token_count": len(start_marker_token_ids),
+            "start_marker_token_ids_sha256": token_hash(start_marker_token_ids),
+        },
     }
     if args.dry_run:
         print(

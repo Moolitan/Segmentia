@@ -97,7 +97,7 @@ def analyze_case(
         raise ValueError(f"invalid capture record: {capture_path}")
     token_count = int(capture["token_count"])
     if not (
-        offline_manifest.get("schema_version") == 3
+        offline_manifest.get("schema_version") in {3, 4}
         and offline_manifest.get("status") == "completed"
         and offline_manifest.get("skill_name") == skill
         and offline_manifest.get("token_count") == token_count

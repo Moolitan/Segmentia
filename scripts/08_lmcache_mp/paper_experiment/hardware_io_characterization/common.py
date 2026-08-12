@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
@@ -31,7 +32,15 @@ def load_config() -> dict[str, Any]:
     payload = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"configuration is not a mapping: {CONFIG_PATH}")
-    for section in ("run", "skill_cache", "ssd", "dram", "pcie", "end_to_end"):
+    for section in (
+        "run",
+        "skill_cache",
+        "ssd",
+        "dram",
+        "pcie",
+        "end_to_end",
+        "agent_schedule",
+    ):
         if section not in payload or not isinstance(payload[section], dict):
             raise ValueError(f"missing configuration section: {section}")
     run_id = str(payload["run"].get("id", "")).strip()
@@ -50,6 +59,62 @@ def raw_run_dir(config: dict[str, Any]) -> Path:
 
 def result_dir(config: dict[str, Any]) -> Path:
     return Path(config["run"]["result_dir"])
+
+
+def require_mounted_device(
+    mount_point: Path,
+    expected_source: Path,
+    *,
+    writable: bool,
+) -> dict[str, str]:
+    """Fail unless *mount_point* is the expected standalone filesystem.
+
+    ``findmnt --target`` also succeeds for an ordinary directory by returning
+    the containing root filesystem.  Comparing the reported target with the
+    requested mount point prevents a missing NVMe mount from silently filling
+    the system disk.
+    """
+    mount_point = mount_point.resolve()
+    command = [
+        "findmnt",
+        "--json",
+        "--target",
+        str(mount_point),
+        "--output",
+        "SOURCE,TARGET,FSTYPE,OPTIONS",
+    ]
+    completed = subprocess.run(
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    filesystems = payload.get("filesystems")
+    if not isinstance(filesystems, list) or len(filesystems) != 1:
+        raise RuntimeError(f"cannot resolve one filesystem for {mount_point}")
+    filesystem = filesystems[0]
+    target = Path(str(filesystem.get("target", ""))).resolve()
+    source = Path(str(filesystem.get("source", ""))).resolve()
+    expected_source = expected_source.resolve()
+    options = str(filesystem.get("options", ""))
+    if target != mount_point:
+        raise RuntimeError(
+            f"{mount_point} is not a mount point; findmnt resolved its "
+            f"containing filesystem at {target}"
+        )
+    if source != expected_source:
+        raise RuntimeError(
+            f"{mount_point} is backed by {source}, expected {expected_source}"
+        )
+    if writable and "rw" not in options.split(","):
+        raise RuntimeError(f"{mount_point} is not mounted read-write: {options}")
+    return {
+        "source": str(source),
+        "target": str(target),
+        "fstype": str(filesystem.get("fstype", "")),
+        "options": options,
+    }
 
 
 def atomic_write_json(path: Path, payload: Any) -> None:
@@ -107,16 +172,57 @@ def write_test_result(test_name: str, config: dict[str, Any], payload: dict[str,
 
 def discover_layers(config: dict[str, Any]) -> tuple[dict[str, Any], list[LayerFile]]:
     cache = config["skill_cache"]
-    root = Path(cache["pool_dir"]) / str(cache["cache_id"])
-    manifest_path = root / "manifest.json"
+    manifest_path = (
+        Path(cache["pool_dir"]) / str(cache["cache_id"]) / "manifest.json"
+    )
+    return discover_manifest_layers(manifest_path, int(cache["expected_layers"]))
+
+
+def resolve_skill_manifest(pool_dir: Path, skill: str) -> Path:
+    """Resolve one offline manifest using the same collection precedence as 07."""
+    preferred = (
+        pool_dir / skill / "manifest.json",
+        pool_dir / "Auto-claude-code-research-in-sleep" / skill / "manifest.json",
+        pool_dir / "superpowers" / skill / "manifest.json",
+    )
+    manifest_path = next((path for path in preferred if path.is_file()), None)
+    if manifest_path is not None:
+        return manifest_path
+    candidates = sorted(pool_dir.glob(f"**/{skill}/manifest.json"))
+    if len(candidates) != 1:
+        raise FileNotFoundError(
+            f"cannot resolve one offline manifest for {skill}: {candidates}"
+        )
+    return candidates[0]
+
+
+def discover_manifest_layers(
+    manifest_path: Path, expected_layers: int
+) -> tuple[dict[str, Any], list[LayerFile]]:
+    """Validate a completed manifest and return its layer files in model order."""
     if not manifest_path.is_file():
         raise FileNotFoundError(f"offline manifest is missing: {manifest_path}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("status") != "completed":
         raise ValueError(f"offline cache is not completed: {manifest_path}")
-    kv_dir = root / "kv"
+    if manifest.get("layer_count") != expected_layers:
+        raise ValueError(
+            f"expected {expected_layers} manifest layers: {manifest_path}"
+        )
+    data_files = manifest.get("data_files")
+    if not isinstance(data_files, list) or len(data_files) != expected_layers:
+        raise ValueError(
+            f"manifest data_files must contain {expected_layers} entries: "
+            f"{manifest_path}"
+        )
+    kv_dir = Path(str(manifest.get("cache_dir", "")))
+    if not kv_dir.is_dir():
+        raise FileNotFoundError(f"offline cache directory is missing: {kv_dir}")
     files: list[LayerFile] = []
-    for path in kv_dir.glob("*.pt"):
+    for filename in data_files:
+        path = kv_dir / str(filename)
+        if not path.is_file():
+            raise FileNotFoundError(f"offline layer file is missing: {path}")
         match = LAYER_PATTERN.search(path.name)
         if match is None:
             raise ValueError(f"cannot parse layer id from {path.name}")
@@ -130,11 +236,12 @@ def discover_layers(config: dict[str, Any]) -> tuple[dict[str, Any], list[LayerF
             raise ValueError(f"layer size disagrees with sidecar: {path}")
         files.append(LayerFile(layer_id, path, size))
     files.sort(key=lambda item: item.layer_id)
-    expected = int(cache["expected_layers"])
     actual_ids = [item.layer_id for item in files]
-    if actual_ids != list(range(expected)):
-        raise ValueError(f"expected layer ids 0..{expected - 1}, found {actual_ids}")
-    manifest_files = set(manifest.get("data_files", []))
+    if actual_ids != list(range(expected_layers)):
+        raise ValueError(
+            f"expected layer ids 0..{expected_layers - 1}, found {actual_ids}"
+        )
+    manifest_files = set(data_files)
     actual_files = {item.path.name for item in files}
     if manifest_files != actual_files:
         raise ValueError("manifest data_files disagree with the layer files on disk")

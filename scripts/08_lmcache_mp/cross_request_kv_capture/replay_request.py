@@ -157,6 +157,7 @@ def main() -> None:
                 "calibration_start": 132,
                 "calibration_end": 256,
                 "minimum_reuse_tokens": 256,
+                "correction_alpha": 0.6,
             }
         )
     completion_payload: dict[str, Any] = {

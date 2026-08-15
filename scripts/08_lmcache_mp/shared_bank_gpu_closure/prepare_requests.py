@@ -36,6 +36,7 @@ def lookup(record: dict[str, Any]) -> dict[str, Any]:
         "calibration_start": 132,
         "calibration_end": 256,
         "minimum_reuse_tokens": 256,
+        "correction_alpha": 0.6,
     }
 
 

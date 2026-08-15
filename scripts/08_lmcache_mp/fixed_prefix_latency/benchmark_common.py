@@ -106,6 +106,7 @@ def lookup_params(arm: str, segment_start: int, segment_end: int, cache_end: int
                 "calibration_start": 132,
                 "calibration_end": 256,
                 "minimum_reuse_tokens": 256,
+                "correction_alpha": 0.6,
             }
         )
     return lookup

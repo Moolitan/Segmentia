@@ -1,0 +1,118 @@
+run:
+  id: a6000_qwen3_14b_io_v1
+  raw_output_root: /mnt/Large_Language_Model_Lab_1/wsh/Segmentia/output/08_lmcache_mp/paper_experiment_hardware_io
+  result_dir: /home/wsh/openhands_code_research/results/problem_exploration/hardware_io_characterization
+
+skill_cache:
+  pool_dir: /mnt/Large_Language_Model_Lab_1/wsh/skill_save_pool/Qwen3-14B
+  cache_id: Auto-claude-code-research-in-sleep/paper-write
+  expected_layers: 40
+
+fast_ssd_skill_cache:
+  mount_point: /mnt/990_pro
+  expected_source: /dev/nvme1n1
+  pool_dir: /mnt/990_pro/skill_save_pool/Qwen3-14B
+
+ssd:
+  repetitions: 5
+  thread_counts: [1, 4]
+  cold_method: posix_fadvise
+
+dram:
+  copy_size_mib: 256
+  pinned_copy_size_mib: 64
+  warmups: 20
+  repetitions: 20
+
+pcie:
+  device: 0
+  warmups: 20
+  repetitions: 20
+  layer_groups: [1, 4, 40]
+
+end_to_end:
+  warmups: 5
+  repetitions: 10
+  disk_states: [cold, warm]
+
+agent_schedule:
+  source_agent_events: /home/wsh/openhands_code_research/workspace/08_lmcache_mp/interactive_agent/normal_prefill_schedule_events.json
+  source_scheduler_events: /home/wsh/openhands_code_research/workspace/08_lmcache_mp/interactive_agent/normal_prefill_scheduler_admission.jsonl
+  batch_id: all_task_prompts_v2
+  prompt_dir: /home/wsh/openhands_code_research/src/task_prompt
+  launcher: /home/wsh/openhands_code_research/scripts/08_lmcache_mp/paper_motivation/3.1/run_interactive_agent.sh
+  max_iterations: 2
+  cases:
+    - task: doc-coauthoring-retry-design-doc
+      skill: doc-coauthoring
+      exposed_skills: [doc-coauthoring]
+    - task: docx-convert-pdf-images
+      skill: docx
+      exposed_skills: [docx]
+    - task: experiment-plan-direct-kv-reuse
+      skill: experiment-plan
+      exposed_skills: [experiment-plan]
+    - task: frontend-design-gpu-cache-dashboard
+      skill: frontend-design
+      exposed_skills: [frontend-design]
+    - task: idea-discovery-agent-skill-kv
+      skill: idea-discovery
+      exposed_skills: [idea-discovery, research-lit, idea-creator, novelty-check, research-review, research-refine-pipeline]
+    - task: internal-comms-incident-update
+      skill: internal-comms
+      exposed_skills: [internal-comms]
+    - task: mcp-builder-issue-tracker-server
+      skill: mcp-builder
+      exposed_skills: [mcp-builder]
+    - task: mermaid-diagram-skill-reuse-pipeline
+      skill: mermaid-diagram
+      exposed_skills: [mermaid-diagram]
+    - task: paper-writing-segmentia-paper-plan
+      skill: paper-writing
+      exposed_skills: [paper-writing, paper-plan, paper-figure, paper-write, paper-compile, auto-paper-improvement-loop]
+    - task: research-refine-pipeline-context-free-kv
+      skill: research-refine-pipeline
+      exposed_skills: [research-refine-pipeline, experiment-plan]
+    - task: using-superpowers-systematic-debugging
+      skill: using-superpowers
+      exposed_skills: [using-superpowers, systematic-debugging]
+    - task: writing-systems-papers-segmentia-introduction
+      skill: writing-systems-papers
+      exposed_skills: [writing-systems-papers]
+    - task: xlsx-quarterly-budget-model
+      skill: xlsx
+      exposed_skills: [xlsx]
+
+agent_locator:
+  batch_id: all_task_prompts_v3
+  max_iterations: 2
+
+mermaid_timeline:
+  batch_id: mermaid_skill_fine_timeline_v1
+  task: mermaid-diagram-skill-reuse-pipeline
+  skill: mermaid-diagram
+  repetitions: 3
+  max_iterations: 2
+
+agent_kv_loading_actual:
+  warmups: 5
+  repetitions: 10
+  pinned_pool_gib: 5
+  alignment_bytes: 4096
+  excluded_skills: [docx, writing-systems-papers]
+
+raw_skill_kv:
+  file: /mnt/990_pro/skill_save_pool/cskcache_raw/qwen3_14b_skill_kv_v1.bin
+  manifest: /mnt/990_pro/skill_save_pool/cskcache_raw/qwen3_14b_skill_kv_build.json
+  cskcache_metadata: /mnt/990_pro/skill_save_pool/cskcache_raw/qwen3_14b_skill_kv_catalog.json
+  container_id: qwen3-14b-skill-kv-raw-v1
+  container_format_version: 1
+  capacity_gib: 24
+  block_alignment_bytes: 4096
+  header_bytes: 4096
+  metadata_mib: 64
+  io_engine: io_uring
+  queue_depth: 64
+  warmups: 1
+  repetitions: 10
+  bare_nvme_gib_s: 6.926

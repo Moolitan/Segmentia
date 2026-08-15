@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cskcache"
+version = "0.1.0"
+description = "CSKCache metadata and reuse lifecycle management"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cskcache*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+

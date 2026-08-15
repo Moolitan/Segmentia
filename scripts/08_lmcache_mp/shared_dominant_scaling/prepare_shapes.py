@@ -75,6 +75,7 @@ def lookup_config(
         "calibration_start": PREFIX_TOKENS - CALIBRATION_TOKENS,
         "calibration_end": PREFIX_TOKENS,
         "minimum_reuse_tokens": 256,
+        "correction_alpha": 0.6,
     }
 
 

@@ -20,9 +20,6 @@ NUM_LAYERS="${SEGMENTIA_MODEL_NUM_LAYERS:-40}"
 KV_HEADS="${SEGMENTIA_MODEL_KV_HEADS:-8}"
 HEAD_DIM="${SEGMENTIA_MODEL_HEAD_DIM:-128}"
 DTYPE_BYTES="${SEGMENTIA_KV_DTYPE_BYTES:-2}"
-ACTUAL_ANCHOR_TOKENS="${SEGMENTIA_ACTUAL_ANCHOR_TOKENS:-0}"
-ANCHOR_LAYOUT="${SEGMENTIA_ANCHOR_LAYOUT:-centered}"
-ANCHOR_CORRECTION="${SEGMENTIA_ANCHOR_CORRECTION:-none}"
 PREFIX_CORRECTION="${SEGMENTIA_PREFIX_CORRECTION:-0}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
 OUTPUT_ROOT="${SEGMENTIA_CAPTURE_OUTPUT_ROOT:-/mnt/Large_Language_Model_Lab_1/wsh/Segmentia/output/08_lmcache_mp/cross_request_kv_capture_runs}"
@@ -52,11 +49,6 @@ if [[ -e "$RUN_DIR" ]]; then
   echo "[error] immutable run directory already exists: $RUN_DIR" >&2
   exit 2
 fi
-if [[ "$PREFIX_CORRECTION" == "1" && "$ACTUAL_ANCHOR_TOKENS" != "0" ]]; then
-  echo "[error] prefix correction and fixed anchors are mutually exclusive" >&2
-  exit 2
-fi
-
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy || true
 export PYTHONHASHSEED="${PYTHONHASHSEED:-0}"
 export VLLM_API_KEY="$API_KEY"
@@ -125,26 +117,16 @@ print(f"[sources] vllm={actual['"'"'vllm'"'"']} lmcache={actual['"'"'lmcache'"'"
 start_server() {
   local cache_dir="$1"
   local log_path="$2"
-  local anchor_capture_dir="${3:-}"
+  local prefix_capture_dir="${3:-}"
   mkdir -p "$(dirname "$log_path")"
   export LMCACHE_LOCAL_DISK="file://${cache_dir}/"
-  if [[ "$PREFIX_CORRECTION" == "1" ]] && [[ -n "$anchor_capture_dir" ]]; then
+  if [[ "$PREFIX_CORRECTION" == "1" ]] && [[ -n "$prefix_capture_dir" ]]; then
     export LMCACHE_EXTRA_CONFIG
     LMCACHE_EXTRA_CONFIG="$(jq -cn \
-      --arg capture_dir "$anchor_capture_dir" \
+      --arg capture_dir "$prefix_capture_dir" \
       '{segmentia_prefix_correction:true,
-        segmentia_prefix_capture_dir:$capture_dir}')"
-  elif ((ACTUAL_ANCHOR_TOKENS > 0)) && [[ -n "$anchor_capture_dir" ]]; then
-    export LMCACHE_EXTRA_CONFIG
-    LMCACHE_EXTRA_CONFIG="$(jq -cn \
-      --argjson tokens "$ACTUAL_ANCHOR_TOKENS" \
-      --arg capture_dir "$anchor_capture_dir" \
-      --arg anchor_layout "$ANCHOR_LAYOUT" \
-      --arg anchor_correction "$ANCHOR_CORRECTION" \
-      '{segmentia_fixed_anchor_tokens:$tokens,
-        segmentia_anchor_capture_dir:$capture_dir,
-        segmentia_anchor_layout:$anchor_layout,
-        segmentia_anchor_correction:$anchor_correction}')"
+        segmentia_prefix_capture_dir:$capture_dir,
+        segmentia_prefix_correction_alpha:0.6}')"
   else
     unset LMCACHE_EXTRA_CONFIG || true
   fi
@@ -220,7 +202,7 @@ verify_local_sources
 PYTHONPATH="$SCRIPT_DIR" "$PYTHON_BIN" "$SCRIPT_DIR/prepare_cases.py" "${prepare_args[@]}"
 
 mapfile -t case_ids < <(jq -r '.cases[].case_id' "$RUN_DIR/prepared_cases.json")
-reuse_capture_name="actual_anchor"
+reuse_capture_name="reuse_capture"
 if [[ "$PREFIX_CORRECTION" == "1" ]]; then
   reuse_capture_name="prefix_correction"
 fi

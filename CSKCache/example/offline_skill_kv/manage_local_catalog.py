@@ -19,6 +19,8 @@ for package_root in (ROOT / "CSKCache", ROOT / "LMCache"):
     sys.path.insert(0, str(package_root))
 
 from cskcache import (  # noqa: E402
+    ChunkingSpec,
+    KVLayout,
     LocalDiskCacheBuilder,
     LocalDiskCacheObjectBuildInput,
     LocalDiskLayerBuildInput,
@@ -72,6 +74,8 @@ def load_pending(path: Path) -> LocalDiskCacheObjectBuildInput:
             )
             for layer in payload["layers"]
         ),
+        chunking=ChunkingSpec.from_dict(payload["chunking"]),
+        storage_layout=KVLayout(str(payload["storage_layout"])),
     )
 
 

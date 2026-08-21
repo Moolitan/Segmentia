@@ -10,10 +10,11 @@ from pathlib import Path
 
 from config import (
     CALIBRATION_TOKENS,
+    CHUNKING_MODE,
+    CHUNK_SIZE_TOKENS,
     CORRECTION_ALPHA,
     EXECUTION_ORDER,
     GPU_MEMORY_UTILIZATION,
-    HOST_CHUNK_TOKENS,
     HOST_LAYOUT,
     KV_FILL_VALUE,
     MAX_MODEL_LEN,
@@ -27,6 +28,7 @@ from config import (
     RUN_DIR_OVERRIDE,
     SKILL_NAME,
     SKILL_TOKENS,
+    STORAGE_LAYOUT,
     TAIL_TOKENS,
 )
 
@@ -44,9 +46,12 @@ def _prepare_catalog() -> tuple[list[int], str]:
 
     from cskcache import (
         CacheObjectMetadata,
+        ChunkingMode,
+        ChunkingSpec,
         ContainerMetadata,
         LayerExtent,
         MetadataManager,
+        KVLayout,
         ReadStrategy,
         fingerprint_model,
         fingerprint_token_ids,
@@ -116,6 +121,11 @@ def _prepare_catalog() -> tuple[list[int], str]:
         container_id=container.container_id,
         read_strategy=ReadStrategy.CONTIGUOUS,
         layers=layers,
+        chunking=ChunkingSpec(
+            ChunkingMode(CHUNKING_MODE),
+            CHUNK_SIZE_TOKENS,
+        ),
+        storage_layout=KVLayout(STORAGE_LAYOUT),
     )
     metadata = MetadataManager(CATALOG_PATH, expected_layers=num_layers)
     metadata.publish_container(container)
@@ -131,13 +141,15 @@ def _configure_environment(container_path: str) -> None:
         "cskcache_metadata_path": str(CATALOG_PATH),
         "cskcache_tokenizer_path": str(MODEL_PATH),
         "csk_storage_backend": "raw_block",
+        "csk_chunking_mode": CHUNKING_MODE,
+        "csk_chunk_size_tokens": CHUNK_SIZE_TOKENS,
+        "csk_storage_layout": STORAGE_LAYOUT,
         "csk_minimum_full_recompute_tokens": MINIMUM_FULL_RECOMPUTE_TOKENS,
         "csk_calibration_tokens": CALIBRATION_TOKENS,
         "csk_minimum_reuse_tokens": MINIMUM_REUSE_TOKENS,
         "csk_correction_alpha": CORRECTION_ALPHA,
         "csk_execution_order": EXECUTION_ORDER,
         "csk_host_layout": HOST_LAYOUT,
-        "csk_host_chunk_tokens": HOST_CHUNK_TOKENS,
         "storage_plugin.raw_block.module_path": "memory_backend",
         "storage_plugin.raw_block.class_name": (
             "PinnedMemoryExtentBackend"
@@ -164,7 +176,7 @@ def _configure_environment(container_path: str) -> None:
 
 
 async def _run_request(object_token_ids: list[int]) -> None:
-    from cskcache import render_context_segment
+    from cskcache import render_skill_payload
     from cskcache.integrations.vllm.base import (
         INSPECT_TOOL_OBSERVATION,
         SUBMIT_PREFETCH,
@@ -201,7 +213,7 @@ async def _run_request(object_token_ids: list[int]) -> None:
             {
                 "ticket": ticket,
                 "tool_name": "skill",
-                "content": render_context_segment(
+                "content": render_skill_payload(
                     SKILL_NAME, "synthetic pipeline input"
                 ),
             },
@@ -241,7 +253,9 @@ async def _run_request(object_token_ids: list[int]) -> None:
                     "calibration_tokens": CALIBRATION_TOKENS,
                     "execution_order": EXECUTION_ORDER,
                     "host_layout": HOST_LAYOUT,
-                    "host_chunk_tokens": HOST_CHUNK_TOKENS,
+                    "chunking_mode": CHUNKING_MODE,
+                    "chunk_size_tokens": CHUNK_SIZE_TOKENS,
+                    "storage_layout": STORAGE_LAYOUT,
                     "request_elapsed_ms": (
                         request_end - request_start
                     ) / 1_000_000,

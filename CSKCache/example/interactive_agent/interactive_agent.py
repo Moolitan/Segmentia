@@ -15,7 +15,7 @@ from transformers import AutoTokenizer
 from cskcache import (
     CacheObjectMetadata,
     MetadataManager,
-    build_context_segment_token_identity,
+    build_skill_token_identity,
     fingerprint_model,
     fingerprint_tokenizer,
 )
@@ -211,7 +211,7 @@ def load_cached_skills(
             unavailable.append(f"{name}:missing")
             continue
         text = resolved.read_text(encoding="utf-8")
-        token_identity = build_context_segment_token_identity(
+        token_identity = build_skill_token_identity(
             tokenizer,
             name,
             text,

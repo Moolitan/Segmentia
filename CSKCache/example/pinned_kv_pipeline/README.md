@@ -5,9 +5,12 @@ model, but sends only one model request. Before that request, it calls vLLM's
 generic connector-control API; `CSKCacheConnectorV1` creates a Skill ticket and
 binds its Tool observation. An example-only LMCache storage plugin fills the configured
 40-layer object directly into LMCache's pinned CPU buffers; no SSD read is
-performed. Case JSON may select either one complete pinned object per layer or
-a 256-token chunk-major pinned layout. Both layouts are assembled into the same
-contiguous GPU staging tensor before correction and PagedKV installation.
+performed. `config.py` selects Skill chunking independently from the persistent
+and pinned-memory layouts. The default `whole_skill + chunk_single_layer`
+configuration is one chunk per Skill and one pinned region per model layer;
+`fixed_size + chunk_single_layer` keeps one pinned region per `(chunk, layer)`.
+Both layouts are assembled into the same contiguous GPU staging tensor before
+correction and PagedKV installation.
 
 Edit `config.py`, activate the `opencode` environment, and run:
 
@@ -39,8 +42,3 @@ Each point runs in an isolated vLLM process. The sweep takes the median of
 middle-layer `C/R/I(l)` and concurrent `H2D(l+1)` intervals, then writes
 `per_run.csv`, `aggregate.csv`, `balance_points.csv`, `summary.json`, and the
 `balance_curves.png`/`.pdf` figures under the external sweep output directory.
-
-The two-dimensional comparison is orchestrated from
-`scripts/08_lmcache_mp/pinned_kv_layout_diagnosis/run_pipeline.sh`. It sweeps
-full-layer and 256/512/1024/2048-token chunk-major objects under both execution
-orders, and restarts vLLM for every `(granularity, order, repetition)` case.

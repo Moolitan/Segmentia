@@ -21,7 +21,7 @@ from transformers import AutoConfig, AutoTokenizer
 
 from cskcache import (
     MetadataManager,
-    build_context_segment_token_identity,
+    build_skill_token_identity,
     fingerprint_model,
     fingerprint_tokenizer,
 )
@@ -207,7 +207,7 @@ def main() -> None:
         local_files_only=True,
         trust_remote_code=True,
     )
-    token_identity = build_context_segment_token_identity(tokenizer, skill_name, text)
+    token_identity = build_skill_token_identity(tokenizer, skill_name, text)
     token_ids = list(token_identity.token_ids)
     if len(token_ids) > args.max_input_tokens:
         raise ValueError(
@@ -346,6 +346,17 @@ def main() -> None:
             "model_fingerprint": model_digest,
             "tokenizer_fingerprint": tokenizer_digest,
             "token_count": len(token_ids),
+            "chunking": {
+                "mode": os.environ.get("CSKCACHE_CHUNKING_MODE", "whole_skill"),
+                "chunk_size_tokens": (
+                    None
+                    if not os.environ.get("CSKCACHE_CHUNK_SIZE_TOKENS")
+                    else int(os.environ["CSKCACHE_CHUNK_SIZE_TOKENS"])
+                ),
+            },
+            "storage_layout": os.environ.get(
+                "CSKCACHE_STORAGE_LAYOUT", "chunk_single_layer"
+            ),
             "source_position_start": 0,
             "token_ids_sha256": token_identity.token_ids_sha256,
             "start_marker_token_ids": list(token_identity.start_marker_token_ids),

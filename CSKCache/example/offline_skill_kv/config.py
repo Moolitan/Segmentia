@@ -7,6 +7,9 @@ ROOT = Path(__file__).resolve().parents[3]
 
 # Offline object selection.
 STORAGE_BACKEND = "raw_block"  # raw_block | local_disk
+CHUNKING_MODE = "whole_skill"  # whole_skill | fixed_size
+CHUNK_SIZE_TOKENS = None  # positive integer only for fixed_size
+STORAGE_LAYOUT = "chunk_single_layer"
 SKILLS = ("doc-coauthoring",)
 COLLECTION = None
 EXCLUDED_SKILLS = ()

@@ -32,8 +32,10 @@ POOL_ROOT = Path("/mnt/990_pro/skill_save_pool")
 POOL_MODEL_DIR = "Qwen3-14B"
 
 # CSKCache online restoration policy.
-HOST_LAYOUT = "full_layer"  # full_layer | chunk_major
-HOST_CHUNK_TOKENS = 256
+CHUNKING_MODE = "whole_skill"  # whole_skill | fixed_size
+CHUNK_SIZE_TOKENS = None
+STORAGE_LAYOUT = "chunk_single_layer"
+HOST_LAYOUT = "chunk_single_layer"
 EXECUTION_ORDER = "h2d_first"  # h2d_first | compute_first
 MINIMUM_FULL_RECOMPUTE_TOKENS = 32
 CALIBRATION_TOKENS = 32

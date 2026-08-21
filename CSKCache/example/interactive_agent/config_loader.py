@@ -27,14 +27,22 @@ def validate_config() -> None:
         raise ValueError("configure SKILLS or COLLECTION, not both")
     if len(set(cfg.SKILLS)) != len(cfg.SKILLS):
         raise ValueError("SKILLS contains duplicates")
-    if cfg.HOST_LAYOUT not in {"full_layer", "chunk_major"}:
-        raise ValueError("HOST_LAYOUT must be full_layer or chunk_major")
+    if cfg.CHUNKING_MODE not in {"whole_skill", "fixed_size"}:
+        raise ValueError("CHUNKING_MODE must be whole_skill or fixed_size")
+    if cfg.CHUNKING_MODE == "whole_skill" and cfg.CHUNK_SIZE_TOKENS is not None:
+        raise ValueError("whole_skill derives its chunk size")
+    if cfg.CHUNKING_MODE == "fixed_size" and (
+        cfg.CHUNK_SIZE_TOKENS is None or cfg.CHUNK_SIZE_TOKENS <= 0
+    ):
+        raise ValueError("fixed_size requires a positive CHUNK_SIZE_TOKENS")
+    supported_layouts = {"chunk_single_layer", "packed_chunks_single_layer"}
+    if cfg.STORAGE_LAYOUT not in supported_layouts:
+        raise ValueError("current offline objects use a single-layer layout")
+    if cfg.HOST_LAYOUT not in supported_layouts:
+        raise ValueError("current LMCache execution uses a single-layer host layout")
     if cfg.EXECUTION_ORDER not in {"h2d_first", "compute_first"}:
         raise ValueError("EXECUTION_ORDER must be h2d_first or compute_first")
-    if cfg.STORAGE_BACKEND == "raw_block" and cfg.HOST_LAYOUT != "full_layer":
-        raise ValueError("the current raw-block backend requires full_layer")
     for value, name in (
-        (cfg.HOST_CHUNK_TOKENS, "HOST_CHUNK_TOKENS"),
         (cfg.MINIMUM_FULL_RECOMPUTE_TOKENS, "MINIMUM_FULL_RECOMPUTE_TOKENS"),
         (cfg.CALIBRATION_TOKENS, "CALIBRATION_TOKENS"),
         (cfg.MINIMUM_REUSE_TOKENS, "MINIMUM_REUSE_TOKENS"),
@@ -57,8 +65,10 @@ def lmcache_extra_config() -> dict[str, object]:
         "exact_save_kv_2td": True,
         "cskcache_metadata_path": str(metadata_path),
         "csk_storage_backend": cfg.STORAGE_BACKEND,
+        "csk_chunking_mode": cfg.CHUNKING_MODE,
+        "csk_chunk_size_tokens": cfg.CHUNK_SIZE_TOKENS,
+        "csk_storage_layout": cfg.STORAGE_LAYOUT,
         "csk_host_layout": cfg.HOST_LAYOUT,
-        "csk_host_chunk_tokens": cfg.HOST_CHUNK_TOKENS,
         "csk_execution_order": cfg.EXECUTION_ORDER,
         "csk_prefetch_handle_ttl_seconds": cfg.PREFETCH_HANDLE_TTL_SECONDS,
         "csk_minimum_full_recompute_tokens": cfg.MINIMUM_FULL_RECOMPUTE_TOKENS,
@@ -125,7 +135,7 @@ def shell_environment() -> dict[str, str]:
             lmcache_extra_config(), separators=(",", ":")
         ),
         "VLLM_KV_TRANSFER_CONFIG": json.dumps(connector, separators=(",", ":")),
-        "LMCACHE_CHUNK_SIZE": str(cfg.HOST_CHUNK_TOKENS),
+        "LMCACHE_CHUNK_SIZE": str(cfg.CHUNK_SIZE_TOKENS or 256),
         "LMCACHE_MAX_LOCAL_CPU_SIZE": str(cfg.LMCACHE_MAX_LOCAL_CPU_SIZE_GB),
         "LMCACHE_MAX_LOCAL_DISK_SIZE": str(cfg.LMCACHE_MAX_LOCAL_DISK_SIZE_GB),
         "LMCACHE_STORAGE_PLUGINS": (

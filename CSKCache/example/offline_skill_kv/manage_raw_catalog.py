@@ -33,10 +33,12 @@ for package_root in (ROOT / "CSKCache", ROOT / "LMCache"):
     sys.path.insert(0, str(package_root))
 
 from cskcache import (  # noqa: E402
+    ChunkingSpec,
     ContainerMetadata,
     DirectRawCacheBuilder,
     DirectRawCacheObjectBuildInput,
     DirectRawLayerBuildInput,
+    KVLayout,
     MetadataManager,
     RawOffsetNotFoundError,
     generation_sidecar_path,
@@ -264,6 +266,8 @@ def _load_pending(path: Path) -> DirectRawCacheObjectBuildInput:
             int(token) for token in payload["start_marker_token_ids"]
         ),
         layers=layers,
+        chunking=ChunkingSpec.from_dict(payload["chunking"]),
+        storage_layout=KVLayout(str(payload["storage_layout"])),
     )
 
 

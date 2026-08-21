@@ -33,9 +33,11 @@ REASONING_PARSER = "qwen3"
 MAX_ITERATIONS = 2
 PROMPT_FILE = None
 
-# CSKCache reuse policy and physical execution.
-HOST_LAYOUT = "full_layer"  # full_layer | chunk_major
-HOST_CHUNK_TOKENS = 256
+# CSKCache chunking, persistent layout, host layout, and execution.
+CHUNKING_MODE = "whole_skill"  # whole_skill | fixed_size
+CHUNK_SIZE_TOKENS = None
+STORAGE_LAYOUT = "chunk_single_layer"
+HOST_LAYOUT = "chunk_single_layer"
 EXECUTION_ORDER = "h2d_first"  # h2d_first | compute_first
 MINIMUM_FULL_RECOMPUTE_TOKENS = 32
 CALIBRATION_TOKENS = 32

@@ -7,7 +7,7 @@ from typing import Any, Callable, Optional, Sequence
 from lmcache.utils import CacheEngineKey
 from lmcache.v1.memory_management import MemoryObj
 from lmcache.v1.storage_backend.abstract_backend import StoragePluginInterface
-from cskcache import ChunkedLayerBuffer
+from cskcache import SingleLayerChunkBuffers, SingleLayerKVBuffer
 
 
 class PinnedMemoryExtentBackend(StoragePluginInterface):
@@ -42,9 +42,11 @@ class PinnedMemoryExtentBackend(StoragePluginInterface):
         objs: Sequence[MemoryObj],
     ) -> list[bool]:
         for item in objs:
-            if isinstance(item, ChunkedLayerBuffer):
+            if isinstance(item, SingleLayerChunkBuffers):
                 for chunk in item.chunks:
                     chunk.memory_obj.tensor.fill_(self.fill_value)
+            elif isinstance(item, SingleLayerKVBuffer):
+                item.memory_obj.tensor.fill_(self.fill_value)
             else:
                 item.tensor.fill_(self.fill_value)
         return [True] * len(objs)

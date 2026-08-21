@@ -24,12 +24,22 @@ def backend_root() -> Path:
 def validate_config() -> None:
     if cfg.STORAGE_BACKEND not in {"raw_block", "local_disk"}:
         raise ValueError("STORAGE_BACKEND must be raw_block or local_disk")
-    if cfg.HOST_LAYOUT not in {"full_layer", "chunk_major"}:
-        raise ValueError("HOST_LAYOUT must be full_layer or chunk_major")
+    if cfg.CHUNKING_MODE not in {"whole_skill", "fixed_size"}:
+        raise ValueError("CHUNKING_MODE must be whole_skill or fixed_size")
+    if cfg.CHUNKING_MODE == "whole_skill" and cfg.CHUNK_SIZE_TOKENS is not None:
+        raise ValueError("whole_skill derives its chunk size")
+    if cfg.CHUNKING_MODE == "fixed_size" and (
+        cfg.CHUNK_SIZE_TOKENS is None or cfg.CHUNK_SIZE_TOKENS <= 0
+    ):
+        raise ValueError("fixed_size requires a positive CHUNK_SIZE_TOKENS")
+    supported_layouts = {"chunk_single_layer", "packed_chunks_single_layer"}
+    if (
+        cfg.STORAGE_LAYOUT not in supported_layouts
+        or cfg.HOST_LAYOUT not in supported_layouts
+    ):
+        raise ValueError("current online path requires single-layer layouts")
     if cfg.EXECUTION_ORDER not in {"h2d_first", "compute_first"}:
         raise ValueError("EXECUTION_ORDER must be h2d_first or compute_first")
-    if cfg.STORAGE_BACKEND == "raw_block" and cfg.HOST_LAYOUT != "full_layer":
-        raise ValueError("raw_block currently requires HOST_LAYOUT=full_layer")
     if cfg.WARMUP_PAIRS < 0 or cfg.MEASURE_PAIRS <= 0:
         raise ValueError("WARMUP_PAIRS must be nonnegative and MEASURE_PAIRS positive")
     skill_file = cfg.SKILLS_DIR / cfg.SKILL_NAME / "SKILL.md"
@@ -48,8 +58,10 @@ def lmcache_extra_config() -> dict[str, object]:
         "exact_save_kv_2td": True,
         "cskcache_metadata_path": str(catalog_path),
         "csk_storage_backend": cfg.STORAGE_BACKEND,
+        "csk_chunking_mode": cfg.CHUNKING_MODE,
+        "csk_chunk_size_tokens": cfg.CHUNK_SIZE_TOKENS,
+        "csk_storage_layout": cfg.STORAGE_LAYOUT,
         "csk_host_layout": cfg.HOST_LAYOUT,
-        "csk_host_chunk_tokens": cfg.HOST_CHUNK_TOKENS,
         "csk_execution_order": cfg.EXECUTION_ORDER,
         "csk_prefetch_handle_ttl_seconds": cfg.PREFETCH_HANDLE_TTL_SECONDS,
         "csk_minimum_full_recompute_tokens": cfg.MINIMUM_FULL_RECOMPUTE_TOKENS,
@@ -286,12 +298,12 @@ def run_pair(skill_content: str) -> tuple[float, float]:
 
 def main() -> None:
     validate_config()
-    from cskcache import render_context_segment
+    from cskcache import render_skill_payload
 
     skill_text = (cfg.SKILLS_DIR / cfg.SKILL_NAME / "SKILL.md").read_text(
         encoding="utf-8"
     )
-    skill_content = render_context_segment(cfg.SKILL_NAME, skill_text)
+    skill_content = render_skill_payload(cfg.SKILL_NAME, skill_text)
     for _ in range(cfg.WARMUP_PAIRS):
         run_pair(skill_content)
 

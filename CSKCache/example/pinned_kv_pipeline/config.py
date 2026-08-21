@@ -26,8 +26,15 @@ PREFIX_TOKENS = 256
 TAIL_TOKENS = 32
 MINIMUM_FULL_RECOMPUTE_TOKENS = 32
 CALIBRATION_TOKENS = int(_CASE_CONFIG.get("calibration_tokens", 32))
-HOST_LAYOUT = str(_CASE_CONFIG.get("host_layout", "full_layer"))
-HOST_CHUNK_TOKENS = int(_CASE_CONFIG.get("host_chunk_tokens", 256))
+CHUNKING_MODE = str(_CASE_CONFIG.get("chunking_mode", "whole_skill"))
+CHUNK_SIZE_TOKENS = _CASE_CONFIG.get("chunk_size_tokens")
+CHUNK_SIZE_TOKENS = (
+    None if CHUNK_SIZE_TOKENS is None else int(CHUNK_SIZE_TOKENS)
+)
+STORAGE_LAYOUT = str(
+    _CASE_CONFIG.get("storage_layout", "chunk_single_layer")
+)
+HOST_LAYOUT = str(_CASE_CONFIG.get("host_layout", "chunk_single_layer"))
 EXECUTION_ORDER = str(_CASE_CONFIG.get("execution_order", "h2d_first"))
 MINIMUM_REUSE_TOKENS = 256
 CORRECTION_ALPHA = 0.6

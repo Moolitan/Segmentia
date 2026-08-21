@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html import escape, unescape
+from typing import Any
 import re
+
+from .base import CONTEXT_SEGMENT_FORMAT, ContextSegmentTokenIdentity
+from .fingerprint import fingerprint_token_ids
 
 
 _OPENING = re.compile(r'^<context_segment skill_name="([^"]+)">\n')
@@ -32,6 +36,48 @@ def render_context_segment(skill_name: str, skill_text: str) -> str:
     return (
         f'<context_segment skill_name="{escaped_name}">\n'
         f"{skill_text}{body_suffix}{_CLOSING}"
+    )
+
+
+def build_context_segment_token_identity(
+    tokenizer: Any,
+    skill_name: str,
+    skill_text: str,
+) -> ContextSegmentTokenIdentity:
+    """Tokenize the exact Context Segment object used offline and online."""
+
+    observation_text = render_context_segment(skill_name, skill_text)
+    cache_text = observation_text + "\n"
+    token_ids = tuple(
+        int(token_id)
+        for token_id in tokenizer.encode(cache_text, add_special_tokens=False)
+    )
+    if not token_ids:
+        raise RuntimeError(f"empty Context Segment token sequence for {skill_name}")
+    opening_end = observation_text.find("\n") + 1
+    if opening_end <= 0:
+        raise RuntimeError("rendered Context Segment has no opening boundary")
+    start_marker_text = observation_text[:opening_end]
+    start_marker_token_ids = tuple(
+        int(token_id)
+        for token_id in tokenizer.encode(
+            start_marker_text,
+            add_special_tokens=False,
+        )
+    )
+    if not start_marker_token_ids:
+        raise RuntimeError(f"empty Context Segment marker for {skill_name}")
+    return ContextSegmentTokenIdentity(
+        context_format=CONTEXT_SEGMENT_FORMAT,
+        observation_text=observation_text,
+        cache_text=cache_text,
+        token_ids=token_ids,
+        token_ids_sha256=fingerprint_token_ids(token_ids),
+        start_marker_text=start_marker_text,
+        start_marker_token_ids=start_marker_token_ids,
+        start_marker_token_ids_sha256=fingerprint_token_ids(
+            start_marker_token_ids
+        ),
     )
 
 

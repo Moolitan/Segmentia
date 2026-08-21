@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass
 from typing import Sequence
 
-from .metadata_manager import MetadataManager
-from .context_segment import parse_context_segment
-from .fingerprint import fingerprint_token_ids
-from .reuse_state import (
+from ..metadata.context_segment import parse_context_segment
+from ..metadata.fingerprint import fingerprint_token_ids
+from ..metadata.manager import MetadataManager
+from .base import (
     BindingState,
     HostLoadState,
     ReusePlan,
@@ -18,19 +17,9 @@ from .reuse_state import (
     ReuseReadiness,
     ReuseReadinessResult,
     RuntimeReuseState,
+    VerifiedRequestBinding,
 )
-from .storage_manager import StorageManager
-
-
-@dataclass(frozen=True)
-class VerifiedRequestBinding:
-    """Authenticated online location of one offline Skill cache object."""
-
-    ticket: str
-    cache_object_id: str
-    request_id: str
-    segment_start: int
-    segment_end: int
+from ..storage.manager import StorageManager
 
 
 class RequestManager:
@@ -212,7 +201,7 @@ class RequestManager:
             )
 
     def cancel(self, ticket: str, reason: str = "request_cancelled") -> None:
-        """Release one logical storage lease while preserving audit state."""
+        """Cancel one ticket-owned Host load while preserving audit state."""
 
         with self._lock:
             try:
@@ -244,10 +233,6 @@ class RequestManager:
         """
 
         selected_policy = policy or ReusePolicy()
-        try:
-            selected_policy.validate()
-        except ValueError:
-            return None
         if block_alignment <= 0:
             return None
         with self._lock:
@@ -270,7 +255,11 @@ class RequestManager:
                 self.cancel(ticket, "verified_span_length_mismatch")
                 return None
 
-            nominal_start = state.segment_start + selected_policy.prefix_tokens
+            nominal_start = (
+                state.segment_start
+                + selected_policy.minimum_full_recompute_tokens
+                + selected_policy.calibration_tokens
+            )
             reuse_start = _round_up(nominal_start, block_alignment)
             reuse_end = _round_down(state.segment_end, block_alignment)
             if reuse_end - reuse_start < selected_policy.minimum_reuse_tokens:
@@ -283,50 +272,32 @@ class RequestManager:
                 cache_object.source_position_start + relative_start
             )
             source_reuse_end = cache_object.source_position_start + relative_end
-            calibration_start = (
-                state.segment_start + selected_policy.calibration_start
+            calibration_end = reuse_start
+            calibration_start = reuse_start - selected_policy.calibration_tokens
+            plan = ReusePlan(
+                ticket=ticket,
+                cache_object_id=state.cache_object_id,
+                request_id=request_id,
+                segment_start=state.segment_start,
+                segment_end=state.segment_end,
+                reuse_start=reuse_start,
+                reuse_end=reuse_end,
+                source_reuse_start=source_reuse_start,
+                source_reuse_end=source_reuse_end,
+                calibration_start=calibration_start,
+                calibration_end=calibration_end,
+                correction_alpha=selected_policy.correction_alpha,
+                block_alignment=block_alignment,
             )
-            calibration_end = state.segment_start + selected_policy.calibration_end
             if state.reuse_start is not None:
                 existing = self._plan_from_state(state)
-                expected = (
-                    reuse_start,
-                    reuse_end,
-                    source_reuse_start,
-                    source_reuse_end,
-                    calibration_start,
-                    calibration_end,
-                    selected_policy.correction_alpha,
-                    block_alignment,
-                )
-                actual = (
-                    existing.reuse_start,
-                    existing.reuse_end,
-                    existing.source_reuse_start,
-                    existing.source_reuse_end,
-                    existing.calibration_start,
-                    existing.calibration_end,
-                    existing.correction_alpha,
-                    existing.block_alignment,
-                )
-                return existing if actual == expected else None
+                return existing if existing == plan else None
             try:
-                planned = self._metadata_manager.set_reuse_plan(
-                    ticket,
-                    request_id=request_id,
-                    reuse_start=reuse_start,
-                    reuse_end=reuse_end,
-                    source_reuse_start=source_reuse_start,
-                    source_reuse_end=source_reuse_end,
-                    calibration_start=calibration_start,
-                    calibration_end=calibration_end,
-                    correction_alpha=selected_policy.correction_alpha,
-                    block_alignment=block_alignment,
-                )
+                self._metadata_manager.set_reuse_plan(ticket, plan)
             except ValueError:
                 self.cancel(ticket, "reuse_plan_registration_failed")
                 return None
-            return self._plan_from_state(planned)
+            return plan
 
     def query_reuse_readiness(
         self, ticket: str, request_id: str
@@ -442,7 +413,7 @@ class RequestManager:
             return self._metadata_manager.mark_layer_corrected(ticket, layer_id)
 
     def release(self, ticket: str) -> RuntimeReuseState:
-        """End one ticket and return its host-buffer lease."""
+        """End one ticket and return its Host buffers."""
 
         with self._lock:
             return self._storage_manager.release_host_load(ticket)

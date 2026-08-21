@@ -1,153 +1,33 @@
-"""Direct raw-block construction and atomic CSKCache Catalog publication."""
+"""Offline metadata construction for direct LMCache raw-block writes."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import os
 from pathlib import Path
 import threading
-from typing import Any, Protocol, Sequence
+from typing import Sequence
 import uuid
 
-from .cache_metadata import (
+from ..base import (
     CacheObjectMetadata,
-    CONTEXT_SEGMENT_FORMAT,
     ContainerMetadata,
-    ContextSegmentTokenIdentity,
     LayerExtent,
     infer_read_strategy,
 )
-from .context_segment import render_context_segment
-from .fingerprint import fingerprint_token_ids
-from .metadata_manager import MetadataManager
-from .storage_manager import publish_generation_sidecar
+from ..manager import MetadataManager
+from ...storage.raw_block import publish_generation_sidecar
+from .base import (
+    CacheObjectBuildInput,
+    DirectRawCacheObjectBuildInput,
+    DirectRawOffsetBackend,
+    LayerBuildInput,
+    OfflineOffsetBackend,
+)
 
 
 class RawOffsetNotFoundError(ValueError):
     """A direct-save layer is absent from LMCache's recovered raw index."""
-
-
-def build_context_segment_token_identity(
-    tokenizer: Any,
-    skill_name: str,
-    skill_text: str,
-) -> ContextSegmentTokenIdentity:
-    """Tokenize the exact Context Segment object used offline and online.
-
-    The final newline is the Tool-message content boundary present in the
-    current online prompt format. It belongs to the cached token object but
-    not to the XML-like Context Segment itself.
-    """
-
-    observation_text = render_context_segment(skill_name, skill_text)
-    cache_text = observation_text + "\n"
-    token_ids = tuple(
-        int(token_id)
-        for token_id in tokenizer.encode(cache_text, add_special_tokens=False)
-    )
-    if not token_ids:
-        raise RuntimeError(f"empty Context Segment token sequence for {skill_name}")
-    opening_end = observation_text.find("\n") + 1
-    if opening_end <= 0:
-        raise RuntimeError("rendered Context Segment has no opening boundary")
-    start_marker_text = observation_text[:opening_end]
-    start_marker_token_ids = tuple(
-        int(token_id)
-        for token_id in tokenizer.encode(
-            start_marker_text,
-            add_special_tokens=False,
-        )
-    )
-    if not start_marker_token_ids:
-        raise RuntimeError(f"empty Context Segment marker for {skill_name}")
-    return ContextSegmentTokenIdentity(
-        context_format=CONTEXT_SEGMENT_FORMAT,
-        observation_text=observation_text,
-        cache_text=cache_text,
-        token_ids=token_ids,
-        token_ids_sha256=fingerprint_token_ids(token_ids),
-        start_marker_text=start_marker_text,
-        start_marker_token_ids=start_marker_token_ids,
-        start_marker_token_ids_sha256=fingerprint_token_ids(
-            start_marker_token_ids
-        ),
-    )
-
-
-class OfflineOffsetBackend(Protocol):
-    """LMCache slot information used after a direct offline raw save."""
-
-    header_bytes: int
-
-    def entry_offset(self, key: Any) -> int | None: ...
-
-
-class DirectRawOffsetBackend(OfflineOffsetBackend, Protocol):
-    """Physical facts exposed by LMCache after a direct raw-block save."""
-
-    device_path: str
-    capacity_bytes: int
-    block_align: int
-
-
-@dataclass(frozen=True)
-class LayerBuildInput:
-    """Tensor facts needed to publish one persistent layer extent."""
-
-    layer_id: int
-    backend_key: str
-    lookup_key: Any
-    length_bytes: int
-    dtype: str
-    shape: tuple[int, ...]
-    memory_layout: str
-    payload_sha256: str
-
-
-@dataclass(frozen=True)
-class CacheObjectBuildInput:
-    """Semantic identity and all layers of one offline Skill KV object."""
-
-    object_id: str
-    skill_name: str
-    skill_version: str
-    model_fingerprint: str
-    tokenizer_fingerprint: str
-    token_count: int
-    source_position_start: int
-    token_ids_sha256: str
-    start_marker_token_ids: tuple[int, ...]
-    layers: tuple[LayerBuildInput, ...]
-
-
-@dataclass(frozen=True)
-class DirectRawLayerBuildInput:
-    """Layer identity and tensor geometry before raw payload verification."""
-
-    layer_id: int
-    backend_key: str
-    lookup_key: Any
-    length_bytes: int
-    dtype: str
-    shape: tuple[int, ...]
-    memory_layout: str
-
-
-@dataclass(frozen=True)
-class DirectRawCacheObjectBuildInput:
-    """One exact-save object already written into the shared raw container."""
-
-    object_id: str
-    skill_name: str
-    skill_version: str
-    model_fingerprint: str
-    tokenizer_fingerprint: str
-    token_count: int
-    source_position_start: int
-    token_ids_sha256: str
-    start_marker_token_ids: tuple[int, ...]
-    layers: tuple[DirectRawLayerBuildInput, ...]
 
 
 class CacheBuilder:
@@ -456,3 +336,4 @@ def publish_cache_snapshot(
             os.close(directory_fd)
     finally:
         temporary.unlink(missing_ok=True)
+

@@ -10,19 +10,21 @@ import os
 import threading
 import time
 
-from .cache_metadata import (
+from .base import (
     CacheObjectMetadata,
     CacheObjectStatus,
     ContainerMetadata,
+    StorageBackend,
 )
-from .reuse_state import (
+from ..runtime.base import (
     BindingState,
     HostLoadState,
+    ReusePlan,
     RuntimeReuseState,
 )
 
 
-CATALOG_VERSION = 1
+CATALOG_VERSION = 2
 
 
 class MetadataManager:
@@ -77,8 +79,11 @@ class MetadataManager:
     def publish_object(self, metadata: CacheObjectMetadata) -> None:
         """Atomically publish a new immutable cache-object version."""
 
-        with self._lock:
-            container = self._require_container(metadata.container_id)
+        container = None
+        if metadata.storage_backend is StorageBackend.RAW_BLOCK:
+            assert metadata.container_id is not None
+            with self._lock:
+                container = self._require_container(metadata.container_id)
         metadata.validate(self.expected_layers, container)
         if metadata.status is not CacheObjectStatus.ACTIVE:
             raise ValueError("newly published metadata must be active")
@@ -200,10 +205,9 @@ class MetadataManager:
         ticket: str,
         *,
         io_operation_id: str,
-        storage_lease_id: str,
     ) -> RuntimeReuseState:
-        if not io_operation_id or not storage_lease_id:
-            raise ValueError("I/O operation and storage lease IDs must be non-empty")
+        if not io_operation_id:
+            raise ValueError("I/O operation ID must be non-empty")
         with self._lock:
             state = self._require_runtime(ticket)
             self._require_live(state)
@@ -213,7 +217,6 @@ class MetadataManager:
                 state.updated(
                     host_load_state=HostLoadState.LOADING,
                     io_operation_id=io_operation_id,
-                    storage_lease_id=storage_lease_id,
                 )
             )
 
@@ -301,47 +304,28 @@ class MetadataManager:
     def set_reuse_plan(
         self,
         ticket: str,
-        *,
-        request_id: str,
-        reuse_start: int,
-        reuse_end: int,
-        source_reuse_start: int,
-        source_reuse_end: int,
-        calibration_start: int,
-        calibration_end: int,
-        correction_alpha: float,
-        block_alignment: int,
+        plan: ReusePlan,
     ) -> RuntimeReuseState:
-        """Atomically attach a scheduler plan to one verified request."""
+        """Atomically attach an already validated plan to its ticket."""
 
-        if reuse_start < 0 or reuse_end <= reuse_start:
-            raise ValueError("reuse interval is invalid")
-        if source_reuse_start < 0 or source_reuse_end <= source_reuse_start:
-            raise ValueError("source reuse interval is invalid")
-        if reuse_end - reuse_start != source_reuse_end - source_reuse_start:
-            raise ValueError("online and source reuse intervals differ in length")
-        if not 0 <= calibration_start < calibration_end <= reuse_start:
-            raise ValueError("calibration interval must precede reuse")
-        if not 0.0 <= correction_alpha <= 1.0:
-            raise ValueError("correction_alpha must be in [0, 1]")
-        if block_alignment <= 0:
-            raise ValueError("block_alignment must be > 0")
+        if plan.ticket != ticket:
+            raise ValueError("reuse plan ticket does not match target ticket")
         with self._lock:
             state = self._require_runtime(ticket)
             self._require_live(state)
             if state.binding_state is not BindingState.VERIFIED:
                 raise ValueError("reuse planning requires a verified request")
-            if state.request_id != request_id:
+            if state.request_id != plan.request_id:
                 raise ValueError("reuse plan request does not match ticket binding")
             values = (
-                reuse_start,
-                reuse_end,
-                source_reuse_start,
-                source_reuse_end,
-                calibration_start,
-                calibration_end,
-                correction_alpha,
-                block_alignment,
+                plan.reuse_start,
+                plan.reuse_end,
+                plan.source_reuse_start,
+                plan.source_reuse_end,
+                plan.calibration_start,
+                plan.calibration_end,
+                plan.correction_alpha,
+                plan.block_alignment,
             )
             existing = (
                 state.reuse_start,
@@ -359,14 +343,14 @@ class MetadataManager:
                 return state
             return self._store_runtime(
                 state.updated(
-                    reuse_start=reuse_start,
-                    reuse_end=reuse_end,
-                    source_reuse_start=source_reuse_start,
-                    source_reuse_end=source_reuse_end,
-                    calibration_start=calibration_start,
-                    calibration_end=calibration_end,
-                    correction_alpha=correction_alpha,
-                    block_alignment=block_alignment,
+                    reuse_start=plan.reuse_start,
+                    reuse_end=plan.reuse_end,
+                    source_reuse_start=plan.source_reuse_start,
+                    source_reuse_end=plan.source_reuse_end,
+                    calibration_start=plan.calibration_start,
+                    calibration_end=plan.calibration_end,
+                    correction_alpha=plan.correction_alpha,
+                    block_alignment=plan.block_alignment,
                 )
             )
 
@@ -515,7 +499,8 @@ class MetadataManager:
             "objects",
         }:
             raise ValueError("persistent metadata has unexpected top-level fields")
-        if int(payload["catalog_version"]) != CATALOG_VERSION:
+        version = int(payload["catalog_version"])
+        if version not in (1, CATALOG_VERSION):
             raise ValueError(
                 f"unsupported Catalog version: {payload['catalog_version']}"
             )
@@ -536,14 +521,20 @@ class MetadataManager:
         objects: dict[str, CacheObjectMetadata] = {}
         active_identities: set[tuple[str, str, str, str]] = set()
         for item in payload["objects"]:
+            if version == 1:
+                item = dict(item)
+                item["storage_backend"] = StorageBackend.RAW_BLOCK.value
             metadata = CacheObjectMetadata.from_dict(item)
-            try:
-                container = containers[metadata.container_id]
-            except KeyError as exc:
-                raise ValueError(
-                    f"object {metadata.object_id!r} references unknown container "
-                    f"{metadata.container_id!r}"
-                ) from exc
+            container = None
+            if metadata.storage_backend is StorageBackend.RAW_BLOCK:
+                try:
+                    assert metadata.container_id is not None
+                    container = containers[metadata.container_id]
+                except (AssertionError, KeyError) as exc:
+                    raise ValueError(
+                        f"object {metadata.object_id!r} references unknown container "
+                        f"{metadata.container_id!r}"
+                    ) from exc
             metadata.validate(self.expected_layers, container)
             if metadata.object_id in objects:
                 raise ValueError(f"duplicate object_id: {metadata.object_id}")

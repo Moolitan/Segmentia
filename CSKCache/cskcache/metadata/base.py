@@ -68,6 +68,13 @@ class ReadStrategy(str, Enum):
     BATCHED = "batched"
 
 
+class StorageBackend(str, Enum):
+    """Physical backend holding one complete Skill-layer group."""
+
+    RAW_BLOCK = "raw_block"
+    LOCAL_DISK = "local_disk"
+
+
 def _require_text(value: str, field: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field} must be a non-empty string")
@@ -153,11 +160,11 @@ class ContainerMetadata:
 
 @dataclass(frozen=True)
 class LayerExtent:
-    """Physical raw-block extent and tensor layout for one model layer."""
+    """One model-layer object and its optional raw-block offset."""
 
     layer_id: int
     backend_key: str
-    offset_bytes: int
+    offset_bytes: int | None
     length_bytes: int
     dtype: str
     shape: tuple[int, ...]
@@ -168,7 +175,7 @@ class LayerExtent:
         if self.layer_id < 0:
             raise ValueError("layer_id must be >= 0")
         _require_text(self.backend_key, "backend_key")
-        if self.offset_bytes < 0:
+        if self.offset_bytes is not None and self.offset_bytes < 0:
             raise ValueError("offset_bytes must be >= 0")
         if self.length_bytes <= 0:
             raise ValueError("length_bytes must be > 0")
@@ -210,7 +217,11 @@ class LayerExtent:
         extent = cls(
             layer_id=int(payload["layer_id"]),
             backend_key=str(payload["backend_key"]),
-            offset_bytes=int(payload["offset_bytes"]),
+            offset_bytes=(
+                None
+                if payload["offset_bytes"] is None
+                else int(payload["offset_bytes"])
+            ),
             length_bytes=int(payload["length_bytes"]),
             dtype=str(payload["dtype"]),
             shape=tuple(int(dim) for dim in payload["shape"]),
@@ -234,13 +245,16 @@ class CacheObjectMetadata:
     source_position_start: int
     token_ids_sha256: str
     start_marker_token_ids: tuple[int, ...]
-    container_id: str
+    container_id: str | None
     read_strategy: ReadStrategy
     layers: tuple[LayerExtent, ...]
+    storage_backend: StorageBackend = StorageBackend.RAW_BLOCK
     status: CacheObjectStatus = CacheObjectStatus.ACTIVE
 
     def validate(
-        self, expected_layers: int, container: ContainerMetadata
+        self,
+        expected_layers: int,
+        container: ContainerMetadata | None,
     ) -> None:
         for field in (
             "object_id",
@@ -248,12 +262,19 @@ class CacheObjectMetadata:
             "skill_version",
             "model_fingerprint",
             "tokenizer_fingerprint",
-            "container_id",
         ):
             _require_text(getattr(self, field), field)
-        container.validate()
-        if self.container_id != container.container_id:
-            raise ValueError("cache object references a different container")
+        if self.storage_backend is StorageBackend.RAW_BLOCK:
+            if container is None:
+                raise ValueError("raw_block object requires container metadata")
+            container.validate()
+            if self.container_id != container.container_id:
+                raise ValueError("cache object references a different container")
+        elif self.storage_backend is StorageBackend.LOCAL_DISK:
+            if self.container_id is not None or container is not None:
+                raise ValueError("local_disk object must not reference a raw container")
+        else:
+            raise ValueError(f"unsupported storage backend: {self.storage_backend}")
         if self.token_count <= 0:
             raise ValueError("token_count must be > 0")
         if self.source_position_start < 0:
@@ -281,6 +302,11 @@ class CacheObjectMetadata:
             if extent.backend_key in backend_keys:
                 raise ValueError(f"duplicate backend_key: {extent.backend_key}")
             backend_keys.add(extent.backend_key)
+            if self.storage_backend is StorageBackend.LOCAL_DISK:
+                if extent.offset_bytes is not None:
+                    raise ValueError("local_disk layer must not contain a raw offset")
+                continue
+            assert container is not None and extent.offset_bytes is not None
             if extent.offset_bytes % container.alignment_bytes != 0:
                 raise ValueError(
                     f"layer {extent.layer_id} offset is not alignment compliant"
@@ -292,6 +318,10 @@ class CacheObjectMetadata:
             ranges.append(
                 (extent.offset_bytes, extent.offset_bytes + extent.length_bytes)
             )
+        if self.storage_backend is StorageBackend.LOCAL_DISK:
+            if self.read_strategy is not ReadStrategy.BATCHED:
+                raise ValueError("local_disk objects use batched file reads")
+            return
         ranges.sort()
         for previous, current in zip(ranges, ranges[1:]):
             if current[0] < previous[1]:
@@ -324,6 +354,7 @@ class CacheObjectMetadata:
             "token_ids_sha256": self.token_ids_sha256,
             "start_marker_token_ids": list(self.start_marker_token_ids),
             "container_id": self.container_id,
+            "storage_backend": self.storage_backend.value,
             "read_strategy": self.read_strategy.value,
             "layers": [
                 layer.to_dict()
@@ -348,6 +379,7 @@ class CacheObjectMetadata:
             "read_strategy",
             "layers",
             "status",
+            "storage_backend",
         }
         if set(payload) != expected:
             raise ValueError(
@@ -366,7 +398,12 @@ class CacheObjectMetadata:
             start_marker_token_ids=tuple(
                 int(token) for token in payload["start_marker_token_ids"]
             ),
-            container_id=str(payload["container_id"]),
+            container_id=(
+                None
+                if payload["container_id"] is None
+                else str(payload["container_id"])
+            ),
+            storage_backend=StorageBackend(str(payload["storage_backend"])),
             read_strategy=ReadStrategy(str(payload["read_strategy"])),
             layers=tuple(LayerExtent.from_dict(item) for item in payload["layers"]),
             status=CacheObjectStatus(str(payload["status"])),
@@ -376,9 +413,12 @@ class CacheObjectMetadata:
 def infer_read_strategy(layers: tuple[LayerExtent, ...]) -> ReadStrategy:
     """Infer whether all physical layer extents form one gap-free interval."""
 
-    by_offset = sorted(layers, key=lambda item: item.offset_bytes)
+    if any(layer.offset_bytes is None for layer in layers):
+        return ReadStrategy.BATCHED
+    by_offset = sorted(layers, key=lambda item: int(item.offset_bytes))
     contiguous = all(
-        previous.offset_bytes + previous.length_bytes == current.offset_bytes
+        int(previous.offset_bytes) + previous.length_bytes
+        == int(current.offset_bytes)
         for previous, current in zip(by_offset, by_offset[1:])
     )
     return ReadStrategy.CONTIGUOUS if contiguous else ReadStrategy.BATCHED

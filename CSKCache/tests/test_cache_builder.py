@@ -14,6 +14,9 @@ from cskcache import (
     DirectRawCacheObjectBuildInput,
     DirectRawLayerBuildInput,
     LayerBuildInput,
+    LocalDiskCacheBuilder,
+    LocalDiskCacheObjectBuildInput,
+    LocalDiskLayerBuildInput,
     MetadataManager,
     RawOffsetNotFoundError,
     publish_cache_snapshot,
@@ -178,6 +181,61 @@ def test_direct_raw_builder_verifies_payloads_without_pt_intermediate(
     assert [layer.payload_sha256 for layer in metadata.layers] == [
         hashlib.sha256(payloads[layer]).hexdigest() for layer in range(4)
     ]
+
+
+def test_local_disk_builder_publishes_complete_layer_files(tmp_path: Path) -> None:
+    layer_paths = []
+    for layer_id in range(4):
+        path = tmp_path / f"local-layer-{layer_id}.pt"
+        path.write_bytes(bytes([layer_id + 1]) * 512)
+        layer_paths.append(path)
+    source = LocalDiskCacheObjectBuildInput(
+        object_id="internal-comms:local",
+        skill_name="internal-comms",
+        skill_version="v1",
+        model_fingerprint="model-fingerprint",
+        tokenizer_fingerprint="tokenizer-fingerprint",
+        token_count=4,
+        source_position_start=0,
+        token_ids_sha256="a" * 64,
+        start_marker_token_ids=(1, 2, 3),
+        layers=tuple(
+            LocalDiskLayerBuildInput(
+                layer_id=layer_id,
+                backend_key=f"local-layer-{layer_id}",
+                data_path=str(path.resolve()),
+                length_bytes=512,
+                dtype="bfloat16",
+                shape=(2, 4, 32),
+                memory_layout="KV_2TD",
+            )
+            for layer_id, path in enumerate(layer_paths)
+        ),
+    )
+    catalog = tmp_path / "local-catalog.json"
+
+    built = LocalDiskCacheBuilder(expected_layers=4).publish_objects(
+        catalog, [source]
+    )
+
+    reloaded = MetadataManager(catalog, expected_layers=4)
+    assert not reloaded.list_containers()
+    assert reloaded.list_objects() == built
+    assert all(layer.offset_bytes is None for layer in built[0].layers)
+
+    replacement = replace(
+        source,
+        object_id="internal-comms:local-v2",
+        skill_version="v2",
+        token_ids_sha256="b" * 64,
+    )
+    LocalDiskCacheBuilder(expected_layers=4).publish_objects(
+        catalog, [replacement]
+    )
+    assert [
+        item.object_id
+        for item in MetadataManager(catalog, expected_layers=4).list_objects()
+    ] == ["internal-comms:local-v2"]
 
 
 def test_direct_raw_builder_reports_missing_checkpoint_offset(

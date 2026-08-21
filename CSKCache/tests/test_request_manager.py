@@ -172,27 +172,34 @@ def test_select_is_nonblocking_and_duplicate_is_idempotent(tmp_path: Path) -> No
         requests.close()
 
 
-def test_two_tickets_share_one_physical_load_and_keep_separate_leases(
+def test_two_tickets_load_and_release_independent_host_buffers(
     tmp_path: Path,
 ) -> None:
-    metadata, backend, pool, _storage, requests = build_runtime(tmp_path)
+    metadata, backend, pool, storage, requests = build_runtime(tmp_path)
     try:
         assert requests.select_skill("call-1", "internal-comms")
         assert backend.started.wait(timeout=5)
         assert requests.select_skill("call-2", "internal-comms")
         assert backend.read_calls == 1
-        assert metadata.get_runtime("call-1").storage_lease_id != metadata.get_runtime(
+        assert metadata.get_runtime("call-1").io_operation_id != metadata.get_runtime(
             "call-2"
-        ).storage_lease_id
+        ).io_operation_id
         backend.complete.set()
         deadline = time.monotonic() + 5
-        while requests.poll("call-2").host_load_state is not HostLoadState.READY:
+        while any(
+            requests.poll(ticket).host_load_state is not HostLoadState.READY
+            for ticket in ("call-1", "call-2")
+        ):
             assert time.monotonic() < deadline
             time.sleep(0.005)
+        assert backend.read_calls == 2
+        assert storage.get_ready_buffers("call-1") is not storage.get_ready_buffers(
+            "call-2"
+        )
         requests.release("call-1")
-        assert pool.release_calls == 0
-        requests.release("call-2")
         assert pool.release_calls == 1
+        requests.release("call-2")
+        assert pool.release_calls == 2
     finally:
         backend.complete.set()
         requests.close()
@@ -399,12 +406,13 @@ def test_prepare_reuse_aligns_online_and_source_ranges(tmp_path: Path) -> None:
 
         assert plan is not None
         assert (plan.segment_start, plan.segment_end) == (13, 1037)
-        assert (plan.reuse_start, plan.reuse_end) == (272, 1024)
-        assert (plan.source_reuse_start, plan.source_reuse_end) == (259, 1011)
-        assert (plan.calibration_start, plan.calibration_end) == (145, 269)
+        assert (plan.reuse_start, plan.reuse_end) == (80, 1024)
+        assert (plan.source_reuse_start, plan.source_reuse_end) == (67, 1011)
+        assert (plan.calibration_start, plan.calibration_end) == (48, 80)
+        assert plan.calibration_start - plan.segment_start >= 32
         assert plan.correction_alpha == 0.6
         state = metadata.get_runtime("call-1")
-        assert state.reuse_start == 272
+        assert state.reuse_start == 80
         assert state.reuse_end == 1024
         assert requests.prepare_reuse(
             "call-1", "request-1", block_alignment=16
@@ -559,7 +567,7 @@ def test_short_reusable_suffix_falls_back_and_releases_load(
             "call-1",
             "request-1",
             block_alignment=16,
-            policy=ReusePolicy(minimum_reuse_tokens=256),
+            policy=ReusePolicy(minimum_reuse_tokens=352),
         ) is None
         state = metadata.get_runtime("call-1")
         assert state.binding_state is BindingState.FALLBACK

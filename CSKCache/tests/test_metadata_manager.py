@@ -185,18 +185,14 @@ def test_request_can_bind_before_host_load_completes(
     with pytest.raises(ValueError, match="host data"):
         manager.activate("call-1")
 
-    manager.start_host_load(
-        "call-1", io_operation_id="io-1", storage_lease_id="lease-1"
-    )
+    manager.start_host_load("call-1", io_operation_id="io-1")
     manager.mark_host_ready("call-1")
     assert manager.activate("call-1").binding_state is BindingState.ACTIVE
 
 
 def test_host_can_be_ready_before_request_binding(manager: MetadataManager) -> None:
     manager.create_ticket("call-2", make_object().object_id)
-    manager.start_host_load(
-        "call-2", io_operation_id="io-2", storage_lease_id="lease-2"
-    )
+    manager.start_host_load("call-2", io_operation_id="io-2")
     ready = manager.mark_host_ready("call-2")
     assert ready.binding_state is BindingState.UNBOUND
     manager.mark_observation_verified("call-2")
@@ -244,9 +240,7 @@ def test_binding_rejects_wrong_object_and_duplicate_request(
 
 def test_host_failure_forces_fallback(manager: MetadataManager) -> None:
     manager.create_ticket("call-5", make_object().object_id)
-    manager.start_host_load(
-        "call-5", io_operation_id="io-5", storage_lease_id="lease-5"
-    )
+    manager.start_host_load("call-5", io_operation_id="io-5")
     failed = manager.mark_host_failed("call-5", "short_read")
     assert failed.host_load_state is HostLoadState.FAILED
     assert failed.binding_state is BindingState.FALLBACK
@@ -257,9 +251,7 @@ def test_layer_progress_is_consecutive_and_load_precedes_correction(
     manager: MetadataManager,
 ) -> None:
     manager.create_ticket("call-6", make_object().object_id)
-    manager.start_host_load(
-        "call-6", io_operation_id="io-6", storage_lease_id="lease-6"
-    )
+    manager.start_host_load("call-6", io_operation_id="io-6")
     manager.mark_host_ready("call-6")
     manager.mark_observation_verified("call-6")
     manager.bind_request(

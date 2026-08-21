@@ -8,6 +8,8 @@ import torch
 from cskcache import (
     CSKCacheReuseExecutor,
     ContextAwareKVCorrector,
+    ChunkedLayerBuffer,
+    LayerChunk,
     ReusePlan,
 )
 
@@ -23,8 +25,8 @@ def plan() -> ReusePlan:
         reuse_end=20,
         source_reuse_start=6,
         source_reuse_end=10,
-        calibration_start=12,
-        calibration_end=14,
+        calibration_start=14,
+        calibration_end=16,
         correction_alpha=0.6,
         block_alignment=2,
     )
@@ -73,23 +75,23 @@ def test_context_aware_corrector_rejects_invalid_policy(
 class FakeLayerStream:
     def __init__(self, layers: int, *, fail_layer: int | None = None) -> None:
         self.calls: list[tuple[object, ...]] = []
-        self.keys = [torch.zeros((8, 4), dtype=torch.float32) for _ in range(layers)]
+        self.keys = [torch.zeros((6, 4), dtype=torch.float32) for _ in range(layers)]
         self.fail_layer = fail_layer
 
-    def stage_layer(self, layer_id: int) -> None:
-        self.calls.append(("stage", layer_id))
+    def submit_layer(self, layer_id: int) -> None:
+        self.calls.append(("submit", layer_id))
+
+    def wait_layer(self, layer_id: int) -> None:
+        self.calls.append(("wait", layer_id))
 
     def staged_key(self, layer_id: int) -> torch.Tensor:
         self.calls.append(("staged_key", layer_id))
         return self.keys[layer_id]
 
-    def recomputed_key(
-        self, layer_id: int, start: int, end: int
-    ) -> torch.Tensor:
-        self.calls.append(("recomputed_key", layer_id, start, end))
-        if layer_id == self.fail_layer:
-            return torch.zeros((1, 4), dtype=torch.float32)
-        return torch.full((end - start, 4), float(layer_id + 1))
+    def commit_calibration(self, layer_id: int, key, value) -> None:
+        self.calls.append(
+            ("commit_calibration", layer_id, tuple(key.shape), tuple(value.shape))
+        )
 
     def commit_layer(self, layer_id: int) -> None:
         self.calls.append(("commit", layer_id))
@@ -97,12 +99,67 @@ class FakeLayerStream:
     def finish(self) -> None:
         self.calls.append(("finish",))
 
+    def abort(self) -> None:
+        self.calls.append(("abort",))
+
 
 class FakeDataPlane:
-    def __init__(self, layers: int, *, fail_layer: int | None = None) -> None:
-        self.buffers = tuple(SimpleNamespace(layer_id=i) for i in range(layers))
+    def __init__(
+        self,
+        layers: int,
+        *,
+        chunk_major: bool = False,
+        fail_layer: int | None = None,
+    ) -> None:
+        if chunk_major:
+            self.buffers = tuple(
+                ChunkedLayerBuffer(
+                    (
+                        LayerChunk(
+                            token_start=0,
+                            token_end=1,
+                            memory_obj=SimpleNamespace(layer_id=layer_id),
+                        ),
+                    )
+                )
+                for layer_id in range(layers)
+            )
+        else:
+            self.buffers = tuple(
+                SimpleNamespace(layer_id=i) for i in range(layers)
+            )
         self.stream = FakeLayerStream(layers, fail_layer=fail_layer)
         self.calls: list[tuple[object, ...]] = []
+
+    def open_calibration_model(self, reuse_plan, token_ids):
+        self.calls.append(
+            (
+                "open_model",
+                tuple(token_ids[reuse_plan.calibration_start : reuse_plan.calibration_end]),
+            )
+        )
+        stream = self.stream
+
+        class ModelExecutor:
+            def __init__(self):
+                self.layer_id = 0
+
+            def __next__(self):
+                layer_id = self.layer_id
+                if layer_id >= len(self_outer.buffers):
+                    raise StopIteration
+                self.layer_id += 1
+                stream.calls.append(("forward", layer_id))
+                rows = 1 if layer_id == stream.fail_layer else 2
+                key = torch.full((rows, 4), float(layer_id + 1))
+                value = torch.full((rows, 4), float(10 + layer_id))
+                return key, value
+
+            def close(self):
+                stream.calls.append(("model_close",))
+
+        self_outer = self
+        return ModelExecutor()
 
     def get_active_layer_buffers(self, ticket: str, request_id: str):
         self.calls.append(("get_buffers", ticket, request_id))
@@ -122,7 +179,7 @@ class FakeDataPlane:
             (
                 "open",
                 reuse_plan.ticket,
-                tuple(item.layer_id for item in buffers),
+                len(buffers),
                 len(kvcaches),
                 len(slot_mapping),
             )
@@ -136,12 +193,13 @@ class FakeDataPlane:
         self.calls.append(("corrected", ticket, request_id, layer_id))
 
 
-def test_executor_runs_stage_correct_commit_in_layer_order() -> None:
+def test_executor_runs_h2d_first_for_full_layer_buffers() -> None:
     data_plane = FakeDataPlane(2)
     executor = CSKCacheReuseExecutor(data_plane, expected_layers=2)
 
     result = executor.execute(
         plan(),
+        token_ids=tuple(range(20)),
         kvcaches=(torch.empty(0), torch.empty(0)),
         slot_mapping=torch.arange(20),
     )
@@ -150,28 +208,136 @@ def test_executor_runs_stage_correct_commit_in_layer_order() -> None:
     assert result.correction_alpha == 0.6
     assert data_plane.calls == [
         ("get_buffers", "call-1", "request-1"),
-        ("open", "call-1", (0, 1), 2, 20),
+        ("open", "call-1", 2, 2, 20),
+        ("open_model", (14, 15)),
         ("loaded", "call-1", "request-1", 0),
         ("corrected", "call-1", "request-1", 0),
         ("loaded", "call-1", "request-1", 1),
         ("corrected", "call-1", "request-1", 1),
     ]
     assert data_plane.stream.calls == [
-        ("stage", 0),
+        ("submit", 0),
+        ("wait", 0),
+        ("submit", 1),
+        ("forward", 0),
         ("staged_key", 0),
-        ("recomputed_key", 0, 12, 14),
+        ("commit_calibration", 0, (2, 4), (2, 4)),
         ("commit", 0),
-        ("stage", 1),
+        ("wait", 1),
+        ("forward", 1),
         ("staged_key", 1),
-        ("recomputed_key", 1, 12, 14),
+        ("commit_calibration", 1, (2, 4), (2, 4)),
         ("commit", 1),
         ("finish",),
+        ("model_close",),
     ]
     assert torch.allclose(
-        data_plane.stream.keys[0][4:], torch.full((4, 4), 0.6)
+        data_plane.stream.keys[0][2:], torch.full((4, 4), 0.6)
     )
     assert torch.allclose(
-        data_plane.stream.keys[1][4:], torch.full((4, 4), 1.2)
+        data_plane.stream.keys[1][2:], torch.full((4, 4), 1.2)
+    )
+
+
+def test_executor_runs_compute_first_for_chunk_major_buffers() -> None:
+    data_plane = FakeDataPlane(2, chunk_major=True)
+    executor = CSKCacheReuseExecutor(
+        data_plane,
+        expected_layers=2,
+        execution_order="compute_first",
+    )
+
+    result = executor.execute(
+        plan(),
+        token_ids=tuple(range(20)),
+        kvcaches=(torch.empty(0), torch.empty(0)),
+        slot_mapping=torch.arange(20),
+    )
+
+    assert result.processed_layers == 2
+    assert data_plane.stream.calls == [
+        ("submit", 0),
+        ("wait", 0),
+        ("forward", 0),
+        ("staged_key", 0),
+        ("commit_calibration", 0, (2, 4), (2, 4)),
+        ("commit", 0),
+        ("submit", 1),
+        ("wait", 1),
+        ("forward", 1),
+        ("staged_key", 1),
+        ("commit_calibration", 1, (2, 4), (2, 4)),
+        ("commit", 1),
+        ("finish",),
+        ("model_close",),
+    ]
+
+
+def test_executor_rejects_mixed_host_buffer_layouts() -> None:
+    data_plane = FakeDataPlane(2)
+    data_plane.buffers = (
+        data_plane.buffers[0],
+        ChunkedLayerBuffer(
+            (
+                LayerChunk(
+                    token_start=0,
+                    token_end=1,
+                    memory_obj=SimpleNamespace(layer_id=1),
+                ),
+            )
+        ),
+    )
+    executor = CSKCacheReuseExecutor(data_plane, expected_layers=2)
+
+    with pytest.raises(RuntimeError, match="mixed host-buffer layouts"):
+        executor.execute(
+            plan(),
+            token_ids=tuple(range(20)),
+            kvcaches=(torch.empty(0), torch.empty(0)),
+            slot_mapping=torch.arange(20),
+        )
+
+    assert data_plane.stream.calls == []
+
+
+def test_executor_rejects_unknown_execution_order() -> None:
+    with pytest.raises(ValueError, match="unsupported CSKCache execution order"):
+        CSKCacheReuseExecutor(
+            FakeDataPlane(2),
+            expected_layers=2,
+            execution_order="automatic",
+        )
+
+
+@pytest.mark.parametrize(
+    ("chunk_major", "execution_order", "earlier", "later"),
+    (
+        (False, "compute_first", ("forward", 0), ("submit", 1)),
+        (True, "h2d_first", ("submit", 1), ("forward", 0)),
+    ),
+)
+def test_execution_order_is_independent_of_host_layout(
+    chunk_major: bool,
+    execution_order: str,
+    earlier: tuple[object, ...],
+    later: tuple[object, ...],
+) -> None:
+    data_plane = FakeDataPlane(2, chunk_major=chunk_major)
+    executor = CSKCacheReuseExecutor(
+        data_plane,
+        expected_layers=2,
+        execution_order=execution_order,
+    )
+
+    executor.execute(
+        plan(),
+        token_ids=tuple(range(20)),
+        kvcaches=(torch.empty(0), torch.empty(0)),
+        slot_mapping=torch.arange(20),
+    )
+
+    assert data_plane.stream.calls.index(earlier) < data_plane.stream.calls.index(
+        later
     )
 
 
@@ -182,6 +348,7 @@ def test_executor_stops_at_first_failed_layer_without_false_completion() -> None
     with pytest.raises(ValueError, match="shapes differ"):
         executor.execute(
             plan(),
+            token_ids=tuple(range(20)),
             kvcaches=(torch.empty(0), torch.empty(0)),
             slot_mapping=torch.arange(20),
         )
@@ -191,6 +358,7 @@ def test_executor_stops_at_first_failed_layer_without_false_completion() -> None
     assert ("corrected", "call-1", "request-1", 1) not in data_plane.calls
     assert ("commit", 1) not in data_plane.stream.calls
     assert ("finish",) not in data_plane.stream.calls
+    assert ("abort",) in data_plane.stream.calls
 
 
 def test_reuse_plan_round_trip_validates_transport_mapping() -> None:

@@ -17,6 +17,7 @@ from cskcache import (
     LayerExtent,
     MetadataManager,
     ReadStrategy,
+    StorageBackend,
     StorageManager,
     generation_sidecar_path,
     publish_generation_sidecar,
@@ -105,6 +106,23 @@ class RecordingHostBufferPool:
         self.release_calls += 1
         self.released_groups.append(tuple(memory_objects))
 
+    def arrange_loaded_layers(
+        self,
+        _extents: Sequence[LayerExtent],
+        full_layer_objects: Sequence[Any],
+    ) -> Sequence[Any]:
+        return tuple(full_layer_objects)
+
+
+class RecordingLayerObjectBackend:
+    def __init__(self, objects_by_key: dict[str, Destination]) -> None:
+        self.objects_by_key = objects_by_key
+        self.calls: list[tuple[str, ...]] = []
+
+    def read_layer_objects(self, backend_keys: Sequence[str]) -> Sequence[Any]:
+        self.calls.append(tuple(backend_keys))
+        return tuple(self.objects_by_key[key] for key in backend_keys)
+
 
 def wait_for_host_state(
     manager: StorageManager,
@@ -189,6 +207,70 @@ def prepare_manager(
     manager.publish_container(container)
     manager.publish_object(make_object(container, payloads))
     return manager, container, payloads
+
+
+def prepare_local_disk_manager(tmp_path: Path) -> tuple[
+    MetadataManager,
+    tuple[Destination, ...],
+]:
+    objects = tuple(Destination(bytearray([layer + 1] * 16)) for layer in range(4))
+    extents = tuple(
+        LayerExtent(
+            layer_id=layer,
+            backend_key=f"local-layer-{layer}",
+            offset_bytes=None,
+            length_bytes=16,
+            dtype="uint8",
+            shape=(16,),
+            memory_layout="flat-test-payload",
+            payload_sha256=f"{layer + 1:064x}"[-64:],
+        )
+        for layer in range(4)
+    )
+    metadata = CacheObjectMetadata(
+        object_id="internal-comms:local",
+        skill_name="internal-comms",
+        skill_version="v1",
+        model_fingerprint="qwen3-14b@revision",
+        tokenizer_fingerprint="qwen3-tokenizer@revision",
+        token_count=4,
+        source_position_start=0,
+        token_ids_sha256="a" * 64,
+        start_marker_token_ids=(1, 2, 3),
+        container_id=None,
+        read_strategy=ReadStrategy.BATCHED,
+        layers=extents,
+        storage_backend=StorageBackend.LOCAL_DISK,
+    )
+    manager = MetadataManager(tmp_path / "local-catalog.json", expected_layers=4)
+    manager.publish_object(metadata)
+    manager.create_ticket("call-local", metadata.object_id)
+    return manager, objects
+
+
+def test_local_disk_load_dispatches_one_complete_skill_layer_group(
+    tmp_path: Path,
+) -> None:
+    manager, objects = prepare_local_disk_manager(tmp_path)
+    reader = RecordingLayerObjectBackend(
+        {f"local-layer-{layer}": obj for layer, obj in enumerate(objects)}
+    )
+    pool = RecordingHostBufferPool()
+    storage = StorageManager(
+        manager,
+        storage_backend="local_disk",
+        local_disk_backend=reader,
+        host_buffer_pool=pool,
+    )
+
+    storage.submit_host_load("call-local", "internal-comms:local")
+    wait_for_host_state(storage, "call-local", HostLoadState.READY)
+
+    assert reader.calls == [tuple(f"local-layer-{layer}" for layer in range(4))]
+    assert storage.get_ready_buffers("call-local") == objects
+    storage.release_host_load("call-local")
+    assert pool.release_calls == 1
+    storage.close()
 
 
 def test_40_extents_use_one_physical_submit_without_key_lookup(
@@ -297,7 +379,7 @@ def test_submit_returns_while_one_40_layer_read_is_pending(tmp_path: Path) -> No
     storage.close()
 
 
-def test_same_object_tickets_share_io_but_keep_independent_leases(
+def test_same_object_tickets_load_and_release_independent_buffers(
     tmp_path: Path,
 ) -> None:
     metadata, container, _ = prepare_manager(tmp_path)
@@ -310,22 +392,23 @@ def test_same_object_tickets_share_io_but_keep_independent_leases(
     first = storage.submit_host_load("call-a", "internal-comms:v1:qwen3-14b")
     assert backend.started.wait(timeout=1)
     second = storage.submit_host_load("call-b", "internal-comms:v1:qwen3-14b")
-    assert first.io_operation_id == second.io_operation_id
-    assert first.storage_lease_id != second.storage_lease_id
+    assert first.io_operation_id != second.io_operation_id
 
     backend.allow_completion.set()
     wait_for_host_state(storage, "call-a", HostLoadState.READY)
     wait_for_host_state(storage, "call-b", HostLoadState.READY)
-    assert storage.get_ready_buffers("call-a") is storage.get_ready_buffers("call-b")
-    assert backend.read_calls == 1
-    assert pool.acquire_calls == 1
+    assert storage.get_ready_buffers("call-a") is not storage.get_ready_buffers(
+        "call-b"
+    )
+    assert backend.read_calls == 2
+    assert pool.acquire_calls == 2
 
     storage.cancel_host_load("call-a", "request_a_cancelled")
     assert metadata.get_runtime("call-a").binding_state is BindingState.FALLBACK
     assert storage.poll_host_load("call-b") is HostLoadState.READY
-    assert pool.release_calls == 0
-    storage.release_host_load("call-b")
     assert pool.release_calls == 1
+    storage.release_host_load("call-b")
+    assert pool.release_calls == 2
     storage.close()
 
 

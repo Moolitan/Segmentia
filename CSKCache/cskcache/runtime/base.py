@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Mapping, Sequence
+from typing import Any, Protocol
 
 
 class HostLoadState(str, Enum):
@@ -36,6 +36,23 @@ class ReuseReadiness(str, Enum):
     FALLBACK = "fallback"
 
 
+class SchedulerReusePhase(str, Enum):
+    """Scheduler-visible phase of one CSKCache reuse transaction."""
+
+    INITIAL = "initial"
+    WAITING = "waiting"
+    ACTIVATED = "activated"
+    FALLBACK = "fallback"
+
+
+class LeaseOwner(str, Enum):
+    """Owner responsible for releasing one request-local host lease."""
+
+    SCHEDULER = "scheduler"
+    WORKER = "worker"
+    RELEASED = "released"
+
+
 @dataclass(frozen=True)
 class ReusePolicy:
     """Fixed CSKCache token-axis correction policy for one deployment.
@@ -45,19 +62,19 @@ class ReusePolicy:
     is prepared for scheduling.
     """
 
-    prefix_tokens: int = 256
-    calibration_start: int = 132
-    calibration_end: int = 256
+    minimum_full_recompute_tokens: int = 32
+    calibration_tokens: int = 32
     minimum_reuse_tokens: int = 256
     correction_alpha: float = 0.6
 
+    def __post_init__(self) -> None:
+        self.validate()
+
     def validate(self) -> None:
-        if self.prefix_tokens <= 0:
-            raise ValueError("prefix_tokens must be > 0")
-        if not 0 <= self.calibration_start < self.calibration_end:
-            raise ValueError("calibration interval is invalid")
-        if self.calibration_end > self.prefix_tokens:
-            raise ValueError("calibration interval must be inside the prefix")
+        if self.minimum_full_recompute_tokens <= 0:
+            raise ValueError("minimum_full_recompute_tokens must be > 0")
+        if self.calibration_tokens <= 0:
+            raise ValueError("calibration_tokens must be > 0")
         if self.minimum_reuse_tokens <= 0:
             raise ValueError("minimum_reuse_tokens must be > 0")
         if not 0.0 <= self.correction_alpha <= 1.0:
@@ -86,6 +103,11 @@ class ReusePlan:
     calibration_end: int
     correction_alpha: float
     block_alignment: int
+
+    def __post_init__(self) -> None:
+        """Validate once when the immutable execution plan is constructed."""
+
+        self.validate()
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, object]) -> "ReusePlan":
@@ -129,9 +151,7 @@ class ReusePlan:
                 "CSKCache reuse plan requires numeric correction_alpha"
             )
         values["correction_alpha"] = float(alpha)
-        plan = cls(**values)  # type: ignore[arg-type]
-        plan.validate()
-        return plan
+        return cls(**values)  # type: ignore[arg-type]
 
     def validate(self) -> None:
         """Fail closed on malformed request-local execution ranges."""
@@ -148,6 +168,8 @@ class ReusePlan:
             <= self.segment_end
         ):
             raise ValueError("CSKCache reuse plan token ranges are invalid")
+        if self.calibration_end != self.reuse_start:
+            raise ValueError("CSKCache calibration must end at the reuse boundary")
         if self.source_reuse_start < 0:
             raise ValueError("CSKCache source reuse range must be non-negative")
         if (
@@ -157,7 +179,10 @@ class ReusePlan:
             raise ValueError("CSKCache source and target reuse lengths differ")
         if self.block_alignment <= 0:
             raise ValueError("CSKCache block alignment must be positive")
-        if self.reuse_start % self.block_alignment or self.reuse_end % self.block_alignment:
+        if (
+            self.reuse_start % self.block_alignment
+            or self.reuse_end % self.block_alignment
+        ):
             raise ValueError("CSKCache reuse range must be block aligned")
         if not 0.0 <= self.correction_alpha <= 1.0:
             raise ValueError("CSKCache correction alpha must be in [0, 1]")
@@ -178,6 +203,112 @@ class ReusePlan:
             "correction_alpha": self.correction_alpha,
             "block_alignment": self.block_alignment,
         }
+
+    def failure(self, reason: str) -> "ReuseFailure":
+        """Describe the exact range that must be recomputed after failure."""
+
+        return ReuseFailure(
+            ticket=self.ticket,
+            request_id=self.request_id,
+            token_start=self.calibration_start,
+            token_end=self.reuse_end,
+            reason=reason,
+        )
+
+
+class SchedulerControlPort(Protocol):
+    """Control operations supplied by the serving-runtime integration."""
+
+    def prepare_csk_reuse(
+        self, ticket: str, request_id: str, block_alignment: int
+    ) -> ReusePlan | None: ...
+
+    def query_csk_readiness(
+        self, ticket: str, request_id: str
+    ) -> dict[str, Any]: ...
+
+    def activate_csk_reuse(
+        self, ticket: str, request_id: str
+    ) -> ReusePlan | None: ...
+
+    def release_csk_reuse(self, ticket: str) -> bool: ...
+
+    def cancel_csk_prefetch(self, ticket: str, reason: str) -> None: ...
+
+
+class LookupControlPort(Protocol):
+    """Raw JSON control transport used by the LMCache integration."""
+
+    def prepare_csk_reuse(
+        self, ticket: str, request_id: str, block_alignment: int
+    ) -> Mapping[str, object] | None: ...
+
+    def query_csk_readiness(
+        self, ticket: str, request_id: str
+    ) -> dict[str, Any]: ...
+
+    def activate_csk_reuse(
+        self, ticket: str, request_id: str
+    ) -> Mapping[str, object] | None: ...
+
+    def release_csk_reuse(self, ticket: str) -> bool: ...
+
+    def cancel_csk_prefetch(self, ticket: str, reason: str) -> None: ...
+
+
+class KVBlockAllocation(Protocol):
+    """Structural subset of a serving runtime's allocated KV blocks."""
+
+    def get_block_ids(self) -> Sequence[Sequence[int]]: ...
+
+
+@dataclass
+class SchedulerReuseState:
+    """Mutable scheduler state owned exclusively by CSKCache."""
+
+    ticket: str
+    plan: ReusePlan
+    phase: SchedulerReusePhase = SchedulerReusePhase.INITIAL
+    readiness: dict[str, Any] | None = None
+    lease_owner: LeaseOwner = LeaseOwner.SCHEDULER
+
+
+@dataclass(frozen=True)
+class ActivationDirective:
+    """Result of trying to activate a waiting external reuse range."""
+
+    activated: bool
+    external_tokens: int = 0
+
+
+@dataclass(frozen=True)
+class ReuseAllocation:
+    """Validated binding between one ReusePlan and allocated PagedKV blocks."""
+
+    plan: ReusePlan
+    computed_start: int
+    computed_end: int
+    block_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class ReuseFailure:
+    """CSKCache decision consumed by a serving runtime's block reporter."""
+
+    ticket: str
+    request_id: str
+    token_start: int
+    token_end: int
+    reason: str
+
+
+@dataclass(frozen=True)
+class FailedReuseRange:
+    """One externally installed range invalidated by the worker."""
+
+    request_id: str
+    recompute_from: int
+    block_ids: frozenset[int]
 
 
 @dataclass(frozen=True)
@@ -218,10 +349,20 @@ class RuntimeReuseState:
     correction_alpha: float | None = None
     block_alignment: int | None = None
     io_operation_id: str | None = None
-    storage_lease_id: str | None = None
     loaded_through_layer: int = -1
     corrected_through_layer: int = -1
     fallback_reason: str | None = None
 
     def updated(self, **changes: Any) -> "RuntimeReuseState":
         return replace(self, **changes)
+
+
+@dataclass(frozen=True)
+class VerifiedRequestBinding:
+    """Authenticated online location of one offline Skill cache object."""
+
+    ticket: str
+    cache_object_id: str
+    request_id: str
+    segment_start: int
+    segment_end: int

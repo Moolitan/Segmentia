@@ -2,7 +2,6 @@
 """Run an interactive OpenHands agent with on-demand offline Skill KV reuse."""
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import os
@@ -20,34 +19,12 @@ from cskcache import (
     fingerprint_model,
     fingerprint_tokenizer,
 )
+import config as cfg
+from config_loader import backend_root, validate_config
 
-
-def repository_root() -> Path:
-    """Find the checkout root without depending on this script's depth."""
-
-    for candidate in Path(__file__).resolve().parents:
-        if all(
-            (candidate / component).is_dir()
-            for component in ("CSKCache/cskcache", "LMCache/lmcache", "vllm/vllm")
-        ):
-            return candidate
-    raise RuntimeError("cannot locate CSKCache, LMCache, and vLLM checkout root")
-
-
-ROOT = repository_root()
-DEFAULT_SKILLS_DIR = (
-    ROOT / "skills" / "Auto-claude-code-research-in-sleep" / "skills"
-)
-DEFAULT_EXTRA_SKILLS_DIR = ROOT / "skills"
 AUTO_RESEARCH_COLLECTION = "Auto-claude-code-research-in-sleep"
 SUPERPOWERS_COLLECTION = "superpowers"
 SKILL_COLLECTIONS = (AUTO_RESEARCH_COLLECTION, SUPERPOWERS_COLLECTION)
-DEFAULT_POOL = Path(
-    "/mnt/990_pro/skill_save_pool/Qwen3-14B/raw"
-)
-DEFAULT_MODEL = Path(
-    "/mnt/Large_Language_Model_Lab_1/llm_models/Qwen3-14B/Qwen/Qwen3-14B"
-)
 try:
     BOOT_ID = Path("/proc/sys/kernel/random/boot_id").read_text(
         encoding="utf-8"
@@ -109,54 +86,6 @@ class SkillScheduleWindowProbe:
                     "pid": os.getpid(),
                 }
             )
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--skills-dir", type=Path, default=DEFAULT_SKILLS_DIR)
-    parser.add_argument(
-        "--extra-skills-dir", type=Path, default=DEFAULT_EXTRA_SKILLS_DIR
-    )
-    selector = parser.add_mutually_exclusive_group()
-    selector.add_argument(
-        "--skill",
-        action="append",
-        help=(
-            "Expose one Skill, resolved across all supported sources. Repeat "
-            "--skill to expose a controlled multi-Skill catalog."
-        ),
-    )
-    selector.add_argument(
-        "--collection",
-        choices=SKILL_COLLECTIONS,
-        help="Expose every Skill in one multi-Skill collection.",
-    )
-    parser.add_argument("--pool-dir", type=Path, default=DEFAULT_POOL)
-    parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL)
-    parser.add_argument("--served-model", default="Qwen3")
-    parser.add_argument("--base-url", default="http://127.0.0.1:8014")
-    parser.add_argument("--api-key", default="EMPTY")
-    parser.add_argument(
-        "--workspace",
-        type=Path,
-        default=ROOT / "workspace" / "08_lmcache_mp" / "interactive_agent",
-    )
-    parser.add_argument(
-        "--max-iterations",
-        type=int,
-        default=2,
-        help=(
-            "Agent steps per user message. The default captures exactly the Skill "
-            "load step and the first post-Skill completion."
-        ),
-    )
-    parser.add_argument(
-        "--prompt-file",
-        type=Path,
-        help="Send the complete UTF-8 file as one user message, then exit.",
-    )
-    parser.add_argument("--check", action="store_true")
-    return parser.parse_args()
 
 
 def build_skill_catalog(
@@ -324,7 +253,7 @@ def load_cached_skills(
     return cached
 
 
-def create_agent(args: argparse.Namespace):
+def create_agent(skills_dir: Path):
     from openhands.sdk import Agent, AgentContext, LLM, Tool
     from openhands.sdk.context.skills import load_skills_from_dir
     from openhands.tools.apply_patch import ApplyPatchTool
@@ -335,9 +264,9 @@ def create_agent(args: argparse.Namespace):
     from openhands.tools.terminal import TerminalTool
 
     llm = LLM(
-        model=f"openai/{args.served_model}",
-        api_key=SecretStr(args.api_key),
-        base_url=f"{args.base_url.rstrip('/')}/v1",
+        model=f"openai/{cfg.SERVED_MODEL}",
+        api_key=SecretStr(cfg.API_KEY),
+        base_url=f"http://127.0.0.1:{cfg.PORT}/v1",
         temperature=0,
         top_p=1.0,
         stream=False,
@@ -352,7 +281,7 @@ def create_agent(args: argparse.Namespace):
         disable_vision=True,
         timeout=720,
     )
-    _, _, skills = load_skills_from_dir(str(args.skills_dir))
+    _, _, skills = load_skills_from_dir(str(skills_dir))
     tools = [
         Tool(name=TerminalTool.name, params={"terminal_type": "subprocess"}),
         Tool(name=GlobTool.name),
@@ -362,7 +291,7 @@ def create_agent(args: argparse.Namespace):
         Tool(
             name=SkillTool.name,
             params={
-                "skills_dir": str(args.skills_dir),
+                "skills_dir": str(skills_dir),
                 "context_segment_wrapper": True,
             },
         ),
@@ -382,51 +311,53 @@ def create_agent(args: argparse.Namespace):
     return agent
 
 
-def main() -> None:
-    args = parse_args()
-    args.skills_dir = args.skills_dir.resolve()
-    args.extra_skills_dir = args.extra_skills_dir.resolve()
-    args.pool_dir = args.pool_dir.resolve()
-    args.workspace = args.workspace.resolve()
-    args.workspace.mkdir(parents=True, exist_ok=True)
-    args.skills_dir, selector, exposed_skill_count = build_skill_catalog(
-        args.skills_dir,
-        args.extra_skills_dir,
-        args.workspace / ".cskcache_skills",
-        skills=args.skill,
-        collection=args.collection,
+def main(*, check: bool = False) -> None:
+    validate_config()
+    skills_dir = cfg.SKILLS_DIR.resolve()
+    extra_skills_dir = cfg.EXTRA_SKILLS_DIR.resolve()
+    pool_dir = backend_root().resolve()
+    workspace = cfg.WORKSPACE.resolve()
+    workspace.mkdir(parents=True, exist_ok=True)
+    skills_dir, selector, exposed_skill_count = build_skill_catalog(
+        skills_dir,
+        extra_skills_dir,
+        workspace / ".cskcache_skills",
+        skills=list(cfg.SKILLS) if cfg.SKILLS else None,
+        collection=cfg.COLLECTION,
     )
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model_path,
-        local_files_only=True,
-        trust_remote_code=True,
-    )
-    cached_skills = load_cached_skills(
-        args.skills_dir,
-        args.pool_dir,
-        tokenizer,
-        args.model_path,
-        require_all=args.skill is not None or args.collection is not None,
-    )
-    if args.check:
-        create_agent(args)
+    cached_skills: dict[str, CacheObjectMetadata] = {}
+    if cfg.MODE == "cskcache":
+        tokenizer = AutoTokenizer.from_pretrained(
+            cfg.MODEL_PATH,
+            local_files_only=True,
+            trust_remote_code=True,
+        )
+        cached_skills = load_cached_skills(
+            skills_dir,
+            pool_dir,
+            tokenizer,
+            cfg.MODEL_PATH,
+            require_all=bool(cfg.SKILLS) or cfg.COLLECTION is not None,
+        )
+    if check:
+        create_agent(skills_dir)
         print(
-            f"[check] OpenHands agent config with "
+            f"[check] mode={cfg.MODE} OpenHands agent config with "
             f"{len(cached_skills)} cached CSKCache Skills "
             f"and {exposed_skill_count} exposed Skills "
-            f"selector={selector} from {args.skills_dir}"
+            f"selector={selector} from {skills_dir}"
         )
         return
     schedule_probe = SkillScheduleWindowProbe()
-    agent = create_agent(args)
+    agent = create_agent(skills_dir)
 
     from openhands.sdk import Conversation
 
     conversation_options: dict[str, Any] = {
         "agent": agent,
-        "workspace": str(args.workspace),
-        "max_iteration_per_run": args.max_iterations,
+        "workspace": str(workspace),
+        "max_iteration_per_run": cfg.MAX_ITERATIONS,
         "stuck_detection": True,
         "delete_on_close": True,
         "callbacks": [schedule_probe.on_event],
@@ -442,17 +373,17 @@ def main() -> None:
     conversation = Conversation(
         **conversation_options,
     )
-    print(f"[ready] workspace={args.workspace}")
+    print(f"[ready] workspace={workspace}")
     print(
         f"[ready] cached CSKCache Skills={len(cached_skills)}; "
         f"exposed Skills={exposed_skill_count}; selector={selector}; "
-        f"steps_per_message={args.max_iterations}; enter /exit to quit"
+        f"steps_per_message={cfg.MAX_ITERATIONS}; enter /exit to quit"
     )
     try:
-        if args.prompt_file is not None:
-            message = args.prompt_file.read_text(encoding="utf-8").strip()
+        if cfg.PROMPT_FILE is not None:
+            message = cfg.PROMPT_FILE.read_text(encoding="utf-8").strip()
             if not message:
-                raise ValueError(f"prompt file is empty: {args.prompt_file}")
+                raise ValueError(f"prompt file is empty: {cfg.PROMPT_FILE}")
             conversation.send_message(message)
             conversation.run()
         else:
@@ -469,7 +400,7 @@ def main() -> None:
                 conversation.run()
     finally:
         conversation.close()
-        timeline_path = args.workspace / "cskcache_agent_timeline.json"
+        timeline_path = workspace / "cskcache_agent_timeline.json"
         timeline_path.write_text(
             json.dumps(
                 schedule_probe.agent_timeline_events,

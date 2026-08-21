@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Discover Skills or exact-save one Skill directly into LMCache raw-block."""
+"""Discover Skills or exact-save one Skill into the selected LMCache backend."""
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skills-dir", type=Path, default=DEFAULT_SKILLS_DIR)
     parser.add_argument("--list", action="store_true", help="Print cache ID and path")
     parser.add_argument("--collection")
-    parser.add_argument("--skill")
+    parser.add_argument("--skill", action="append")
     parser.add_argument("--exclude-skill", action="append", default=[])
     parser.add_argument("--cache-id")
     parser.add_argument("--skill-path", type=Path)
@@ -70,6 +70,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-input-tokens", type=int, default=32767)
     parser.add_argument("--request-timeout", type=float, default=600.0)
     parser.add_argument("--expected-layers", type=int, default=40)
+    parser.add_argument(
+        "--storage-backend",
+        choices=("raw_block", "local_disk"),
+        default="raw_block",
+    )
+    parser.add_argument("--local-disk-root", type=Path)
     parser.add_argument("--force-recompute", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
@@ -87,7 +93,7 @@ def cache_id_for_path(skills_dir: Path, skill_path: Path) -> str:
 def discover_skills(
     skills_dir: Path,
     collection: str | None,
-    selected_skill: str | None,
+    selected_skills: set[str] | None,
     excluded_skills: set[str] | None = None,
 ) -> list[SkillSpec]:
     if not skills_dir.is_dir():
@@ -98,10 +104,9 @@ def discover_skills(
         cache_id = cache_id_for_path(skills_dir, source_path)
         if collection and cache_id.split("/", 1)[0] != collection:
             continue
-        if selected_skill and selected_skill not in {
-            cache_id,
-            cache_id.rsplit("/", 1)[-1],
-        }:
+        if selected_skills and not (
+            {cache_id, cache_id.rsplit("/", 1)[-1]} & selected_skills
+        ):
             continue
         if cache_id in excluded:
             continue
@@ -181,7 +186,7 @@ def main() -> None:
         for spec in discover_skills(
             args.skills_dir,
             args.collection,
-            args.skill,
+            set(args.skill or ()),
             set(args.exclude_skill),
         ):
             print(f"{spec.cache_id}\t{spec.source_path}")
@@ -278,6 +283,8 @@ def main() -> None:
         request_configs=None,
     )
     layer_keys = base_key.split_layers(args.expected_layers)
+    if args.storage_backend == "local_disk" and args.local_disk_root is None:
+        raise ValueError("local_disk exact save requires --local-disk-root")
     request_id = "skill-prefill-" + hashlib.sha256(
         args.cache_id.encode("utf-8")
     ).hexdigest()[:16]
@@ -298,10 +305,36 @@ def main() -> None:
         },
     )
     pending_name = hashlib.sha256(args.cache_id.encode("utf-8")).hexdigest() + ".json"
+    artifact_type = (
+        "cskcache_direct_raw_pending"
+        if args.storage_backend == "raw_block"
+        else "cskcache_local_disk_pending"
+    )
+    layers = []
+    for layer_id, key in enumerate(layer_keys):
+        record = {
+            "layer_id": layer_id,
+            "backend_key": key.to_string(),
+            "length_bytes": layer_bytes,
+            "dtype": str(dtype).removeprefix("torch."),
+            "shape": [2, len(token_ids), kv_hidden_size],
+            "memory_layout": "KV_2TD",
+        }
+        if args.storage_backend == "raw_block":
+            record["lookup_key"] = key.to_string()
+        else:
+            assert args.local_disk_root is not None
+            record["data_path"] = str(
+                (
+                    args.local_disk_root.resolve()
+                    / (key.to_string().replace("/", "-") + ".pt")
+                )
+            )
+        layers.append(record)
     atomic_write_json(
         args.pending_dir / pending_name,
         {
-            "artifact_type": "cskcache_direct_raw_pending",
+            "artifact_type": artifact_type,
             "cache_id": args.cache_id,
             "skill_name": skill_name,
             "skill_path": str(source_path),
@@ -319,23 +352,12 @@ def main() -> None:
             "request_id": request_id,
             "response_id": response.get("id"),
             "latency_s": round(time.perf_counter() - started, 4),
-            "layers": [
-                {
-                    "layer_id": layer_id,
-                    "backend_key": key.to_string(),
-                    "lookup_key": key.to_string(),
-                    "length_bytes": layer_bytes,
-                    "dtype": str(dtype).removeprefix("torch."),
-                    "shape": [2, len(token_ids), kv_hidden_size],
-                    "memory_layout": "KV_2TD",
-                }
-                for layer_id, key in enumerate(layer_keys)
-            ],
+            "layers": layers,
         },
     )
     print(
         f"[completed] {args.cache_id} tokens={len(token_ids)} "
-        f"span=[0,{len(token_ids)}) direct_raw_pending=1"
+        f"span=[0,{len(token_ids)}) backend={args.storage_backend} pending=1"
     )
 
 

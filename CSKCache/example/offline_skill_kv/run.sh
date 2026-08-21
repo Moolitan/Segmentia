@@ -8,60 +8,54 @@ CSKCACHE_ROOT="$ROOT/CSKCache"
 VLLM_ROOT="${VLLM_ROOT:-$ROOT/vllm}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 VLLM_BIN="${VLLM_BIN:-vllm}"
-MODEL_PATH="${VLLM_MODEL_PATH:-/mnt/Large_Language_Model_Lab_1/llm_models/Qwen3-14B/Qwen/Qwen3-14B}"
-SERVED_MODEL="${VLLM_SERVED_NAME:-Qwen3}"
-OUTPUT_ROOT="${SKILL_SAVE_POOL_ROOT:-/mnt/990_pro/skill_save_pool}"
-OUTPUT_DIR="$OUTPUT_ROOT/${SKILL_POOL_MODEL_DIR_NAME:-Qwen3-14B}"
+
+if (($#)); then
+  echo "[error] this launcher accepts no arguments; edit config.py instead" >&2
+  exit 2
+fi
+eval "$("$PYTHON_BIN" "$SCRIPT_DIR/config_loader.py")"
+
+MODEL_PATH="$VLLM_MODEL_PATH"
+SERVED_MODEL="$VLLM_SERVED_NAME"
+OUTPUT_ROOT="$SKILL_SAVE_POOL_ROOT"
+OUTPUT_DIR="$OUTPUT_ROOT/$SKILL_POOL_MODEL_DIR_NAME"
 RAW_ROOT="$OUTPUT_DIR/raw"
-PENDING_DIR="$RAW_ROOT/.pending"
-CATALOG="$RAW_ROOT/catalog.json"
-PORT="${VLLM_PORT:-8013}"
-API_KEY="${VLLM_API_KEY:-EMPTY}"
-GPU_UTIL="${VLLM_GPU_UTIL:-0.9}"
-MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-32768}"
-READY_ATTEMPTS="${VLLM_READY_MAX_ATTEMPTS:-450}"
-READY_INTERVAL="${VLLM_READY_INTERVAL:-2}"
-SHUTDOWN_TIMEOUT="${VLLM_SHUTDOWN_TIMEOUT:-30}"
-EXPECTED_LAYERS="${CSKCACHE_MODEL_NUM_LAYERS:-40}"
+LOCAL_ROOT="$OUTPUT_DIR/layer_files"
+STORAGE_BACKEND="$OFFLINE_STORAGE_BACKEND"
+PORT="$VLLM_PORT"
+API_KEY="$VLLM_API_KEY"
+GPU_UTIL="$VLLM_GPU_UTIL"
+MAX_MODEL_LEN="$VLLM_MAX_MODEL_LEN"
+READY_ATTEMPTS="$VLLM_READY_MAX_ATTEMPTS"
+READY_INTERVAL="$VLLM_READY_INTERVAL"
+SHUTDOWN_TIMEOUT="$VLLM_SHUTDOWN_TIMEOUT"
+EXPECTED_LAYERS="$CSKCACHE_MODEL_NUM_LAYERS"
 PYTHONPATH_VALUE="$VLLM_ROOT:$LMCACHE_ROOT:$CSKCACHE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
-COLLECTION=""
-SKILL=""
+COLLECTION="$OFFLINE_COLLECTION"
+OVERWRITE="$OFFLINE_OVERWRITE"
+DRY_RUN="$OFFLINE_DRY_RUN"
+SKILLS=()
 EXCLUDED_SKILLS=()
-OVERWRITE=0
-DRY_RUN=0
-while (($#)); do
-  case "$1" in
-    --collection)
-      COLLECTION="${2:?--collection requires a value}"
-      shift 2
-      ;;
-    --skill)
-      SKILL="${2:?--skill requires a value}"
-      shift 2
-      ;;
-    --exclude-skill)
-      EXCLUDED_SKILLS+=("${2:?--exclude-skill requires a value}")
-      shift 2
-      ;;
-    --overwrite)
-      OVERWRITE=1
-      shift
-      ;;
-    --dry-run)
-      DRY_RUN=1
-      shift
-      ;;
-    -h|--help)
-      echo "usage: $0 [--collection NAME] [--skill CACHE_ID_OR_NAME] [--exclude-skill CACHE_ID]... [--overwrite] [--dry-run]"
-      exit 0
-      ;;
-    *)
-      echo "[error] unknown argument: $1" >&2
-      exit 2
-      ;;
-  esac
-done
+while IFS= read -r skill; do
+  [[ -z "$skill" ]] || SKILLS+=("$skill")
+done <<< "$OFFLINE_SKILLS"
+while IFS= read -r skill; do
+  [[ -z "$skill" ]] || EXCLUDED_SKILLS+=("$skill")
+done <<< "$OFFLINE_EXCLUDED_SKILLS"
+
+if [[ "$STORAGE_BACKEND" == "raw_block" ]]; then
+  BACKEND_ROOT="$RAW_ROOT"
+  CATALOG_MANAGER="$SCRIPT_DIR/manage_raw_catalog.py"
+elif [[ "$STORAGE_BACKEND" == "local_disk" ]]; then
+  BACKEND_ROOT="$LOCAL_ROOT"
+  CATALOG_MANAGER="$SCRIPT_DIR/manage_local_catalog.py"
+else
+  echo "[error] storage backend must be raw_block or local_disk" >&2
+  exit 2
+fi
+PENDING_DIR="$BACKEND_ROOT/.pending"
+CATALOG="$BACKEND_ROOT/catalog.json"
 
 if [[ "$DRY_RUN" == "0" && "${CONDA_DEFAULT_ENV:-}" != "opencode" ]]; then
   echo "[error] activate conda environment opencode first" >&2
@@ -86,9 +80,17 @@ export LMCACHE_CHUNK_SIZE="${LMCACHE_CHUNK_SIZE:-256}"
 export LMCACHE_USE_LAYERWISE="${LMCACHE_USE_LAYERWISE:-True}"
 export LMCACHE_LOCAL_CPU="${LMCACHE_LOCAL_CPU:-True}"
 export LMCACHE_MAX_LOCAL_CPU_SIZE="${LMCACHE_MAX_LOCAL_CPU_SIZE:-8}"
-export LMCACHE_STORAGE_PLUGINS="raw_block"
-export LMCACHE_STORE_LOCATION="raw_block"
-unset LMCACHE_LOCAL_DISK LMCACHE_FORCE_SKIP_SAVE || true
+if [[ "$STORAGE_BACKEND" == "raw_block" ]]; then
+  export LMCACHE_STORAGE_PLUGINS="raw_block"
+  export LMCACHE_STORE_LOCATION="raw_block"
+  unset LMCACHE_LOCAL_DISK LMCACHE_FORCE_SKIP_SAVE || true
+else
+  export LMCACHE_STORAGE_PLUGINS=""
+  export LMCACHE_STORE_LOCATION="LocalDiskBackend"
+  export LMCACHE_LOCAL_DISK="$LOCAL_ROOT"
+  export LMCACHE_MAX_LOCAL_DISK_SIZE="${LMCACHE_MAX_LOCAL_DISK_SIZE:-1000}"
+  unset LMCACHE_FORCE_SKIP_SAVE || true
+fi
 
 SERVER_PID=""
 cleanup_server() {
@@ -142,9 +144,11 @@ start_server() {
   wait_vllm_ready
 }
 
-list_args=(--list --skills-dir "$ROOT/skills")
+list_args=(--list --skills-dir "$OFFLINE_SKILLS_DIR")
 [[ -z "$COLLECTION" ]] || list_args+=(--collection "$COLLECTION")
-[[ -z "$SKILL" ]] || list_args+=(--skill "$SKILL")
+for skill in "${SKILLS[@]}"; do
+  list_args+=(--skill "$skill")
+done
 for excluded_skill in "${EXCLUDED_SKILLS[@]}"; do
   list_args+=(--exclude-skill "$excluded_skill")
 done
@@ -166,15 +170,15 @@ if [[ "$DRY_RUN" == "0" ]]; then
   export SKILL_SAVE_POOL_ROOT="$OUTPUT_ROOT"
   export SKILL_POOL_MODEL_DIR_NAME="${SKILL_POOL_MODEL_DIR_NAME:-Qwen3-14B}"
   if ! PYTHONPATH="$PYTHONPATH_VALUE" "$PYTHON_BIN" \
-    "$SCRIPT_DIR/manage_raw_catalog.py" initialize; then
-    echo "[error] failed to initialize the direct raw Skill pool" >&2
+    "$CATALOG_MANAGER" initialize; then
+    echo "[error] failed to initialize the $STORAGE_BACKEND Skill pool" >&2
     exit 1
   fi
   # A prior process may have completed raw writes but crashed before Catalog
   # publication.  Recover that transaction before accepting new requests;
   # successful publication removes its pending records.
   recovery_args=(finalize)
-  if [[ "$OVERWRITE" == "1" ]]; then
+  if [[ "$STORAGE_BACKEND" == "raw_block" && "$OVERWRITE" == "1" ]]; then
     # --overwrite authorizes rebuilding an unpublished transaction whose raw
     # bytes exist but whose LMCache key index was never checkpointed.  The
     # helper preserves those pending records under raw/.failed/; it does not
@@ -182,12 +186,12 @@ if [[ "$DRY_RUN" == "0" ]]; then
     recovery_args+=(--quarantine-unrecoverable)
   fi
   if ! PYTHONPATH="$PYTHONPATH_VALUE" "$PYTHON_BIN" \
-    "$SCRIPT_DIR/manage_raw_catalog.py" "${recovery_args[@]}"; then
-    echo "[error] failed to recover pending direct raw objects" >&2
+    "$CATALOG_MANAGER" "${recovery_args[@]}"; then
+    echo "[error] failed to recover pending $STORAGE_BACKEND objects" >&2
     exit 1
   fi
   LMCACHE_EXTRA_CONFIG="$(PYTHONPATH="$PYTHONPATH_VALUE" "$PYTHON_BIN" \
-    "$SCRIPT_DIR/manage_raw_catalog.py" lmcache-config)" || exit 1
+    "$CATALOG_MANAGER" lmcache-config)" || exit 1
   export LMCACHE_EXTRA_CONFIG
 fi
 failures=0
@@ -209,7 +213,7 @@ for row in "${skill_rows[@]}"; do
   [[ -n "$cache_id" && -n "$skill_path" ]] || continue
 
   driver_args=(
-    --skills-dir "$ROOT/skills"
+    --skills-dir "$OFFLINE_SKILLS_DIR"
     --cache-id "$cache_id"
     --skill-path "$skill_path"
     --pending-dir "$PENDING_DIR"
@@ -219,7 +223,11 @@ for row in "${skill_rows[@]}"; do
     --base-url "http://127.0.0.1:$PORT"
     --api-key "$API_KEY"
     --expected-layers "$EXPECTED_LAYERS"
+    --storage-backend "$STORAGE_BACKEND"
   )
+  if [[ "$STORAGE_BACKEND" == "local_disk" ]]; then
+    driver_args+=(--local-disk-root "$LOCAL_ROOT")
+  fi
   if [[ "$DRY_RUN" == "1" ]]; then
     PYTHONPATH="$PYTHONPATH_VALUE" "$PYTHON_BIN" \
       "$SCRIPT_DIR/prefill_skill_to_raw.py" "${driver_args[@]}" --dry-run || \
@@ -245,10 +253,10 @@ done
 cleanup_server
 if [[ "$DRY_RUN" == "0" ]]; then
   if ! PYTHONPATH="$PYTHONPATH_VALUE" "$PYTHON_BIN" \
-    "$SCRIPT_DIR/manage_raw_catalog.py" finalize; then
+    "$CATALOG_MANAGER" finalize; then
     failures=$((failures + 1))
-    echo "[error] direct raw objects were not published to the Catalog" >&2
+    echo "[error] $STORAGE_BACKEND objects were not published to the Catalog" >&2
   fi
 fi
-echo "[done] completed=$completed skipped=$skipped failures=$failures output=$OUTPUT_DIR"
+echo "[done] backend=$STORAGE_BACKEND completed=$completed skipped=$skipped failures=$failures output=$BACKEND_ROOT"
 ((failures == 0))

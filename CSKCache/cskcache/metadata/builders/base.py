@@ -8,6 +8,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from ...chunking import ChunkingMode, ChunkingSpec
+from ...layouts import KVLayout
+
 
 class OfflineOffsetBackend(Protocol):
     """LMCache slot information used after a direct offline raw save."""
@@ -53,6 +56,8 @@ class CacheObjectBuildInput:
     token_ids_sha256: str
     start_marker_token_ids: tuple[int, ...]
     layers: tuple[LayerBuildInput, ...]
+    chunking: ChunkingSpec = ChunkingSpec(ChunkingMode.WHOLE_SKILL)
+    storage_layout: KVLayout = KVLayout.CHUNK_SINGLE_LAYER
 
 
 @dataclass(frozen=True)
@@ -82,6 +87,8 @@ class DirectRawCacheObjectBuildInput:
     token_ids_sha256: str
     start_marker_token_ids: tuple[int, ...]
     layers: tuple[DirectRawLayerBuildInput, ...]
+    chunking: ChunkingSpec = ChunkingSpec(ChunkingMode.WHOLE_SKILL)
+    storage_layout: KVLayout = KVLayout.CHUNK_SINGLE_LAYER
 
 
 @dataclass(frozen=True)
@@ -111,3 +118,5 @@ class LocalDiskCacheObjectBuildInput:
     token_ids_sha256: str
     start_marker_token_ids: tuple[int, ...]
     layers: tuple[LocalDiskLayerBuildInput, ...]
+    chunking: ChunkingSpec = ChunkingSpec(ChunkingMode.WHOLE_SKILL)
+    storage_layout: KVLayout = KVLayout.CHUNK_SINGLE_LAYER

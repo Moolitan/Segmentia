@@ -1,4 +1,4 @@
-"""Canonical Context Segment wire format shared by build and serving paths."""
+"""Canonical Skill Tool-result wire format shared by build and serving."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from html import escape, unescape
 from typing import Any
 import re
 
-from .base import CONTEXT_SEGMENT_FORMAT, ContextSegmentTokenIdentity
+from .base import SKILL_PAYLOAD_FORMAT, SkillTokenIdentity
 from .fingerprint import fingerprint_token_ids
 
 
@@ -16,15 +16,15 @@ _CLOSING = "</context_segment>"
 
 
 @dataclass(frozen=True)
-class ParsedContextSegment:
-    """One validated Context Segment and any Tool-result suffix after it."""
+class ParsedSkillPayload:
+    """One validated Skill payload and any Tool-result suffix after it."""
 
     skill_name: str
     skill_text: str
     trailing_text: str
 
 
-def render_context_segment(skill_name: str, skill_text: str) -> str:
+def render_skill_payload(skill_name: str, skill_text: str) -> str:
     """Render the exact Context Segment placed in a Skill Tool result."""
 
     if not isinstance(skill_name, str) or not skill_name.strip():
@@ -39,14 +39,14 @@ def render_context_segment(skill_name: str, skill_text: str) -> str:
     )
 
 
-def build_context_segment_token_identity(
+def build_skill_token_identity(
     tokenizer: Any,
     skill_name: str,
     skill_text: str,
-) -> ContextSegmentTokenIdentity:
+) -> SkillTokenIdentity:
     """Tokenize the exact Context Segment object used offline and online."""
 
-    observation_text = render_context_segment(skill_name, skill_text)
+    observation_text = render_skill_payload(skill_name, skill_text)
     cache_text = observation_text + "\n"
     token_ids = tuple(
         int(token_id)
@@ -67,8 +67,8 @@ def build_context_segment_token_identity(
     )
     if not start_marker_token_ids:
         raise RuntimeError(f"empty Context Segment marker for {skill_name}")
-    return ContextSegmentTokenIdentity(
-        context_format=CONTEXT_SEGMENT_FORMAT,
+    return SkillTokenIdentity(
+        payload_format=SKILL_PAYLOAD_FORMAT,
         observation_text=observation_text,
         cache_text=cache_text,
         token_ids=token_ids,
@@ -81,7 +81,7 @@ def build_context_segment_token_identity(
     )
 
 
-def parse_context_segment(observation: str) -> ParsedContextSegment | None:
+def parse_skill_payload(observation: str) -> ParsedSkillPayload | None:
     """Parse the unique leading Context Segment in one Skill Tool result."""
 
     if not isinstance(observation, str):
@@ -95,7 +95,7 @@ def parse_context_segment(observation: str) -> ParsedContextSegment | None:
     if closing_start < 0:
         return None
     closing_end = closing_start + len(_CLOSING)
-    return ParsedContextSegment(
+    return ParsedSkillPayload(
         skill_name=unescape(opening.group(1)),
         skill_text=observation[opening.end() : closing_start],
         trailing_text=observation[closing_end:],

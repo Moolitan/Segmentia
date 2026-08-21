@@ -20,8 +20,8 @@ from .base import (
     LayerObjectReadBackend,
     StorageLoader,
 )
-from .local_disk import LocalDiskLoader
-from .raw_block import RawBlockLoader
+from .backends.local_disk import LocalDiskLoader
+from .backends.raw_block import RawBlockLoader
 
 
 @dataclass

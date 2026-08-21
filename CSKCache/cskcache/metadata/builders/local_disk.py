@@ -12,6 +12,7 @@ import hashlib
 from ..base import CacheObjectMetadata, LayerExtent, ReadStrategy, StorageBackend
 from ..manager import MetadataManager
 from .base import LocalDiskCacheObjectBuildInput
+from ...storage.formats.torch_pt import validate_region_file
 
 
 class LocalDiskCacheBuilder:
@@ -47,17 +48,7 @@ class LocalDiskCacheBuilder:
         layers: list[LayerExtent] = []
         for layer in ordered:
             path = Path(layer.data_path)
-            if not path.is_absolute() or not path.is_file():
-                raise FileNotFoundError(f"LocalDisk layer file is missing: {path}")
-            expected_name = layer.backend_key.replace("/", "-") + ".pt"
-            if path.name != expected_name:
-                raise ValueError(
-                    f"LocalDisk layer {layer.layer_id} path does not match its key"
-                )
-            if path.stat().st_size != layer.length_bytes:
-                raise ValueError(
-                    f"LocalDisk layer {layer.layer_id} has an unexpected size"
-                )
+            validate_region_file(path, layer.backend_key, layer.length_bytes)
             layers.append(
                 LayerExtent(
                     layer_id=layer.layer_id,
@@ -83,6 +74,8 @@ class LocalDiskCacheBuilder:
             container_id=None,
             read_strategy=ReadStrategy.BATCHED,
             layers=tuple(layers),
+            chunking=source.chunking,
+            storage_layout=source.storage_layout,
             storage_backend=StorageBackend.LOCAL_DISK,
         )
         metadata.validate(self._expected_layers, None)

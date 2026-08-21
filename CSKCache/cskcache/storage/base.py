@@ -15,6 +15,31 @@ from ..metadata.base import (
     LayerExtent,
     StorageBackend,
 )
+from ..layouts import KVLayout
+from ..chunking import SkillChunkPlan, build_chunk_plan
+from ..layouts import KVLayoutPlan, build_layout_plan
+from .formats import StorageFormat
+from .loads import StorageLoadPlan, build_storage_load_plan
+
+
+@dataclass(frozen=True)
+class StorageSpec:
+    """Persistent layout, encoding, and physical backend selection."""
+
+    layout: KVLayout
+    format: StorageFormat
+    backend: StorageBackend
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "layout", KVLayout(self.layout))
+        object.__setattr__(self, "format", StorageFormat(self.format))
+        object.__setattr__(self, "backend", StorageBackend(self.backend))
+        expected = {
+            StorageBackend.LOCAL_DISK: StorageFormat.TORCH_PT,
+            StorageBackend.RAW_BLOCK: StorageFormat.RAW_CONTAINER,
+        }[self.backend]
+        if self.format is not expected:
+            raise ValueError("storage format is incompatible with its backend")
 
 
 class ExtentReadBackend(Protocol):
@@ -44,12 +69,16 @@ class HostBufferPool(Protocol):
 
     def acquire(self, extents: Sequence[LayerExtent]) -> Sequence[Any]: ...
 
+    def acquire_persistent(
+        self, extents: Sequence[LayerExtent]
+    ) -> Sequence[Any]: ...
+
     def release(self, memory_objects: Sequence[Any]) -> None: ...
 
     def arrange_loaded_layers(
         self,
         extents: Sequence[LayerExtent],
-        full_layer_objects: Sequence[Any],
+        persistent_layer_regions: Sequence[Any],
     ) -> Sequence[Any]: ...
 
 
@@ -70,6 +99,9 @@ class CSKReadBatch:
     cache_object_id: str
     container_id: str | None
     extents: tuple[LayerExtent, ...]
+    chunk_plan: SkillChunkPlan
+    layout_plan: KVLayoutPlan
+    load_plan: StorageLoadPlan
 
     @classmethod
     def from_metadata(
@@ -80,10 +112,22 @@ class CSKReadBatch:
         expected_layers: int,
     ) -> "CSKReadBatch":
         metadata.validate(expected_layers, container)
+        chunk_plan = build_chunk_plan(metadata.token_count, metadata.chunking)
+        layout_plan = build_layout_plan(
+            metadata.storage_layout,
+            chunk_plan,
+            expected_layers,
+        )
+        load_plan = build_storage_load_plan(layout_plan)
+        if len(layout_plan.regions) != len(metadata.layers):
+            raise ValueError("Catalog extents differ from the storage layout plan")
         return cls(
             cache_object_id=metadata.object_id,
             container_id=None if container is None else container.container_id,
             extents=tuple(sorted(metadata.layers, key=lambda item: item.layer_id)),
+            chunk_plan=chunk_plan,
+            layout_plan=layout_plan,
+            load_plan=load_plan,
         )
 
     @property

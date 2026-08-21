@@ -1,11 +1,20 @@
 """CSKCache metadata, runtime lifecycle, and storage primitives."""
 
+from .chunking import (
+    ChunkingMode,
+    ChunkingSpec,
+    ChunkSpan,
+    SkillChunkPlan,
+    build_chunk_plan,
+)
+from .layouts import KVLayout, KVLayoutPlan, KVRegion, build_layout_plan
+
 from .metadata.base import (
     CacheObjectMetadata,
     CacheObjectStatus,
     ContainerMetadata,
-    CONTEXT_SEGMENT_FORMAT,
-    ContextSegmentTokenIdentity,
+    SKILL_PAYLOAD_FORMAT,
+    SkillTokenIdentity,
     LayerExtent,
     ReadStrategy,
     StorageBackend,
@@ -29,11 +38,11 @@ from .metadata.builders import (
     publish_local_disk_snapshot,
 )
 from .metadata.manager import MetadataManager
-from .metadata.context_segment import (
-    ParsedContextSegment,
-    build_context_segment_token_identity,
-    parse_context_segment,
-    render_context_segment,
+from .metadata.skill_format import (
+    ParsedSkillPayload,
+    build_skill_token_identity,
+    parse_skill_payload,
+    render_skill_payload,
 )
 from .metadata.fingerprint import (
     fingerprint_model,
@@ -42,11 +51,13 @@ from .metadata.fingerprint import (
 )
 from .profile import PROFILE_ENABLED, PROFILE_MARKER, profile_event
 from .execution.corrector import ContextAwareKVCorrector
-from .storage.buffer_pool import (
-    LMCacheHostBufferPool,
-    LMCacheLayerObjectReader,
+from .host_memory.pool import LMCacheHostBufferPool
+from .storage.backends.local_disk import LMCacheLayerObjectReader
+from .host_memory.base import (
+    ChunkLayerBuffer,
+    SingleLayerChunkBuffers,
+    SingleLayerKVBuffer,
 )
-from .storage.layouts.base import ChunkedLayerBuffer, HostLayout, LayerChunk
 from .runtime.request_manager import RequestManager
 from .runtime.coordinator import SchedulerReuseCoordinator
 from .runtime.transport import PlanTransportCoordinator
@@ -80,18 +91,30 @@ from .storage.base import (
 from .storage.manager import (
     StorageManager,
 )
-from .storage.raw_block import generation_sidecar_path, publish_generation_sidecar
+from .storage.backends.raw_block import (
+    generation_sidecar_path,
+    publish_generation_sidecar,
+)
 
 __all__ = [
     "BindingState",
+    "ChunkingMode",
+    "ChunkingSpec",
+    "ChunkSpan",
+    "SkillChunkPlan",
+    "build_chunk_plan",
+    "KVLayout",
+    "KVLayoutPlan",
+    "KVRegion",
+    "build_layout_plan",
     "CacheBuilder",
     "CacheObjectBuildInput",
     "CacheObjectMetadata",
     "CacheObjectStatus",
     "ContainerMetadata",
-    "CONTEXT_SEGMENT_FORMAT",
+    "SKILL_PAYLOAD_FORMAT",
     "ContextAwareKVCorrector",
-    "ContextSegmentTokenIdentity",
+    "SkillTokenIdentity",
     "DirectRawCacheBuilder",
     "DirectRawCacheObjectBuildInput",
     "DirectRawLayerBuildInput",
@@ -105,9 +128,9 @@ __all__ = [
     "LayerObjectReadBackend",
     "HostLoadState",
     "LayerExtent",
-    "ChunkedLayerBuffer",
-    "HostLayout",
-    "LayerChunk",
+    "ChunkLayerBuffer",
+    "SingleLayerChunkBuffers",
+    "SingleLayerKVBuffer",
     "LayerwiseReuseStream",
     "LayerwiseCalibrationModel",
     "LayerBuildInput",
@@ -118,7 +141,7 @@ __all__ = [
     "LocalDiskLayerBuildInput",
     "MetadataManager",
     "OfflineOffsetBackend",
-    "ParsedContextSegment",
+    "ParsedSkillPayload",
     "PROFILE_ENABLED",
     "PROFILE_MARKER",
     "ReadStrategy",
@@ -140,15 +163,15 @@ __all__ = [
     "StorageLoader",
     "StorageBackend",
     "SOURCE_ARTIFACT_TYPE",
-    "build_context_segment_token_identity",
+    "build_skill_token_identity",
     "generation_sidecar_path",
     "fingerprint_model",
     "fingerprint_token_ids",
     "fingerprint_tokenizer",
-    "parse_context_segment",
+    "parse_skill_payload",
     "publish_generation_sidecar",
     "publish_cache_snapshot",
     "publish_local_disk_snapshot",
-    "render_context_segment",
+    "render_skill_payload",
     "profile_event",
 ]

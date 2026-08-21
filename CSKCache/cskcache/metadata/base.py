@@ -2,24 +2,27 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
 import re
 
+from ..chunking import ChunkingMode, ChunkingSpec, build_chunk_plan
+from ..layouts import KVLayout, build_layout_plan
+
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 SOURCE_ARTIFACT_TYPE = "cskcache_source_object"
 RAW_BUILD_CHECKPOINT_TYPE = "cskcache_raw_build_checkpoint"
-CONTEXT_SEGMENT_FORMAT = "context_segment_v1"
+SKILL_PAYLOAD_FORMAT = "context_segment_v1"
 
 
 @dataclass(frozen=True)
-class ContextSegmentTokenIdentity:
-    """Exact Context Segment text and token identity of one source object."""
+class SkillTokenIdentity:
+    """Exact Skill payload text and token identity of one source object."""
 
-    context_format: str
+    payload_format: str
     observation_text: str
     cache_text: str
     token_ids: tuple[int, ...]
@@ -29,8 +32,8 @@ class ContextSegmentTokenIdentity:
     start_marker_token_ids_sha256: str
 
     def validate(self) -> None:
-        if self.context_format != CONTEXT_SEGMENT_FORMAT:
-            raise ValueError(f"unsupported context_format: {self.context_format!r}")
+        if self.payload_format != SKILL_PAYLOAD_FORMAT:
+            raise ValueError(f"unsupported payload_format: {self.payload_format!r}")
         for field in ("observation_text", "cache_text", "start_marker_text"):
             _require_text(getattr(self, field), field)
         if self.cache_text != self.observation_text + "\n":
@@ -248,6 +251,10 @@ class CacheObjectMetadata:
     container_id: str | None
     read_strategy: ReadStrategy
     layers: tuple[LayerExtent, ...]
+    chunking: ChunkingSpec = field(
+        default_factory=lambda: ChunkingSpec(ChunkingMode.WHOLE_SKILL)
+    )
+    storage_layout: KVLayout = KVLayout.CHUNK_SINGLE_LAYER
     storage_backend: StorageBackend = StorageBackend.RAW_BLOCK
     status: CacheObjectStatus = CacheObjectStatus.ACTIVE
 
@@ -277,6 +284,22 @@ class CacheObjectMetadata:
             raise ValueError(f"unsupported storage backend: {self.storage_backend}")
         if self.token_count <= 0:
             raise ValueError("token_count must be > 0")
+        chunk_plan = build_chunk_plan(self.token_count, self.chunking)
+        layout_plan = build_layout_plan(
+            self.storage_layout,
+            chunk_plan,
+            expected_layers,
+        )
+        if len(layout_plan.regions) != expected_layers or any(
+            region.layer_count != 1
+            or region.token_start != 0
+            or region.token_end != self.token_count
+            for region in layout_plan.regions
+        ):
+            raise ValueError(
+                "the current persistent Catalog encodes one complete Skill "
+                "region per model layer"
+            )
         if self.source_position_start < 0:
             raise ValueError("source_position_start must be >= 0")
         _require_sha256(self.token_ids_sha256, "token_ids_sha256")
@@ -356,6 +379,8 @@ class CacheObjectMetadata:
             "container_id": self.container_id,
             "storage_backend": self.storage_backend.value,
             "read_strategy": self.read_strategy.value,
+            "chunking": self.chunking.to_dict(),
+            "storage_layout": self.storage_layout.value,
             "layers": [
                 layer.to_dict()
                 for layer in sorted(self.layers, key=lambda x: x.layer_id)
@@ -380,8 +405,11 @@ class CacheObjectMetadata:
             "layers",
             "status",
             "storage_backend",
+            "chunking",
+            "storage_layout",
         }
-        if set(payload) != expected:
+        legacy = expected - {"chunking", "storage_layout"}
+        if set(payload) not in (expected, legacy):
             raise ValueError(
                 f"CacheObjectMetadata fields differ: expected={sorted(expected)}, "
                 f"actual={sorted(payload)}"
@@ -406,6 +434,14 @@ class CacheObjectMetadata:
             storage_backend=StorageBackend(str(payload["storage_backend"])),
             read_strategy=ReadStrategy(str(payload["read_strategy"])),
             layers=tuple(LayerExtent.from_dict(item) for item in payload["layers"]),
+            chunking=(
+                ChunkingSpec(ChunkingMode.WHOLE_SKILL)
+                if "chunking" not in payload
+                else ChunkingSpec.from_dict(payload["chunking"])
+            ),
+            storage_layout=KVLayout(
+                payload.get("storage_layout", KVLayout.CHUNK_SINGLE_LAYER.value)
+            ),
             status=CacheObjectStatus(str(payload["status"])),
         )
 

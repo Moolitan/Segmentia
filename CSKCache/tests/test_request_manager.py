@@ -70,6 +70,18 @@ class RecordingPool:
         self.acquire_calls += 1
         return tuple(Destination(bytearray(item.length_bytes)) for item in extents)
 
+    def acquire_persistent(
+        self, extents: Sequence[LayerExtent]
+    ) -> Sequence[Destination]:
+        return self.acquire(extents)
+
+    def arrange_loaded_layers(
+        self,
+        _extents: Sequence[LayerExtent],
+        persistent_layer_regions: Sequence[Any],
+    ) -> Sequence[Any]:
+        return tuple(persistent_layer_regions)
+
     def release(self, memory_objects: Sequence[Any]) -> None:
         assert memory_objects
         self.release_calls += 1

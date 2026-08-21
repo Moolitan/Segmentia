@@ -20,3 +20,6 @@ __all__ = [
     "RuntimeReuseState",
     "VerifiedRequestBinding",
 ]
+from .validator import validate_catalog_layout
+
+__all__ = ["validate_catalog_layout"]

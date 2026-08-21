@@ -16,7 +16,8 @@ from ..base import (
     infer_read_strategy,
 )
 from ..manager import MetadataManager
-from ...storage.raw_block import publish_generation_sidecar
+from ...storage.backends.raw_block import publish_generation_sidecar
+from ...storage.formats.raw_container import validate_region_extent
 from .base import (
     CacheObjectBuildInput,
     DirectRawCacheObjectBuildInput,
@@ -96,6 +97,8 @@ class CacheBuilder:
             container_id=self._container.container_id,
             read_strategy=infer_read_strategy(extent_tuple),
             layers=extent_tuple,
+            chunking=source.chunking,
+            storage_layout=source.storage_layout,
         )
         metadata.validate(self._expected_layers, self._container)
         return metadata
@@ -177,18 +180,13 @@ class DirectRawCacheBuilder:
                     f"LMCache has no direct raw offset for layer {layer.layer_id}"
                 )
             payload_offset = int(slot_offset) + self._container.header_bytes
-            if payload_offset % self._container.alignment_bytes != 0:
-                raise ValueError(
-                    f"layer {layer.layer_id} payload offset is not aligned"
-                )
-            if (
-                payload_offset < self._container.header_bytes
-                or payload_offset + layer.length_bytes
-                > self._container.capacity_bytes
-            ):
-                raise ValueError(
-                    f"layer {layer.layer_id} payload exceeds the raw container"
-                )
+            validate_region_extent(
+                offset_bytes=payload_offset,
+                length_bytes=layer.length_bytes,
+                alignment_bytes=self._container.alignment_bytes,
+                capacity_bytes=self._container.capacity_bytes,
+                minimum_offset_bytes=self._container.header_bytes,
+            )
             verified_layers.append(
                 LayerBuildInput(
                     layer_id=layer.layer_id,
@@ -215,6 +213,8 @@ class DirectRawCacheBuilder:
             token_ids_sha256=source.token_ids_sha256,
             start_marker_token_ids=source.start_marker_token_ids,
             layers=tuple(verified_layers),
+            chunking=source.chunking,
+            storage_layout=source.storage_layout,
         )
         return CacheBuilder(
             self._backend,
@@ -336,4 +336,3 @@ def publish_cache_snapshot(
             os.close(directory_fd)
     finally:
         temporary.unlink(missing_ok=True)
-

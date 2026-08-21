@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from cskcache import ChunkedLayerBuffer, LayerChunk, ReusePlan
+from cskcache import ChunkLayerBuffer, ReusePlan, SingleLayerChunkBuffers
 from cskcache.integrations.lmcache.worker import (
     _CSKCalibrationBlender,
     _LMCacheCSKLayerStream,
@@ -105,12 +105,12 @@ def test_lmcache_layer_stream_sends_chunk_segments_for_each_layer() -> None:
         [_Buffer(4), _Buffer(4), _Buffer(2)],
     ]
     groups = [
-        ChunkedLayerBuffer(
+        SingleLayerChunkBuffers(
             tuple(
-                LayerChunk(start, end, memory_obj)
-                for (start, end), memory_obj in zip(
+                ChunkLayerBuffer(chunk_id, start, end, memory_obj)
+                for chunk_id, ((start, end), memory_obj) in enumerate(zip(
                     ((0, 4), (4, 8), (8, 10)), objects, strict=True
-                )
+                ))
             )
         )
         for objects in layer_objects
@@ -170,4 +170,3 @@ def test_calibration_blender_assembles_dynamic_prefix_and_fresh_kv() -> None:
     assert torch.equal(fresh_key, torch.full((3, 4), 6.0))
     assert torch.equal(fresh_value, torch.full((3, 4), 2.0))
     blender.finish()
-

@@ -10,7 +10,7 @@ import torch
 from ...execution.executor import CSKCacheReuseExecutor
 from ...profile import PROFILE_ENABLED, profile_event
 from ...runtime.base import ReusePlan
-from ...storage.layouts.base import ChunkedLayerBuffer
+from ...host_memory.transfers import bind_layer_buffers
 from lmcache import torch_device_type
 from lmcache.v1.compute.models.utils import (
     VLLMModelTracker,
@@ -223,67 +223,48 @@ class _LMCacheCSKLayerStream:
         )
         if not 0 <= source_position_start < source_position_start + token_count:
             raise ValueError("CSKCache source position range is invalid")
-        layer_segments: list[tuple[tuple[int, int, Any], ...]] = []
-        expected_spans: tuple[tuple[int, int], ...] | None = None
-        for layer_buffer in self._buffers:
-            if isinstance(layer_buffer, ChunkedLayerBuffer):
-                segments = tuple(
-                    (
-                        segment.token_start,
-                        segment.token_end,
-                        segment.memory_obj,
-                    )
-                    for segment in layer_buffer.chunks
-                )
-            else:
-                segments = ((0, token_count, layer_buffer),)
-            spans = tuple((start, end) for start, end, _obj in segments)
-            if expected_spans is None:
-                expected_spans = spans
-            elif spans != expected_spans:
-                raise ValueError(
-                    "CSKCache layer buffers have different token segments"
-                )
-            cursor = 0
-            for token_start, token_end, memory_obj in segments:
-                if token_start != cursor or not token_start < token_end <= token_count:
-                    raise ValueError(
-                        "CSKCache layer buffer segments are not contiguous"
-                    )
+        bound_transfer = bind_layer_buffers(
+            self._buffers,
+            token_count=token_count,
+        )
+        for step, objects in zip(
+            bound_transfer.plan.steps,
+            bound_transfer.layer_objects,
+            strict=True,
+        ):
+            for source, memory_obj in zip(step.slices, objects, strict=True):
                 tensor = memory_obj.tensor
-                if tensor is None or tensor.shape[1] != token_end - token_start:
-                    raise ValueError(
-                        "CSKCache layer buffer token count is invalid"
-                    )
+                if (
+                    tensor is None
+                    or tensor.shape[1] != source.token_end - source.token_start
+                ):
+                    raise ValueError("host buffer token count is invalid")
                 memory_obj.metadata.cached_positions = torch.arange(
-                    source_position_start + token_start,
-                    source_position_start + token_end,
+                    source_position_start + source.token_start,
+                    source_position_start + source.token_end,
                     dtype=torch.int64,
                     device=tensor.device,
                 )
-                cursor = token_end
-            if cursor != token_count:
-                raise ValueError(
-                    "CSKCache layer buffer segments do not cover the object"
-                )
-            layer_segments.append(segments)
 
-        assert expected_spans is not None
+        first_step = bound_transfer.plan.steps[0]
         transfer_indices = tuple(
             index
-            for index, (token_start, _token_end) in enumerate(expected_spans)
-            if plan.segment_start + token_start < plan.reuse_end
+            for index, source in enumerate(first_step.slices)
+            if plan.segment_start + source.token_start < plan.reuse_end
         )
         self._transfer_objects = tuple(
-            tuple(segments[index][2] for index in transfer_indices)
-            for segments in layer_segments
+            tuple(objects[index] for index in transfer_indices)
+            for objects in bound_transfer.layer_objects
         )
         transfer_starts = [
-            plan.segment_start + expected_spans[index][0]
+            plan.segment_start + first_step.slices[index].token_start
             for index in transfer_indices
         ]
         transfer_ends = [
-            min(plan.segment_start + expected_spans[index][1], plan.reuse_end)
+            min(
+                plan.segment_start + first_step.slices[index].token_end,
+                plan.reuse_end,
+            )
             for index in transfer_indices
         ]
 

@@ -6,7 +6,7 @@ import threading
 import time
 from typing import Sequence
 
-from ..metadata.context_segment import parse_context_segment
+from ..metadata.skill_format import parse_skill_payload
 from ..metadata.fingerprint import fingerprint_token_ids
 from ..metadata.manager import MetadataManager
 from .base import (
@@ -454,11 +454,11 @@ class RequestManager:
     ) -> bool:
         if tool_name != "skill" or not isinstance(content, str):
             return False
-        segment = parse_context_segment(content)
-        if segment is None:
+        payload = parse_skill_payload(content)
+        if payload is None:
             return False
         cache_object = self._metadata_manager.get_object(state.cache_object_id)
-        return segment.skill_name == cache_object.skill_name
+        return payload.skill_name == cache_object.skill_name
 
     @staticmethod
     def _locate_authenticated_span(prompt_token_ids, cache_object):

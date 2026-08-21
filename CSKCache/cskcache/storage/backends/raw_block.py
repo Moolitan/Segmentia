@@ -8,9 +8,9 @@ from typing import Any
 import json
 import os
 
-from ..metadata.base import ContainerMetadata, StorageBackend
-from ..metadata.manager import MetadataManager
-from .base import (
+from ...metadata.base import ContainerMetadata, StorageBackend
+from ...metadata.manager import MetadataManager
+from ..base import (
     CSKReadBatch,
     CSKReadResult,
     ExtentReadBackend,
@@ -121,15 +121,22 @@ class RawBlockLoader:
         assert metadata.container_id is not None
         container = self._metadata_manager.get_container(metadata.container_id)
         self.validate_container(container)
-        memory_objects = tuple(self._host_buffer_pool.acquire(batch.extents))
-        if len(memory_objects) != len(batch.extents):
-            self._host_buffer_pool.release(memory_objects)
+        source_objects = tuple(
+            self._host_buffer_pool.acquire_persistent(batch.extents)
+        )
+        if len(source_objects) != len(batch.extents):
+            self._host_buffer_pool.release(source_objects)
             raise RuntimeError("host buffer pool returned an incomplete layer group")
-        read_result = self.read_into(batch, memory_objects)
+        read_result = self.read_into(batch, source_objects)
         if not read_result.complete:
-            self._host_buffer_pool.release(memory_objects)
+            self._host_buffer_pool.release(source_objects)
             raise RuntimeError("raw_block returned an incomplete layer group")
-        return memory_objects
+        return tuple(
+            self._host_buffer_pool.arrange_loaded_layers(
+                batch.extents,
+                source_objects,
+            )
+        )
 
     @staticmethod
     def _validate_generation_sidecar(container: ContainerMetadata) -> None:

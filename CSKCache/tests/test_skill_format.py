@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from cskcache import (
-    build_context_segment_token_identity,
-    parse_context_segment,
-    render_context_segment,
+    build_skill_token_identity,
+    parse_skill_payload,
+    render_skill_payload,
 )
 
 
@@ -14,10 +14,10 @@ class ByteTokenizer:
 
 
 def test_render_and_parse_round_trip_with_tool_resource_suffix() -> None:
-    rendered = render_context_segment('internal&"comms', "skill body")
+    rendered = render_skill_payload('internal&"comms', "skill body")
     observation = rendered + "\n--- Skill Resources ---\n  examples/: guide.md"
 
-    parsed = parse_context_segment(observation)
+    parsed = parse_skill_payload(observation)
 
     assert parsed is not None
     assert parsed.skill_name == 'internal&"comms'
@@ -26,16 +26,16 @@ def test_render_and_parse_round_trip_with_tool_resource_suffix() -> None:
 
 
 def test_parser_rejects_missing_or_ambiguous_segment() -> None:
-    assert parse_context_segment("plain Skill text") is None
+    assert parse_skill_payload("plain Skill text") is None
     duplicated = (
-        render_context_segment("one", "body")
-        + render_context_segment("two", "body")
+        render_skill_payload("one", "body")
+        + render_skill_payload("two", "body")
     )
-    assert parse_context_segment(duplicated) is None
+    assert parse_skill_payload(duplicated) is None
 
 
 def test_token_identity_includes_only_the_tool_boundary_newline() -> None:
-    identity = build_context_segment_token_identity(
+    identity = build_skill_token_identity(
         ByteTokenizer(),
         "internal-comms",
         "skill body\n",

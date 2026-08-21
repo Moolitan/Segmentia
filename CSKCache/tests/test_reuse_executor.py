@@ -8,8 +8,8 @@ import torch
 from cskcache import (
     CSKCacheReuseExecutor,
     ContextAwareKVCorrector,
-    ChunkedLayerBuffer,
-    LayerChunk,
+    ChunkLayerBuffer,
+    SingleLayerChunkBuffers,
     ReusePlan,
 )
 
@@ -108,14 +108,15 @@ class FakeDataPlane:
         self,
         layers: int,
         *,
-        chunk_major: bool = False,
+        chunk_single_layer: bool = False,
         fail_layer: int | None = None,
     ) -> None:
-        if chunk_major:
+        if chunk_single_layer:
             self.buffers = tuple(
-                ChunkedLayerBuffer(
+                SingleLayerChunkBuffers(
                     (
-                        LayerChunk(
+                        ChunkLayerBuffer(
+                            chunk_id=0,
                             token_start=0,
                             token_end=1,
                             memory_obj=SimpleNamespace(layer_id=layer_id),
@@ -193,7 +194,7 @@ class FakeDataPlane:
         self.calls.append(("corrected", ticket, request_id, layer_id))
 
 
-def test_executor_runs_h2d_first_for_full_layer_buffers() -> None:
+def test_executor_runs_h2d_first_for_packed_layer_buffers() -> None:
     data_plane = FakeDataPlane(2)
     executor = CSKCacheReuseExecutor(data_plane, expected_layers=2)
 
@@ -239,8 +240,8 @@ def test_executor_runs_h2d_first_for_full_layer_buffers() -> None:
     )
 
 
-def test_executor_runs_compute_first_for_chunk_major_buffers() -> None:
-    data_plane = FakeDataPlane(2, chunk_major=True)
+def test_executor_runs_compute_first_for_chunk_single_layer_buffers() -> None:
+    data_plane = FakeDataPlane(2, chunk_single_layer=True)
     executor = CSKCacheReuseExecutor(
         data_plane,
         expected_layers=2,
@@ -273,33 +274,6 @@ def test_executor_runs_compute_first_for_chunk_major_buffers() -> None:
     ]
 
 
-def test_executor_rejects_mixed_host_buffer_layouts() -> None:
-    data_plane = FakeDataPlane(2)
-    data_plane.buffers = (
-        data_plane.buffers[0],
-        ChunkedLayerBuffer(
-            (
-                LayerChunk(
-                    token_start=0,
-                    token_end=1,
-                    memory_obj=SimpleNamespace(layer_id=1),
-                ),
-            )
-        ),
-    )
-    executor = CSKCacheReuseExecutor(data_plane, expected_layers=2)
-
-    with pytest.raises(RuntimeError, match="mixed host-buffer layouts"):
-        executor.execute(
-            plan(),
-            token_ids=tuple(range(20)),
-            kvcaches=(torch.empty(0), torch.empty(0)),
-            slot_mapping=torch.arange(20),
-        )
-
-    assert data_plane.stream.calls == []
-
-
 def test_executor_rejects_unknown_execution_order() -> None:
     with pytest.raises(ValueError, match="unsupported CSKCache execution order"):
         CSKCacheReuseExecutor(
@@ -310,19 +284,19 @@ def test_executor_rejects_unknown_execution_order() -> None:
 
 
 @pytest.mark.parametrize(
-    ("chunk_major", "execution_order", "earlier", "later"),
+    ("chunk_single_layer", "execution_order", "earlier", "later"),
     (
         (False, "compute_first", ("forward", 0), ("submit", 1)),
         (True, "h2d_first", ("submit", 1), ("forward", 0)),
     ),
 )
 def test_execution_order_is_independent_of_host_layout(
-    chunk_major: bool,
+    chunk_single_layer: bool,
     execution_order: str,
     earlier: tuple[object, ...],
     later: tuple[object, ...],
 ) -> None:
-    data_plane = FakeDataPlane(2, chunk_major=chunk_major)
+    data_plane = FakeDataPlane(2, chunk_single_layer=chunk_single_layer)
     executor = CSKCacheReuseExecutor(
         data_plane,
         expected_layers=2,

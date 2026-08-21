@@ -1,5 +1,5 @@
-"""Skill KV loading and pinned-host-buffer management.
+"""Persistent Skill KV formats, backends, and SSD load plans.
 
 The public storage contracts live in :mod:`cskcache.storage.base`; concrete
-backends and managers are intentionally not imported during package startup.
+Host allocation and H2D live in :mod:`cskcache.host_memory`.
 """

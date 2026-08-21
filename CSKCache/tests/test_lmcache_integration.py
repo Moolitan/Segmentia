@@ -11,7 +11,7 @@ import torch
 from cskcache.integrations.lmcache import runtime as lmcache_runtime
 from cskcache import (
     CacheObjectMetadata,
-    ChunkedLayerBuffer,
+    SingleLayerChunkBuffers,
     LMCacheHostBufferPool,
     LMCacheLayerObjectReader,
     LayerExtent,
@@ -128,10 +128,10 @@ def test_lmcache_pool_uses_one_nonblocking_batched_allocation() -> None:
     assert fmt is MemoryFormat.KV_2TD
     assert eviction is True
     assert busy_loop is False
-    assert all(item.used_sizes == [] for item in objects)
+    assert all(item.memory_obj.used_sizes == [] for item in objects)
 
     pool.release(objects)
-    assert all(item.release_calls == 1 for item in objects)
+    assert all(item.memory_obj.release_calls == 1 for item in objects)
 
 
 def test_local_disk_reader_submits_all_skill_layers_through_layerwise_api() -> None:
@@ -240,19 +240,20 @@ def test_local_disk_reader_registers_catalog_layers() -> None:
 
 def test_lmcache_pool_fails_instead_of_waiting_when_capacity_is_unavailable() -> None:
     pool = LMCacheHostBufferPool(fake_local_cpu_backend(allocation_succeeds=False))
-    with pytest.raises(MemoryError, match="full layer group"):
+    with pytest.raises(MemoryError, match="complete layers"):
         pool.acquire([make_extent(0), make_extent(1)])
 
 
-def test_lmcache_pool_allocates_chunk_major_with_separate_method() -> None:
+def test_lmcache_pool_allocates_chunk_single_layer_with_separate_method() -> None:
     backend = fake_local_cpu_backend()
     pool = LMCacheHostBufferPool(
         backend,
-        layout="chunk_major",
+        layout="chunk_single_layer",
+        chunking_mode="fixed_size",
         chunk_tokens=4,
     )
 
-    groups = pool.acquire_chunk_layer(
+    groups = pool.acquire_chunk_single_layer(
         [make_extent(0, tokens=10), make_extent(1, tokens=10)]
     )
 
@@ -263,7 +264,7 @@ def test_lmcache_pool_allocates_chunk_major_with_separate_method() -> None:
         torch.Size((2, 2, 64)),
     ]
     assert all(call[2] == 2 for call in backend.calls)
-    assert all(isinstance(group, ChunkedLayerBuffer) for group in groups)
+    assert all(isinstance(group, SingleLayerChunkBuffers) for group in groups)
     assert [
         [(chunk.token_start, chunk.token_end) for chunk in group.chunks]
         for group in groups
@@ -287,11 +288,12 @@ def test_lmcache_chunk_pool_releases_partial_allocation_on_failure() -> None:
     backend = fake_local_cpu_backend(fail_after_calls=1)
     pool = LMCacheHostBufferPool(
         backend,
-        layout="chunk_major",
+        layout="chunk_single_layer",
+        chunking_mode="fixed_size",
         chunk_tokens=4,
     )
 
-    with pytest.raises(MemoryError, match="chunk layer group"):
+    with pytest.raises(MemoryError, match="chunk-layer buffers"):
         pool.acquire([make_extent(0, tokens=10), make_extent(1, tokens=10)])
 
     assert len(backend.object_batches) == 1
@@ -308,14 +310,16 @@ def test_lmcache_pool_accepts_rebound_pages_with_skill_layout() -> None:
 
     objects = pool.acquire(extents)
 
-    assert all(item.get_physical_size() == page_bytes for item in objects)
-    assert [item.get_size() for item in objects] == [
+    assert all(
+        item.memory_obj.get_physical_size() == page_bytes for item in objects
+    )
+    assert [item.memory_obj.get_size() for item in objects] == [
         extent.length_bytes for extent in extents
     ]
-    assert [item.tensor.shape for item in objects] == [
+    assert [item.memory_obj.tensor.shape for item in objects] == [
         torch.Size(extent.shape) for extent in extents
     ]
-    assert all(item.used_sizes == [] for item in objects)
+    assert all(item.memory_obj.used_sizes == [] for item in objects)
 
 
 def test_lmcache_pool_releases_group_when_page_capacity_is_too_small() -> None:
@@ -339,6 +343,9 @@ def test_csk_t0_initialization_resolves_raw_block_plugin_key(monkeypatch) -> Non
     class FakeMetadataManager:
         def __init__(self, path, *, expected_layers):
             captured["metadata"] = (path, expected_layers)
+
+        def list_objects(self):
+            return ()
 
     class FakeHostBufferPool:
         def __init__(self, backend, **kwargs):
@@ -404,8 +411,9 @@ def test_csk_t0_initialization_resolves_raw_block_plugin_key(monkeypatch) -> Non
     assert captured["metadata"] == ("/metadata.json", 40)
     assert captured["local_cpu_backend"] is local_cpu_backend
     assert captured["host_pool_kwargs"] == {
-        "layout": "full_layer",
-        "chunk_tokens": 256,
+        "layout": "chunk_single_layer",
+        "chunking_mode": "whole_skill",
+        "chunk_tokens": None,
     }
     assert captured["raw_backend"] is raw_backend
     assert captured["storage_backend"] == "raw_block"

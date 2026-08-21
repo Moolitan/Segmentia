@@ -102,6 +102,11 @@ class RecordingHostBufferPool:
             Destination(bytearray(extent.length_bytes)) for extent in selected
         )
 
+    def acquire_persistent(
+        self, extents: Sequence[LayerExtent]
+    ) -> Sequence[Destination]:
+        return self.acquire(extents)
+
     def release(self, memory_objects: Sequence[Any]) -> None:
         self.release_calls += 1
         self.released_groups.append(tuple(memory_objects))
@@ -109,9 +114,9 @@ class RecordingHostBufferPool:
     def arrange_loaded_layers(
         self,
         _extents: Sequence[LayerExtent],
-        full_layer_objects: Sequence[Any],
+        persistent_layer_regions: Sequence[Any],
     ) -> Sequence[Any]:
-        return tuple(full_layer_objects)
+        return tuple(persistent_layer_regions)
 
 
 class RecordingLayerObjectBackend:

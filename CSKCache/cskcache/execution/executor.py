@@ -18,7 +18,6 @@ from .corrector import ContextAwareKVCorrector
 from .h2d_first import execute_h2d_first
 from ..profile import PROFILE_ENABLED, profile_event
 from ..runtime.base import ReusePlan
-from ..storage.layouts.base import ChunkedLayerBuffer
 
 
 class CSKCacheReuseExecutor:
@@ -77,12 +76,6 @@ class CSKCacheReuseExecutor:
             profile_t0_event = torch.cuda.Event(enable_timing=True)
             profile_t0_event.record()
             profile_t0_event.synchronize()
-
-        is_chunk_layer = tuple(
-            isinstance(buffer, ChunkedLayerBuffer) for buffer in buffers
-        )
-        if any(is_chunk_layer) and not all(is_chunk_layer):
-            raise RuntimeError("CSKCache returned mixed host-buffer layouts")
 
         stream = self._data_plane.open_layer_stream(
             plan,

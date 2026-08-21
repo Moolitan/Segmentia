@@ -12,8 +12,10 @@ from ...metadata.manager import MetadataManager
 from ...profile import profile_event
 from ...runtime.base import ReusePolicy
 from ...runtime.request_manager import RequestManager
-from ...storage.buffer_pool import LMCacheHostBufferPool, LMCacheLayerObjectReader
+from ...runtime.validator import validate_catalog_layout
+from ...host_memory.pool import LMCacheHostBufferPool
 from ...storage.manager import StorageManager
+from ...storage.backends.local_disk import LMCacheLayerObjectReader
 from lmcache.logging import init_logger
 
 from .base import LMCacheRuntimeSettings
@@ -48,12 +50,30 @@ class LMCacheRuntimeBridge:
                     "csk_storage_backend", "raw_block"
                 )
             ),
-            host_layout=str(
-                config.get_extra_config_value("csk_host_layout", "full_layer")
-            ),
-            host_chunk_tokens=int(
+            chunking_mode=str(
                 config.get_extra_config_value(
-                    "csk_host_chunk_tokens", config.chunk_size
+                    "csk_chunking_mode", "whole_skill"
+                )
+            ),
+            storage_layout=str(
+                config.get_extra_config_value(
+                    "csk_storage_layout", "chunk_single_layer"
+                )
+            ),
+            host_layout=str(
+                config.get_extra_config_value(
+                    "csk_host_layout", "chunk_single_layer"
+                )
+            ),
+            chunk_size_tokens=(
+                None
+                if config.get_extra_config_value(
+                    "csk_chunk_size_tokens", None
+                ) is None
+                else int(
+                    config.get_extra_config_value(
+                        "csk_chunk_size_tokens", None
+                    )
                 )
             ),
             ticket_ttl_seconds=float(
@@ -104,25 +124,21 @@ class LMCacheRuntimeBridge:
             raise ValueError(
                 "selected CSKCache storage backend or LocalCPUBackend is unavailable"
             )
-        if (
-            settings.storage_backend == "raw_block"
-            and settings.host_layout == "chunk_major"
-            and not bool(
-                getattr(raw_backend, "supports_csk_chunk_layer_buffers", False)
-            )
-        ):
-            raise ValueError(
-                "selected raw backend does not support chunk-major host buffers"
-            )
-
         metadata_manager = MetadataManager(
             settings.metadata_path,
             expected_layers=engine.num_layers,
         )
+        validate_catalog_layout(
+            metadata_manager.list_objects(),
+            chunking_mode=settings.chunking_mode,
+            chunk_size_tokens=settings.chunk_size_tokens,
+            storage_layout=settings.storage_layout,
+        )
         host_pool = LMCacheHostBufferPool(
             local_cpu_backend,
             layout=settings.host_layout,
-            chunk_tokens=settings.host_chunk_tokens,
+            chunking_mode=settings.chunking_mode,
+            chunk_tokens=settings.chunk_size_tokens,
         )
         local_disk_reader = (
             LMCacheLayerObjectReader(

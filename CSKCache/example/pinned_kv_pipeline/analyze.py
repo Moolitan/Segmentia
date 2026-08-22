@@ -8,6 +8,14 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 
+COMPUTE_PHASE_FIELDS = (
+    "calibration_forward_ms",
+    "calibration_commit_ms",
+    "residual_correction_ms",
+    "suffix_commit_ms",
+)
+
+
 def _load(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line]
 
@@ -89,6 +97,14 @@ def analyze(run_dir: Path) -> None:
         item for item in records if item["event"] == "cskcache_stage_transform"
     )
     h2d_by_layer = {int(item["layer"]): item for item in h2d}
+    compute_phase_totals = {
+        field: sum(float(item[field]) for item in compute)
+        for field in COMPUTE_PHASE_FIELDS
+    }
+    compute_gpu_ms = sum(
+        item["end_ms"] - item["start_ms"] for item in compute
+    )
+    compute_phase_sum_ms = sum(compute_phase_totals.values())
     (run_dir / "summary.json").write_text(
         json.dumps(
             {
@@ -101,8 +117,14 @@ def analyze(run_dir: Path) -> None:
                 "h2d_cpu_submit_ms": sum(
                     float(item.get("cpu_submit_ms", 0.0)) for item in h2d
                 ),
-                "compute_gpu_ms": sum(
-                    item["end_ms"] - item["start_ms"] for item in compute
+                "compute_gpu_ms": compute_gpu_ms,
+                **{
+                    f"{field.removesuffix('_ms')}_gpu_ms": value
+                    for field, value in compute_phase_totals.items()
+                },
+                "compute_phase_sum_ms": compute_phase_sum_ms,
+                "compute_phase_unattributed_ms": (
+                    compute_gpu_ms - compute_phase_sum_ms
                 ),
                 "stage_transform_gpu_ms": sum(
                     item["end_ms"] - item["start_ms"] for item in transform

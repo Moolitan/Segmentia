@@ -104,7 +104,17 @@ class ReuseExecutionResult:
     correction_alpha: float
 
 
-ComputeEvent = tuple[torch.cuda.Event, torch.cuda.Event]
+@dataclass(frozen=True)
+class LayerComputeEvents:
+    """CUDA event boundaries for one layer's compute/correct/install path."""
+
+    start: torch.cuda.Event
+    calibration_forward_end: torch.cuda.Event
+    calibration_commit_end: torch.cuda.Event
+    residual_correction_end: torch.cuda.Event
+    end: torch.cuda.Event
+
+
 LayerCompute = Callable[
     [
         int,
@@ -113,5 +123,5 @@ LayerCompute = Callable[
         LayerwiseCalibrationModel,
         torch.cuda.Event | None,
     ],
-    ComputeEvent | None,
+    LayerComputeEvents | None,
 ]

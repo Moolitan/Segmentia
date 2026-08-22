@@ -1,9 +1,10 @@
-"""Run the warmed calibration-ratio and chunk-size pinned-KV sweep."""
+"""Run the warmed packed-layout stage-crossover sweep."""
 
 from __future__ import annotations
 
 import csv
 import json
+import math
 import os
 import statistics
 import subprocess
@@ -21,13 +22,13 @@ from sweep_config import (
     CALIBRATION_RATIOS,
     CALIBRATION_TOKEN_ALIGNMENT,
     CASE_RETRIES,
-    CHUNK_SIZE_VALUES,
+    CHUNK_SIZE_TOKENS,
     EXECUTION_ORDERS,
     HOST_LAYOUTS,
     MAX_CONSECUTIVE_FAILURES,
     REPETITIONS,
     RUN_NAME,
-    SKILL_TOKENS,
+    SKILL_TOKEN_VALUES,
     STABLE_LAYER_START,
     STABLE_LAYER_STOP,
     SWEEP_OUTPUT_ROOT,
@@ -39,8 +40,8 @@ EXAMPLE_DIR = Path(__file__).resolve().parent
 RUN_SCRIPT = EXAMPLE_DIR / "run.py"
 EXPECTED_LAYERS = 40
 TOTAL_CASES = (
-    len(CALIBRATION_RATIOS)
-    * len(CHUNK_SIZE_VALUES)
+    len(SKILL_TOKEN_VALUES)
+    * len(CALIBRATION_RATIOS)
     * len(HOST_LAYOUTS)
     * len(EXECUTION_ORDERS)
     * REPETITIONS
@@ -55,6 +56,10 @@ REQUIRED_CASE_FILES = (
 NUMERIC_METRICS = (
     "median_h2d_next_ms",
     "median_layer_adaptation_ms",
+    "median_calibration_forward_ms",
+    "median_calibration_commit_ms",
+    "median_residual_correction_ms",
+    "median_suffix_commit_ms",
     "stable_pair_span_ms",
     "stable_pair_overlap_ms",
     "layer0_adaptation_ms",
@@ -63,6 +68,10 @@ NUMERIC_METRICS = (
     "h2d_gpu_ms",
     "h2d_cpu_submit_ms",
     "adaptation_gpu_ms",
+    "calibration_forward_gpu_ms",
+    "calibration_commit_gpu_ms",
+    "residual_correction_gpu_ms",
+    "suffix_commit_gpu_ms",
     "h2d_overlap_percent",
     "pipeline_span_ms",
     "request_elapsed_ms",
@@ -82,9 +91,9 @@ class CaseSpec:
 
     @property
     def case_id(self) -> str:
-        ratio_percent = round(self.calibration_ratio * 100)
+        ratio_basis_points = round(self.calibration_ratio * 10000)
         return (
-            f"b{self.skill_tokens}_p{ratio_percent:02d}_"
+            f"b{self.skill_tokens}_p{ratio_basis_points:04d}_"
             f"c{self.chunk_size_tokens}_{self.host_layout}_"
             f"{self.execution_order}_r{self.repetition}"
         )
@@ -103,29 +112,31 @@ class CaseSpec:
         }
 
 
-def _calibration_tokens(ratio: float) -> int:
-    unaligned = SKILL_TOKENS * ratio
-    return int(
-        round(unaligned / CALIBRATION_TOKEN_ALIGNMENT)
-        * CALIBRATION_TOKEN_ALIGNMENT
-    )
+def _calibration_tokens(skill_tokens: int, ratio: float) -> int:
+    unaligned = skill_tokens * ratio
+    return math.floor(
+        unaligned / CALIBRATION_TOKEN_ALIGNMENT + 0.5
+    ) * CALIBRATION_TOKEN_ALIGNMENT
 
 
 def _build_specs() -> list[CaseSpec]:
     specs = []
-    for calibration_ratio in CALIBRATION_RATIOS:
-        calibration_tokens = _calibration_tokens(calibration_ratio)
-        for repetition in range(REPETITIONS):
-            for chunk_size_tokens in CHUNK_SIZE_VALUES:
+    for skill_tokens in SKILL_TOKEN_VALUES:
+        for calibration_ratio in CALIBRATION_RATIOS:
+            calibration_tokens = _calibration_tokens(
+                skill_tokens,
+                calibration_ratio,
+            )
+            for repetition in range(REPETITIONS):
                 for host_layout in HOST_LAYOUTS:
                     for execution_order in EXECUTION_ORDERS:
                         specs.append(
                             CaseSpec(
-                                skill_tokens=SKILL_TOKENS,
+                                skill_tokens=skill_tokens,
                                 calibration_ratio=calibration_ratio,
                                 calibration_tokens=calibration_tokens,
                                 execution_order=execution_order,
-                                chunk_size_tokens=chunk_size_tokens,
+                                chunk_size_tokens=CHUNK_SIZE_TOKENS,
                                 storage_layout="packed_chunks_single_layer",
                                 host_layout=host_layout,
                                 repetition=repetition,
@@ -211,6 +222,22 @@ def _profile_metrics(path: Path) -> dict[str, float]:
     return {
         "median_h2d_next_ms": statistics.median(h2d_times),
         "median_layer_adaptation_ms": statistics.median(adaptation_times),
+        "median_calibration_forward_ms": statistics.median(
+            adaptation[layer]["calibration_forward_ms"]
+            for layer in stable_layers
+        ),
+        "median_calibration_commit_ms": statistics.median(
+            adaptation[layer]["calibration_commit_ms"]
+            for layer in stable_layers
+        ),
+        "median_residual_correction_ms": statistics.median(
+            adaptation[layer]["residual_correction_ms"]
+            for layer in stable_layers
+        ),
+        "median_suffix_commit_ms": statistics.median(
+            adaptation[layer]["suffix_commit_ms"]
+            for layer in stable_layers
+        ),
         "stable_pair_span_ms": statistics.median(pair_spans),
         "stable_pair_overlap_ms": statistics.median(pair_overlaps),
         "layer0_adaptation_ms": layer0,
@@ -248,6 +275,16 @@ def _measure_case(spec: CaseSpec, run_dir: Path) -> dict[str, Any]:
         "h2d_gpu_ms": h2d_total,
         "h2d_cpu_submit_ms": float(summary["h2d_cpu_submit_ms"]),
         "adaptation_gpu_ms": float(summary["compute_gpu_ms"]),
+        "calibration_forward_gpu_ms": float(
+            summary["calibration_forward_gpu_ms"]
+        ),
+        "calibration_commit_gpu_ms": float(
+            summary["calibration_commit_gpu_ms"]
+        ),
+        "residual_correction_gpu_ms": float(
+            summary["residual_correction_gpu_ms"]
+        ),
+        "suffix_commit_gpu_ms": float(summary["suffix_commit_gpu_ms"]),
         "h2d_overlap_percent": (
             min(100.0, 100.0 * overlap_ms / h2d_total)
             if h2d_total > 0.0
@@ -300,63 +337,158 @@ def _aggregate(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return output
 
 
-def _plot_pipeline(rows: list[dict[str, Any]]) -> None:
-    colors = {"h2d_first": "#4C78A8", "compute_first": "#E45756"}
-    linestyles = {
-        "chunk_single_layer": "-",
-        "packed_chunks_single_layer": "--",
-    }
-    layout_labels = {
-        "chunk_single_layer": "Chunk-single-layer",
-        "packed_chunks_single_layer": "Packed-chunks-single-layer",
-    }
+def _estimate_balance_points(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output = []
+    for skill_tokens in SKILL_TOKEN_VALUES:
+        points = sorted(
+            (
+                {
+                    "nominal_ratio": float(row["calibration_ratio"]),
+                    "actual_ratio": (
+                        float(row["calibration_tokens"])
+                        / skill_tokens
+                    ),
+                    "calibration_tokens": float(row["calibration_tokens"]),
+                    "compute_ms": float(
+                        row["median_layer_adaptation_ms_median"]
+                    ),
+                    "h2d_ms": float(row["median_h2d_next_ms_median"]),
+                }
+                for row in rows
+                if int(row["skill_tokens"]) == skill_tokens
+                and row["execution_order"] == "compute_first"
+            ),
+            key=lambda point: point["actual_ratio"],
+        )
+        crossing = None
+        for left, right in zip(points, points[1:], strict=False):
+            left_gap = left["compute_ms"] - left["h2d_ms"]
+            right_gap = right["compute_ms"] - right["h2d_ms"]
+            if left_gap == 0.0:
+                crossing = (left, left, 0.0)
+                break
+            if left_gap * right_gap <= 0.0:
+                weight = -left_gap / (right_gap - left_gap)
+                crossing = (left, right, weight)
+                break
+        if crossing is None:
+            gaps = [point["compute_ms"] - point["h2d_ms"] for point in points]
+            status = (
+                "compute_always_longer"
+                if all(gap > 0.0 for gap in gaps)
+                else "h2d_always_longer"
+            )
+            output.append(
+                {
+                    "skill_tokens": skill_tokens,
+                    "status": status,
+                    "estimated_balance_ratio": "",
+                    "estimated_balance_percent": "",
+                    "estimated_calibration_tokens": "",
+                    "left_nominal_ratio": "",
+                    "right_nominal_ratio": "",
+                }
+            )
+            continue
+        left, right, weight = crossing
+        estimated_ratio = left["actual_ratio"] + weight * (
+            right["actual_ratio"] - left["actual_ratio"]
+        )
+        output.append(
+            {
+                "skill_tokens": skill_tokens,
+                "status": "interpolated",
+                "estimated_balance_ratio": estimated_ratio,
+                "estimated_balance_percent": 100.0 * estimated_ratio,
+                "estimated_calibration_tokens": left["calibration_tokens"]
+                + weight
+                * (right["calibration_tokens"] - left["calibration_tokens"]),
+                "left_nominal_ratio": left["nominal_ratio"],
+                "right_nominal_ratio": right["nominal_ratio"],
+            }
+        )
+    return output
+
+
+def _plot_stage_crossover(
+    rows: list[dict[str, Any]],
+    balance_points: list[dict[str, Any]],
+) -> None:
+    colors = {"h2d": "#4C78A8", "compute": "#E45756"}
     fig, axes = plt.subplots(
         1,
-        len(CALIBRATION_RATIOS),
-        figsize=(10.2, 3.25),
-        sharex=True,
+        len(SKILL_TOKEN_VALUES),
+        figsize=(7.2, 3.25),
         sharey=True,
     )
-    x_positions = range(len(CHUNK_SIZE_VALUES))
-    x_labels = [
-        "8K\n(one chunk)" if value == SKILL_TOKENS else (
-            f"{value // 1024}K" if value >= 1024 else str(value)
+    balances = {int(row["skill_tokens"]): row for row in balance_points}
+    for axis, skill_tokens in zip(axes, SKILL_TOKEN_VALUES, strict=True):
+        points = sorted(
+            (
+                row
+                for row in rows
+                if int(row["skill_tokens"]) == skill_tokens
+                and row["execution_order"] == "compute_first"
+            ),
+            key=lambda row: float(row["calibration_ratio"]),
         )
-        for value in CHUNK_SIZE_VALUES
-    ]
-    for axis, ratio in zip(axes, CALIBRATION_RATIOS, strict=True):
-        for host_layout in HOST_LAYOUTS:
-            for order in EXECUTION_ORDERS:
-                points = [
-                    next(
-                        row
-                        for row in rows
-                        if float(row["calibration_ratio"]) == ratio
-                        and int(row["chunk_size_tokens"]) == chunk_size
-                        and row["host_layout"] == host_layout
-                        and row["execution_order"] == order
-                    )
-                    for chunk_size in CHUNK_SIZE_VALUES
-                ]
-                axis.plot(
-                    x_positions,
-                    [row["pipeline_span_ms_median"] for row in points],
-                    marker="o",
-                    markersize=4.5,
-                    linewidth=1.5,
-                    linestyle=linestyles[host_layout],
-                    color=colors[order],
-                    label=(
-                        f"{order.replace('_', '-').title()} · "
-                        f"{layout_labels[host_layout]}"
-                    ),
-                )
-        axis.set_title(f"Calibration ratio = {ratio:.0%}", fontsize=9)
-        axis.set_xticks(x_positions, x_labels)
-        axis.set_xlabel("Chunk size (tokens)", fontsize=8)
+        x_values = [
+            100.0 * float(row["calibration_tokens"]) / skill_tokens
+            for row in points
+        ]
+        for metric, label in (
+            ("median_h2d_next_ms", "Pinned CPU to GPU"),
+            ("median_layer_adaptation_ms", "Calibration compute"),
+        ):
+            medians = [float(row[f"{metric}_median"]) for row in points]
+            stds = [float(row[f"{metric}_std"]) for row in points]
+            series = "h2d" if metric == "median_h2d_next_ms" else "compute"
+            axis.plot(
+                x_values,
+                medians,
+                marker="o",
+                markersize=4.5,
+                linewidth=1.5,
+                color=colors[series],
+                label=label,
+            )
+            axis.fill_between(
+                x_values,
+                [median - std for median, std in zip(medians, stds, strict=True)],
+                [median + std for median, std in zip(medians, stds, strict=True)],
+                color=colors[series],
+                alpha=0.10,
+                linewidth=0,
+            )
+        balance = balances[skill_tokens]
+        if balance["status"] == "interpolated":
+            ratio_percent = float(balance["estimated_balance_percent"])
+            axis.axvline(
+                ratio_percent,
+                color="#555555",
+                linestyle="--",
+                linewidth=1.0,
+            )
+            axis.text(
+                ratio_percent,
+                0.96,
+                f"Balance ≈ {ratio_percent:.2f}%",
+                transform=axis.get_xaxis_transform(),
+                ha="center",
+                va="top",
+                fontsize=7,
+                color="#444444",
+            )
+        skill_label = (
+            f"{skill_tokens // 1024}K"
+            if skill_tokens % 1024 == 0
+            else f"{skill_tokens / 1000:g}K"
+        )
+        axis.set_title(f"Skill length = {skill_label} tokens", fontsize=9)
+        axis.set_xlabel("Calibration ratio (%)", fontsize=8)
         axis.tick_params(axis="both", labelsize=7)
         axis.grid(alpha=0.18)
-    axes[0].set_ylabel("Latency (ms)", fontsize=8)
+    axes[0].set_ylabel("Per-layer latency (ms)", fontsize=8)
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(
         handles,
@@ -368,10 +500,10 @@ def _plot_pipeline(rows: list[dict[str, Any]]) -> None:
     )
     fig.tight_layout(rect=(0, 0, 1, 0.84), w_pad=0.8)
     fig.savefig(
-        SWEEP_OUTPUT_ROOT / "calibration_ratio_chunk_sweep.png",
+        SWEEP_OUTPUT_ROOT / "stage_crossover_ratio_sweep.png",
         dpi=240,
     )
-    fig.savefig(SWEEP_OUTPUT_ROOT / "calibration_ratio_chunk_sweep.pdf")
+    fig.savefig(SWEEP_OUTPUT_ROOT / "stage_crossover_ratio_sweep.pdf")
     plt.close(fig)
 
 
@@ -444,16 +576,19 @@ def _prepare_root(specs: list[CaseSpec]) -> tuple[Path, Path, Path]:
         (SWEEP_OUTPUT_ROOT / name).mkdir(exist_ok=True)
     experiment = {
         "run_name": RUN_NAME,
-        "skill_tokens": SKILL_TOKENS,
+        "skill_token_values": list(SKILL_TOKEN_VALUES),
         "warmup_requests": WARMUP_REQUESTS,
         "repetitions": REPETITIONS,
         "calibration_ratios": list(CALIBRATION_RATIOS),
         "calibration_token_alignment": CALIBRATION_TOKEN_ALIGNMENT,
         "calibration_tokens": {
-            f"{ratio:.2f}": _calibration_tokens(ratio)
-            for ratio in CALIBRATION_RATIOS
+            str(skill_tokens): {
+                f"{ratio:.2f}": _calibration_tokens(skill_tokens, ratio)
+                for ratio in CALIBRATION_RATIOS
+            }
+            for skill_tokens in SKILL_TOKEN_VALUES
         },
-        "chunk_size_values": list(CHUNK_SIZE_VALUES),
+        "chunk_size_tokens": CHUNK_SIZE_TOKENS,
         "host_layouts": list(HOST_LAYOUTS),
         "execution_orders": list(EXECUTION_ORDERS),
         "cases": [asdict(spec) for spec in specs],
@@ -482,11 +617,19 @@ def _write_results(rows: list[dict[str, Any]], failed: list[str]) -> None:
         },
     )
     if len(rows) == TOTAL_CASES:
-        _plot_pipeline(aggregate)
+        balance_points = _estimate_balance_points(aggregate)
+        _write_csv(SWEEP_OUTPUT_ROOT / "balance_points.csv", balance_points)
+        _plot_stage_crossover(aggregate, balance_points)
 
 
 def main() -> None:
-    if PREFIX_TOKENS + SKILL_TOKENS + TAIL_TOKENS + MAX_TOKENS > MAX_MODEL_LEN:
+    if (
+        PREFIX_TOKENS
+        + max(SKILL_TOKEN_VALUES)
+        + TAIL_TOKENS
+        + MAX_TOKENS
+        > MAX_MODEL_LEN
+    ):
         raise ValueError("MAX_MODEL_LEN is smaller than the sweep request")
     specs = _build_specs()
     specs_dir, cases_dir, logs_dir = _prepare_root(specs)

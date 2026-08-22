@@ -1,21 +1,18 @@
-"""Configuration for the calibration-ratio and chunk-size sweep."""
+"""Configuration for the packed-layout stage crossover sweep."""
 
 from config import OUTPUT_ROOT
 
 
-RUN_NAME = "pipeline_calibration_ratio_chunk_sweep_v1"
+RUN_NAME = "pipeline_stage_crossover_ratio_v1"
 
-SKILL_TOKENS = 8192
-CALIBRATION_RATIOS = (0.05, 0.10, 0.15)
+SKILL_TOKEN_VALUES = (8192, 12000)
+CALIBRATION_RATIOS = (0.01, 0.015, 0.02, 0.025, 0.03)
 CALIBRATION_TOKEN_ALIGNMENT = 16
-CHUNK_SIZE_VALUES = (64, 128, 256, 512, 1024, SKILL_TOKENS)
-HOST_LAYOUTS = (
-    "chunk_single_layer",
-    "packed_chunks_single_layer",
-)
-EXECUTION_ORDERS = ("h2d_first", "compute_first")
+CHUNK_SIZE_TOKENS = 256
+HOST_LAYOUTS = ("packed_chunks_single_layer",)
+EXECUTION_ORDERS = ("compute_first",)
 WARMUP_REQUESTS = 1
-REPETITIONS = 1
+REPETITIONS = 3
 
 CASE_RETRIES = 1
 MAX_CONSECUTIVE_FAILURES = 3

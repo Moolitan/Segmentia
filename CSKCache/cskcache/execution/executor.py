@@ -8,6 +8,7 @@ import torch
 
 from .base import (
     ExecutionOrder,
+    LayerComputeEvents,
     LayerwiseCalibrationModel,
     LayerwiseReuseStream,
     ReuseDataPlane,
@@ -125,11 +126,31 @@ class CSKCacheReuseExecutor:
                     calibration_correct_install=[
                         {
                             "layer": event_layer_id,
-                            "gpu_ms": start.elapsed_time(end),
-                            "start_ms": profile_t0_event.elapsed_time(start),
-                            "end_ms": profile_t0_event.elapsed_time(end),
+                            "gpu_ms": events.start.elapsed_time(events.end),
+                            "start_ms": profile_t0_event.elapsed_time(
+                                events.start
+                            ),
+                            "end_ms": profile_t0_event.elapsed_time(events.end),
+                            "calibration_forward_ms": events.start.elapsed_time(
+                                events.calibration_forward_end
+                            ),
+                            "calibration_commit_ms": (
+                                events.calibration_forward_end.elapsed_time(
+                                    events.calibration_commit_end
+                                )
+                            ),
+                            "residual_correction_ms": (
+                                events.calibration_commit_end.elapsed_time(
+                                    events.residual_correction_end
+                                )
+                            ),
+                            "suffix_commit_ms": (
+                                events.residual_correction_end.elapsed_time(
+                                    events.end
+                                )
+                            ),
                         }
-                        for event_layer_id, start, end in compute_events
+                        for event_layer_id, events in compute_events
                     ],
                 )
         except Exception:
@@ -152,21 +173,16 @@ class CSKCacheReuseExecutor:
         stream: LayerwiseReuseStream,
         calibration_model: LayerwiseCalibrationModel,
         profile_t0_event: torch.cuda.Event | None,
-    ) -> tuple[torch.cuda.Event, torch.cuda.Event] | None:
+    ) -> LayerComputeEvents | None:
 
         calibration_tokens = plan.calibration_end - plan.calibration_start
-        start = (
-            torch.cuda.Event(enable_timing=True)
+        events = (
+            [torch.cuda.Event(enable_timing=True) for _ in range(5)]
             if profile_t0_event is not None
             else None
         )
-        end = (
-            torch.cuda.Event(enable_timing=True)
-            if profile_t0_event is not None
-            else None
-        )
-        if start is not None:
-            start.record()
+        if events is not None:
+            events[0].record()
 
         # C_l(P): actual auxiliary-model forward against the current request
         # prefix, returning position-corrected calibration KV.
@@ -176,12 +192,16 @@ class CSKCacheReuseExecutor:
             raise RuntimeError(
                 f"calibration model ended before layer {layer_id}"
             ) from exc
+        if events is not None:
+            events[1].record()
 
         staged_key = stream.staged_key(layer_id)
         self._data_plane.mark_layer_loaded(plan.ticket, plan.request_id, layer_id)
 
         # Fully recomputed calibration KV becomes part of this request.
         stream.commit_calibration(layer_id, recomputed_key, recomputed_value)
+        if events is not None:
+            events[2].record()
 
         # Estimate the residual from P tokens, correct the remaining offline
         # suffix, and install that suffix into PagedKV.
@@ -192,12 +212,14 @@ class CSKCacheReuseExecutor:
             suffix_offset=calibration_tokens,
             alpha=plan.correction_alpha,
         )
+        if events is not None:
+            events[3].record()
         stream.commit_layer(layer_id)
         self._data_plane.mark_layer_corrected(
             plan.ticket, plan.request_id, layer_id
         )
 
-        if end is None or start is None:
+        if events is None:
             return None
-        end.record()
-        return start, end
+        events[4].record()
+        return LayerComputeEvents(*events)

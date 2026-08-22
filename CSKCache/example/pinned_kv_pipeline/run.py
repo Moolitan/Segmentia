@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from config import (
+    CALIBRATION_RATIO,
     CALIBRATION_TOKENS,
     CHUNK_SIZE_TOKENS,
     CORRECTION_ALPHA,
@@ -228,6 +229,7 @@ async def _execute_request(
         "phase": phase,
         "prompt_tokens": len(prompt_token_ids),
         "skill_tokens": SKILL_TOKENS,
+        "calibration_ratio": CALIBRATION_RATIO,
         "calibration_tokens": CALIBRATION_TOKENS,
         "execution_order": EXECUTION_ORDER,
         "host_layout": HOST_LAYOUT,

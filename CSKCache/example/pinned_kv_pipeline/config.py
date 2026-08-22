@@ -26,6 +26,9 @@ PREFIX_TOKENS = 256
 TAIL_TOKENS = 32
 MINIMUM_FULL_RECOMPUTE_TOKENS = 32
 CALIBRATION_TOKENS = int(_CASE_CONFIG.get("calibration_tokens", 32))
+CALIBRATION_RATIO = float(
+    _CASE_CONFIG.get("calibration_ratio", CALIBRATION_TOKENS / SKILL_TOKENS)
+)
 CHUNK_SIZE_TOKENS = int(_CASE_CONFIG.get("chunk_size_tokens", 256))
 STORAGE_LAYOUT = str(
     _CASE_CONFIG.get("storage_layout", "packed_chunks_single_layer")

@@ -1,4 +1,4 @@
-"""Run the warmed critical pinned-KV pipeline sweep."""
+"""Run the warmed calibration-ratio and chunk-size pinned-KV sweep."""
 
 from __future__ import annotations
 
@@ -12,20 +12,22 @@ import time
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import matplotlib.pyplot as plt
 
 from config import MAX_MODEL_LEN, MAX_TOKENS, PREFIX_TOKENS, TAIL_TOKENS
 from sweep_config import (
-    CALIBRATION_BY_SKILL,
+    CALIBRATION_RATIOS,
+    CALIBRATION_TOKEN_ALIGNMENT,
     CASE_RETRIES,
-    CHUNK_SIZE_TOKENS,
+    CHUNK_SIZE_VALUES,
     EXECUTION_ORDERS,
+    HOST_LAYOUTS,
     MAX_CONSECUTIVE_FAILURES,
     REPETITIONS,
     RUN_NAME,
-    SKILL_TOKEN_VALUES,
+    SKILL_TOKENS,
     STABLE_LAYER_START,
     STABLE_LAYER_STOP,
     SWEEP_OUTPUT_ROOT,
@@ -36,7 +38,13 @@ from sweep_config import (
 EXAMPLE_DIR = Path(__file__).resolve().parent
 RUN_SCRIPT = EXAMPLE_DIR / "run.py"
 EXPECTED_LAYERS = 40
-TOTAL_CASES = len(SKILL_TOKEN_VALUES) * 6 * REPETITIONS
+TOTAL_CASES = (
+    len(CALIBRATION_RATIOS)
+    * len(CHUNK_SIZE_VALUES)
+    * len(HOST_LAYOUTS)
+    * len(EXECUTION_ORDERS)
+    * REPETITIONS
+)
 REQUIRED_CASE_FILES = (
     "cskcache_profile.jsonl",
     "request_result.json",
@@ -64,33 +72,28 @@ NUMERIC_METRICS = (
 @dataclass(frozen=True)
 class CaseSpec:
     skill_tokens: int
+    calibration_ratio: float
     calibration_tokens: int
     execution_order: str
     chunk_size_tokens: int
     storage_layout: str
     host_layout: str
-    loading_policy: str
     repetition: int
 
     @property
-    def chunk_label(self) -> str:
-        return (
-            "One"
-            if self.loading_policy == "one_chunk_layer"
-            else str(self.chunk_size_tokens)
-        )
-
-    @property
     def case_id(self) -> str:
+        ratio_percent = round(self.calibration_ratio * 100)
         return (
-            f"b{self.skill_tokens}_c{self.chunk_label.lower()}_"
-            f"{self.loading_policy}_{self.execution_order}_r{self.repetition}"
+            f"b{self.skill_tokens}_p{ratio_percent:02d}_"
+            f"c{self.chunk_size_tokens}_{self.host_layout}_"
+            f"{self.execution_order}_r{self.repetition}"
         )
 
     def child_payload(self, run_dir: Path) -> dict[str, Any]:
         return {
             "run_dir": str(run_dir),
             "skill_tokens": self.skill_tokens,
+            "calibration_ratio": self.calibration_ratio,
             "calibration_tokens": self.calibration_tokens,
             "execution_order": self.execution_order,
             "chunk_size_tokens": self.chunk_size_tokens,
@@ -100,43 +103,36 @@ class CaseSpec:
         }
 
 
+def _calibration_tokens(ratio: float) -> int:
+    unaligned = SKILL_TOKENS * ratio
+    return int(
+        round(unaligned / CALIBRATION_TOKEN_ALIGNMENT)
+        * CALIBRATION_TOKEN_ALIGNMENT
+    )
+
+
 def _build_specs() -> list[CaseSpec]:
     specs = []
-    for skill_tokens in SKILL_TOKEN_VALUES:
-        calibration_tokens = CALIBRATION_BY_SKILL[skill_tokens]
+    for calibration_ratio in CALIBRATION_RATIOS:
+        calibration_tokens = _calibration_tokens(calibration_ratio)
         for repetition in range(REPETITIONS):
-            for loading_policy, host_layout in (
-                ("chunkwise", "chunk_single_layer"),
-                ("packed_layer", "packed_chunks_single_layer"),
-            ):
-                for execution_order in EXECUTION_ORDERS:
-                    specs.append(
-                        CaseSpec(
-                            skill_tokens=skill_tokens,
-                            calibration_tokens=calibration_tokens,
-                            execution_order=execution_order,
-                            chunk_size_tokens=CHUNK_SIZE_TOKENS,
-                            storage_layout="packed_chunks_single_layer",
-                            host_layout=host_layout,
-                            loading_policy=loading_policy,
-                            repetition=repetition,
+            for chunk_size_tokens in CHUNK_SIZE_VALUES:
+                for host_layout in HOST_LAYOUTS:
+                    for execution_order in EXECUTION_ORDERS:
+                        specs.append(
+                            CaseSpec(
+                                skill_tokens=SKILL_TOKENS,
+                                calibration_ratio=calibration_ratio,
+                                calibration_tokens=calibration_tokens,
+                                execution_order=execution_order,
+                                chunk_size_tokens=chunk_size_tokens,
+                                storage_layout="packed_chunks_single_layer",
+                                host_layout=host_layout,
+                                repetition=repetition,
+                            )
                         )
-                    )
-            for execution_order in EXECUTION_ORDERS:
-                specs.append(
-                    CaseSpec(
-                        skill_tokens=skill_tokens,
-                        calibration_tokens=calibration_tokens,
-                        execution_order=execution_order,
-                        chunk_size_tokens=skill_tokens,
-                        storage_layout="packed_chunks_single_layer",
-                        host_layout="packed_chunks_single_layer",
-                        loading_policy="one_chunk_layer",
-                        repetition=repetition,
-                    )
-                )
     if len(specs) != TOTAL_CASES or len({spec.case_id for spec in specs}) != len(specs):
-        raise ValueError("critical sweep matrix is incomplete or contains duplicates")
+        raise ValueError("sweep matrix is incomplete or contains duplicates")
     return specs
 
 
@@ -244,7 +240,6 @@ def _measure_case(spec: CaseSpec, run_dir: Path) -> dict[str, Any]:
     return {
         **asdict(spec),
         "case_id": spec.case_id,
-        "chunk_label": spec.chunk_label,
         **measured,
         "warmup_layer0_adaptation_ms": warmup_layer0,
         "warmup_layer0_reduction_percent": (
@@ -283,10 +278,10 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 def _aggregate(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     keys = (
         "skill_tokens",
+        "calibration_ratio",
         "calibration_tokens",
-        "chunk_label",
         "chunk_size_tokens",
-        "loading_policy",
+        "host_layout",
         "execution_order",
     )
     groups: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
@@ -306,58 +301,77 @@ def _aggregate(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _plot_pipeline(rows: list[dict[str, Any]]) -> None:
-    variants = (
-        (
-            str(CHUNK_SIZE_TOKENS),
-            "chunkwise",
-            "Per-chunk layer\n256 tokens/object",
-        ),
-        (
-            str(CHUNK_SIZE_TOKENS),
-            "packed_layer",
-            "Packed layer\nall chunks/object",
-        ),
-        (
-            "One",
-            "one_chunk_layer",
-            "One-chunk layer\nSkill tokens/object",
-        ),
-    )
     colors = {"h2d_first": "#4C78A8", "compute_first": "#E45756"}
-    fig, axes = plt.subplots(2, 2, figsize=(7.5, 5.2), sharex=True)
-    for axis, skill_tokens in zip(axes.flat, SKILL_TOKEN_VALUES, strict=True):
-        for order in EXECUTION_ORDERS:
-            points = []
-            for chunk_label, policy, _ in variants:
-                points.append(
+    linestyles = {
+        "chunk_single_layer": "-",
+        "packed_chunks_single_layer": "--",
+    }
+    layout_labels = {
+        "chunk_single_layer": "Chunk-single-layer",
+        "packed_chunks_single_layer": "Packed-chunks-single-layer",
+    }
+    fig, axes = plt.subplots(
+        1,
+        len(CALIBRATION_RATIOS),
+        figsize=(10.2, 3.25),
+        sharex=True,
+        sharey=True,
+    )
+    x_positions = range(len(CHUNK_SIZE_VALUES))
+    x_labels = [
+        "8K\n(one chunk)" if value == SKILL_TOKENS else (
+            f"{value // 1024}K" if value >= 1024 else str(value)
+        )
+        for value in CHUNK_SIZE_VALUES
+    ]
+    for axis, ratio in zip(axes, CALIBRATION_RATIOS, strict=True):
+        for host_layout in HOST_LAYOUTS:
+            for order in EXECUTION_ORDERS:
+                points = [
                     next(
                         row
                         for row in rows
-                        if row["skill_tokens"] == skill_tokens
-                        and row["chunk_label"] == chunk_label
-                        and row["loading_policy"] == policy
+                        if float(row["calibration_ratio"]) == ratio
+                        and int(row["chunk_size_tokens"]) == chunk_size
+                        and row["host_layout"] == host_layout
                         and row["execution_order"] == order
                     )
+                    for chunk_size in CHUNK_SIZE_VALUES
+                ]
+                axis.plot(
+                    x_positions,
+                    [row["pipeline_span_ms_median"] for row in points],
+                    marker="o",
+                    markersize=4.5,
+                    linewidth=1.5,
+                    linestyle=linestyles[host_layout],
+                    color=colors[order],
+                    label=(
+                        f"{order.replace('_', '-').title()} · "
+                        f"{layout_labels[host_layout]}"
+                    ),
                 )
-            axis.plot(
-                range(len(points)),
-                [row["pipeline_span_ms_median"] for row in points],
-                marker="o",
-                linewidth=1.6,
-                color=colors[order],
-                label=order.replace("_", "-").title(),
-            )
-        axis.set_title(f"{skill_tokens:,} Skill tokens", fontsize=9)
-        axis.set_xticks(range(len(variants)), [item[2] for item in variants])
-        axis.tick_params(axis="x", labelsize=7, pad=2)
-        axis.set_ylabel("Warmed pipeline time (ms)")
+        axis.set_title(f"Calibration ratio = {ratio:.0%}", fontsize=9)
+        axis.set_xticks(x_positions, x_labels)
+        axis.set_xlabel("Chunk size (tokens)", fontsize=8)
+        axis.tick_params(axis="both", labelsize=7)
         axis.grid(alpha=0.18)
-    handles, labels = axes.flat[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", ncol=2, frameon=False)
-    fig.supxlabel("Pinned-memory H2D source layout", fontsize=9, y=0.01)
-    fig.tight_layout(rect=(0, 0.04, 1, 0.93))
-    fig.savefig(SWEEP_OUTPUT_ROOT / "warmed_pipeline.png", dpi=240)
-    fig.savefig(SWEEP_OUTPUT_ROOT / "warmed_pipeline.pdf")
+    axes[0].set_ylabel("Latency (ms)", fontsize=8)
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        ncol=2,
+        frameon=False,
+        fontsize=7.5,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.84), w_pad=0.8)
+    fig.savefig(
+        SWEEP_OUTPUT_ROOT / "calibration_ratio_chunk_sweep.png",
+        dpi=240,
+    )
+    fig.savefig(SWEEP_OUTPUT_ROOT / "calibration_ratio_chunk_sweep.pdf")
     plt.close(fig)
 
 
@@ -430,13 +444,17 @@ def _prepare_root(specs: list[CaseSpec]) -> tuple[Path, Path, Path]:
         (SWEEP_OUTPUT_ROOT / name).mkdir(exist_ok=True)
     experiment = {
         "run_name": RUN_NAME,
+        "skill_tokens": SKILL_TOKENS,
         "warmup_requests": WARMUP_REQUESTS,
         "repetitions": REPETITIONS,
-        "chunk_size_tokens": CHUNK_SIZE_TOKENS,
-        "skill_token_values": list(SKILL_TOKEN_VALUES),
-        "calibration_by_skill": {
-            str(key): value for key, value in CALIBRATION_BY_SKILL.items()
+        "calibration_ratios": list(CALIBRATION_RATIOS),
+        "calibration_token_alignment": CALIBRATION_TOKEN_ALIGNMENT,
+        "calibration_tokens": {
+            f"{ratio:.2f}": _calibration_tokens(ratio)
+            for ratio in CALIBRATION_RATIOS
         },
+        "chunk_size_values": list(CHUNK_SIZE_VALUES),
+        "host_layouts": list(HOST_LAYOUTS),
         "execution_orders": list(EXECUTION_ORDERS),
         "cases": [asdict(spec) for spec in specs],
     }
@@ -468,8 +486,8 @@ def _write_results(rows: list[dict[str, Any]], failed: list[str]) -> None:
 
 
 def main() -> None:
-    if PREFIX_TOKENS + max(SKILL_TOKEN_VALUES) + TAIL_TOKENS + MAX_TOKENS > MAX_MODEL_LEN:
-        raise ValueError("MAX_MODEL_LEN is smaller than the largest request")
+    if PREFIX_TOKENS + SKILL_TOKENS + TAIL_TOKENS + MAX_TOKENS > MAX_MODEL_LEN:
+        raise ValueError("MAX_MODEL_LEN is smaller than the sweep request")
     specs = _build_specs()
     specs_dir, cases_dir, logs_dir = _prepare_root(specs)
     rows = []

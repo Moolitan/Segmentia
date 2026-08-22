@@ -10,7 +10,7 @@ import torch
 from ...execution.executor import CSKCacheReuseExecutor
 from ...profile import PROFILE_ENABLED, profile_event
 from ...runtime.base import ReusePlan
-from ...host_memory.transfers import bind_layer_buffers
+from ...host_memory.transfers import PerObjectCopySession, bind_layer_buffers
 from lmcache import torch_device_type
 from lmcache.v1.compute.models.utils import (
     VLLMModelTracker,
@@ -275,7 +275,8 @@ class _LMCacheCSKLayerStream:
                 **fields,
             )
 
-        self._consumer = gpu_connector.batched_to_gpu(
+        self._copy_session = PerObjectCopySession(
+            gpu_connector,
             transfer_starts,
             transfer_ends,
             kvcaches=kvcaches,
@@ -289,7 +290,6 @@ class _LMCacheCSKLayerStream:
             ),
             profile_t0_event=profile_t0_event,
         )
-        next(self._consumer)
 
     def submit_layer(self, layer_id: int) -> None:
         if self._finished:
@@ -303,7 +303,7 @@ class _LMCacheCSKLayerStream:
             raise ValueError(
                 "CSKCache layers must be submitted exactly once in order"
             )
-        self._consumer.send(list(self._transfer_objects[layer_id]))
+        self._copy_session.submit(self._transfer_objects[layer_id])
         self._pending_layer = layer_id
         self._next_submit_layer += 1
 
@@ -312,7 +312,7 @@ class _LMCacheCSKLayerStream:
             raise RuntimeError("CSKCache layer stream is already finished")
         if layer_id != self._pending_layer or layer_id != self._next_wait_layer:
             raise ValueError("CSKCache must wait for the pending layer in order")
-        next(self._consumer)
+        self._copy_session.wait()
         self._pending_layer = None
         self._next_wait_layer += 1
 
@@ -351,7 +351,7 @@ class _LMCacheCSKLayerStream:
             or self._next_wait_layer != len(self._buffers)
         ):
             raise RuntimeError("CSKCache cannot finish an incomplete layer stream")
-        next(self._consumer)
+        self._copy_session.finish()
         self._finished = True
         self._emit_complete_profile()
 
@@ -361,7 +361,7 @@ class _LMCacheCSKLayerStream:
         if self._finished:
             return
         torch.cuda.synchronize()
-        self._consumer.close()
+        self._copy_session.close()
         self._finished = True
 
     def _emit_complete_profile(self) -> None:

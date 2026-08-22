@@ -1,15 +1,25 @@
-"""Pinned-to-GPU transfer plans expressed in chunk/layer coordinates."""
+"""Data contracts for Pinned-to-GPU transfer planning."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Sequence
-from typing import Any
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Protocol
 
-from ...chunking import ChunkingSpec, build_chunk_plan
 from ...layouts import KVLayout, KVLayoutPlan
-from ...layouts import build_layout_plan
-from ..base import SingleLayerChunkBuffers, SingleLayerKVBuffer
+
+
+class H2DCopyStrategy(str, Enum):
+    """How one layer's pinned source objects are submitted to the GPU."""
+
+    # Implemented: LMCache enqueues one Key copy and one Value copy for each
+    # source object supplied by the transfer plan.
+    PER_OBJECT_COPY = "per_object_copy"
+
+    # Reserved: a future primitive may submit multiple source pointers through
+    # one fused gather operation.  No runtime implementation exists yet.
+    FUSED_GATHER = "fused_gather"
 
 
 @dataclass(frozen=True)
@@ -91,101 +101,15 @@ class BoundH2DTransferPlan:
             raise ValueError("bound H2D sources differ from their layer slices")
 
 
-def build_layerwise_transfer_plan(layout_plan: KVLayoutPlan) -> H2DTransferPlan:
-    """Derive layer steps from the exact regions of any 2x2 layout."""
+class H2DCopySession(Protocol):
+    """Lifecycle shared by concrete host-to-GPU copy primitives."""
 
-    steps: list[H2DTransferStep] = []
-    for layer_id in range(layout_plan.num_layers):
-        slices = tuple(
-            H2DRegionSlice(
-                region_id=region.region_id,
-                layer_id=layer_id,
-                chunk_start=region.chunk_start,
-                chunk_end=region.chunk_end,
-                token_start=region.token_start,
-                token_end=region.token_end,
-            )
-            for region in sorted(
-                layout_plan.regions_for_layer(layer_id),
-                key=lambda item: item.chunk_start,
-            )
-        )
-        steps.append(H2DTransferStep(layer_id, slices))
-    return H2DTransferPlan(layout_plan.layout, layout_plan, tuple(steps))
+    strategy: H2DCopyStrategy
 
+    def submit(self, memory_objects: Sequence[Any]) -> None: ...
 
-def bind_layer_buffers(
-    buffers: Sequence[Any],
-    *,
-    token_count: int,
-) -> BoundH2DTransferPlan:
-    """Bind current LMCache layer buffers to the shared transfer plan."""
+    def wait(self) -> None: ...
 
-    if not buffers:
-        raise ValueError("host buffers must contain at least one layer")
-    chunked = tuple(isinstance(item, SingleLayerChunkBuffers) for item in buffers)
-    packed = tuple(isinstance(item, SingleLayerKVBuffer) for item in buffers)
-    if (any(chunked) and not all(chunked)) or (any(packed) and not all(packed)):
-        raise ValueError("host buffers use mixed layouts")
-    if any(chunked) and any(packed):
-        raise ValueError("host buffers use mixed layouts")
+    def finish(self) -> None: ...
 
-    if all(chunked):
-        first = buffers[0]
-        assert isinstance(first, SingleLayerChunkBuffers)
-        if not first.chunks:
-            raise ValueError("a chunk-single-layer buffer must contain chunks")
-        chunk_size = first.chunks[0].token_end - first.chunks[0].token_start
-        chunk_plan = build_chunk_plan(
-            token_count,
-            ChunkingSpec(chunk_size),
-        )
-        expected = tuple(
-            (chunk.chunk_id, chunk.token_start, chunk.token_end)
-            for chunk in chunk_plan.chunks
-        )
-        layer_objects = []
-        for layer in buffers:
-            assert isinstance(layer, SingleLayerChunkBuffers)
-            actual = tuple(
-                (chunk.chunk_id, chunk.token_start, chunk.token_end)
-                for chunk in layer.chunks
-            )
-            if actual != expected:
-                raise ValueError("layer buffers disagree with the Skill ChunkPlan")
-            layer_objects.append(tuple(chunk.memory_obj for chunk in layer.chunks))
-        layout_plan = build_layout_plan(
-            KVLayout.CHUNK_SINGLE_LAYER,
-            chunk_plan,
-            len(buffers),
-        )
-    elif all(packed):
-        first = buffers[0]
-        assert isinstance(first, SingleLayerKVBuffer)
-        chunk_plan = first.chunk_plan
-        layout = first.layout
-        if chunk_plan.skill_token_count != token_count:
-            raise ValueError("host ChunkPlan differs from the authenticated Skill")
-        layer_objects = []
-        for layer in buffers:
-            assert isinstance(layer, SingleLayerKVBuffer)
-            if layer.layout is not layout or layer.chunk_plan != chunk_plan:
-                raise ValueError("pinned layers disagree on layout or ChunkPlan")
-            layer_objects.append((layer.memory_obj,))
-        layout_plan = build_layout_plan(layout, chunk_plan, len(buffers))
-    else:
-        # Compatibility for caller-owned whole-Skill MemoryObjs. Production
-        # StorageManager buffers always carry an explicit plan.
-        chunk_plan = build_chunk_plan(
-            token_count,
-            ChunkingSpec(token_count),
-        )
-        layout_plan = build_layout_plan(
-            KVLayout.PACKED_CHUNKS_SINGLE_LAYER,
-            chunk_plan,
-            len(buffers),
-        )
-        layer_objects = [(item,) for item in buffers]
-
-    transfer_plan = build_layerwise_transfer_plan(layout_plan)
-    return BoundH2DTransferPlan(transfer_plan, tuple(layer_objects))
+    def close(self) -> None: ...

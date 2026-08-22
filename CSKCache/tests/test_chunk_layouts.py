@@ -16,6 +16,8 @@ from cskcache import (
 )
 from cskcache.host_memory.base import SingleLayerKVBuffer
 from cskcache.host_memory.transfers import (
+    H2DCopyStrategy,
+    PerObjectCopySession,
     bind_layer_buffers,
     build_h2d_transfer_plan,
 )
@@ -28,6 +30,14 @@ def test_chunk_size_equal_to_skill_is_one_chunk() -> None:
     assert plan.chunk_count == 1
     assert plan.effective_chunk_size_tokens == 8000
     assert (plan.chunks[0].token_start, plan.chunks[0].token_end) == (0, 8000)
+
+
+def test_copy_strategy_vocabulary_marks_the_current_primitive() -> None:
+    assert tuple(H2DCopyStrategy) == (
+        H2DCopyStrategy.PER_OBJECT_COPY,
+        H2DCopyStrategy.FUSED_GATHER,
+    )
+    assert PerObjectCopySession.strategy is H2DCopyStrategy.PER_OBJECT_COPY
 
 
 def test_fixed_size_keeps_the_exact_tail() -> None:

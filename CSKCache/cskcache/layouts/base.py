@@ -9,11 +9,53 @@ from ..chunking import SkillChunkPlan
 
 
 class KVLayout(str, Enum):
-    """The complete 2x2 chunk-packing and layer-packing space."""
+    """Physical region layout over the chunk and model-layer dimensions.
 
+    A layout only states which chunk/layer coordinates share one contiguous
+    region in storage or host memory.  It does not select an SSD read policy,
+    an H2D transfer implementation, the order in which H2D is submitted, or
+    how H2D overlaps with model computation.  Those policies belong to the
+    storage-load, host-memory-transfer, and execution layers respectively.
+
+    The diagrams below describe object composition, not exact tensor strides;
+    the selected ``MemoryFormat`` determines the concrete byte ordering.
+    """
+
+    # One object per logical chunk.  Each object contains that chunk's KV for
+    # every model layer:
+    #
+    #   obj_chunk0 = [L0.KV(chunk0) | L1.KV(chunk0) | ... | Ln.KV(chunk0)]
+    #   obj_chunk1 = [L0.KV(chunk1) | L1.KV(chunk1) | ... | Ln.KV(chunk1)]
     CHUNK_ALL_LAYERS = "chunk_all_layers"
+
+    # One object per (logical chunk, model layer) pair:
+    #
+    #   obj_l0_c0 = [L0.K(chunk0) | L0.V(chunk0)]
+    #   obj_l0_c1 = [L0.K(chunk1) | L0.V(chunk1)]
+    #   ...
+    #   obj_ln_cm = [Ln.K(chunkM) | Ln.V(chunkM)]
     CHUNK_SINGLE_LAYER = "chunk_single_layer"
+
+    # One object per model layer.  All logical chunks of that layer are packed
+    # into the same contiguous object; chunk boundaries remain metadata:
+    #
+    #   obj_l0 = [
+    #       L0.K(chunk0) | L0.K(chunk1) | ... | L0.K(chunkM)
+    #       L0.V(chunk0) | L0.V(chunk1) | ... | L0.V(chunkM)
+    #   ]
+    #   ...
+    #   obj_ln = [Ln.K(all chunks), Ln.V(all chunks)]
     PACKED_CHUNKS_SINGLE_LAYER = "packed_chunks_single_layer"
+
+    # One object for the complete Skill KV.  It packs every logical chunk of
+    # every model layer into one contiguous region:
+    #
+    #   one_obj = [
+    #       L0.K(all chunks), L0.V(all chunks)
+    #       L1.K(all chunks), L1.V(all chunks)
+    #       ...
+    #       Ln.K(all chunks), Ln.V(all chunks)
+    #   ]
     PACKED_CHUNKS_ALL_LAYERS = "packed_chunks_all_layers"
 
 

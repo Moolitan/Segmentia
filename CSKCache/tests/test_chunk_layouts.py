@@ -6,7 +6,6 @@ import pytest
 
 from cskcache import (
     CacheObjectMetadata,
-    ChunkingMode,
     ChunkingSpec,
     ContainerMetadata,
     KVLayout,
@@ -23,8 +22,8 @@ from cskcache.host_memory.transfers import (
 from cskcache.storage.loads import build_storage_load_plan
 
 
-def test_whole_skill_is_one_chunk() -> None:
-    plan = build_chunk_plan(8000, ChunkingSpec(ChunkingMode.WHOLE_SKILL))
+def test_chunk_size_equal_to_skill_is_one_chunk() -> None:
+    plan = build_chunk_plan(8000, ChunkingSpec(8000))
 
     assert plan.chunk_count == 1
     assert plan.effective_chunk_size_tokens == 8000
@@ -34,7 +33,7 @@ def test_whole_skill_is_one_chunk() -> None:
 def test_fixed_size_keeps_the_exact_tail() -> None:
     plan = build_chunk_plan(
         8000,
-        ChunkingSpec(ChunkingMode.FIXED_SIZE, 256),
+        ChunkingSpec(256),
     )
 
     assert plan.chunk_count == 32
@@ -59,7 +58,7 @@ def test_four_layouts_share_one_chunk_plan(
 ) -> None:
     chunk_plan = build_chunk_plan(
         8000,
-        ChunkingSpec(ChunkingMode.FIXED_SIZE, 256),
+        ChunkingSpec(256),
     )
     layout_plan = build_layout_plan(layout, chunk_plan, 40)
     load_plan = build_storage_load_plan(layout_plan)
@@ -78,14 +77,16 @@ def test_four_layouts_share_one_chunk_plan(
 
 
 def test_chunk_count_is_derived_not_configured() -> None:
-    with pytest.raises(ValueError, match="positive chunk size"):
-        ChunkingSpec(ChunkingMode.FIXED_SIZE, None)
-    with pytest.raises(ValueError, match="derives its size"):
-        ChunkingSpec(ChunkingMode.WHOLE_SKILL, 256)
+    with pytest.raises(ValueError, match="must be positive"):
+        ChunkingSpec(0)
+    with pytest.raises(ValueError, match="canonical schema"):
+        ChunkingSpec.from_dict(
+            {"mode": "whole_skill", "chunk_size_tokens": None}
+        )
 
 
 def _packed_layer_metadata(layout: KVLayout) -> CacheObjectMetadata:
-    chunking = ChunkingSpec(ChunkingMode.FIXED_SIZE, 256)
+    chunking = ChunkingSpec(256)
     layers = tuple(
         LayerExtent(
             layer_id=layer_id,
@@ -156,7 +157,7 @@ def test_catalog_rejects_unencoded_fixed_chunk_regions() -> None:
 def test_packed_host_layers_preserve_fixed_chunk_plan_for_h2d() -> None:
     chunk_plan = build_chunk_plan(
         8000,
-        ChunkingSpec(ChunkingMode.FIXED_SIZE, 256),
+        ChunkingSpec(256),
     )
     buffers = tuple(
         SingleLayerKVBuffer(

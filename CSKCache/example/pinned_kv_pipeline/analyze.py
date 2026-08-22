@@ -60,7 +60,10 @@ def analyze(run_dir: Path) -> None:
             start = item["start_ms"] - origin
             width = item["end_ms"] - item["start_ms"]
             ax.broken_barh([(start, width)], (lane * 12, 8), facecolors=colors[lane])
-    ax.set_yticks((4, 16, 28), labels=("H2D", "RoPE/stage", "C/R/I"))
+    ax.set_yticks(
+        (4, 16, 28),
+        labels=("H2D", "RoPE/stage", "Calibration + KV install"),
+    )
     ax.set_xlabel("Time (ms)")
     ax.set_ylim(-2, 38)
     ax.grid(axis="x", alpha=0.25)

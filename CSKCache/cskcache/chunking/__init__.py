@@ -1,7 +1,6 @@
 """Canonical Skill token chunking."""
 
 from .base import (
-    ChunkingMode,
     ChunkingSpec,
     ChunkPlanner,
     ChunkSpan,
@@ -10,7 +9,6 @@ from .base import (
 from .planner import build_chunk_plan
 
 __all__ = [
-    "ChunkingMode",
     "ChunkingSpec",
     "ChunkPlanner",
     "ChunkSpan",

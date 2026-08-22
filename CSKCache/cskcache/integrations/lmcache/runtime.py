@@ -50,31 +50,18 @@ class LMCacheRuntimeBridge:
                     "csk_storage_backend", "raw_block"
                 )
             ),
-            chunking_mode=str(
-                config.get_extra_config_value(
-                    "csk_chunking_mode", "whole_skill"
-                )
-            ),
             storage_layout=str(
                 config.get_extra_config_value(
-                    "csk_storage_layout", "chunk_single_layer"
+                    "csk_storage_layout", "packed_chunks_single_layer"
                 )
             ),
             host_layout=str(
                 config.get_extra_config_value(
-                    "csk_host_layout", "chunk_single_layer"
+                    "csk_host_layout", "packed_chunks_single_layer"
                 )
             ),
-            chunk_size_tokens=(
-                None
-                if config.get_extra_config_value(
-                    "csk_chunk_size_tokens", None
-                ) is None
-                else int(
-                    config.get_extra_config_value(
-                        "csk_chunk_size_tokens", None
-                    )
-                )
+            chunk_size_tokens=int(
+                config.get_extra_config_value("csk_chunk_size_tokens", 256)
             ),
             ticket_ttl_seconds=float(
                 config.get_extra_config_value(
@@ -130,15 +117,13 @@ class LMCacheRuntimeBridge:
         )
         validate_catalog_layout(
             metadata_manager.list_objects(),
-            chunking_mode=settings.chunking_mode,
             chunk_size_tokens=settings.chunk_size_tokens,
             storage_layout=settings.storage_layout,
         )
         host_pool = LMCacheHostBufferPool(
             local_cpu_backend,
             layout=settings.host_layout,
-            chunking_mode=settings.chunking_mode,
-            chunk_tokens=settings.chunk_size_tokens,
+            chunk_size_tokens=settings.chunk_size_tokens,
         )
         local_disk_reader = (
             LMCacheLayerObjectReader(

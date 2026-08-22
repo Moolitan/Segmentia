@@ -10,7 +10,7 @@ import torch
 from lmcache.v1.memory_management import MemoryFormat
 from lmcache.v1.storage_backend.local_cpu_backend import LocalCPUBackend
 
-from ..chunking import ChunkingMode, ChunkingSpec, build_chunk_plan
+from ..chunking import ChunkingSpec, build_chunk_plan
 from ..layouts import KVLayout
 from ..metadata.base import LayerExtent
 from .base import ChunkLayerBuffer, SingleLayerChunkBuffers, SingleLayerKVBuffer
@@ -23,9 +23,8 @@ class LMCacheHostBufferPool:
         self,
         local_cpu_backend: LocalCPUBackend,
         *,
-        layout: str = "chunk_single_layer",
-        chunking_mode: str = "whole_skill",
-        chunk_tokens: int | None = None,
+        layout: str = "packed_chunks_single_layer",
+        chunk_size_tokens: int = 256,
     ) -> None:
         if not isinstance(local_cpu_backend, LocalCPUBackend):
             raise TypeError("LMCacheHostBufferPool requires LocalCPUBackend")
@@ -43,22 +42,14 @@ class LMCacheHostBufferPool:
                 "the current layerwise LMCache path requires a single-layer "
                 "host layout"
             )
-        parsed_chunking = ChunkingMode(chunking_mode)
-        if parsed_chunking is ChunkingMode.FIXED_SIZE:
-            if chunk_tokens is None or chunk_tokens <= 0:
-                raise ValueError("fixed_size host chunking requires chunk_tokens")
-        elif chunk_tokens is not None:
-            raise ValueError("whole_skill host chunking derives its chunk size")
+        if chunk_size_tokens <= 0:
+            raise ValueError("chunk_size_tokens must be positive")
         self._backend = local_cpu_backend
         self.layout = parsed_layout.value
-        self.chunking_mode = parsed_chunking.value
-        self.chunk_tokens = chunk_tokens
+        self.chunk_size_tokens = chunk_size_tokens
 
     def acquire(self, extents: Sequence[LayerExtent]) -> Sequence[Any]:
-        if (
-            self.layout == KVLayout.PACKED_CHUNKS_SINGLE_LAYER.value
-            or self.chunking_mode == ChunkingMode.WHOLE_SKILL.value
-        ):
+        if self.layout == KVLayout.PACKED_CHUNKS_SINGLE_LAYER.value:
             return self.acquire_packed_chunks_single_layer(extents)
         return self.acquire_chunk_single_layer(extents)
 
@@ -85,10 +76,7 @@ class LMCacheHostBufferPool:
 
         if len(persistent_layer_regions) != len(extents):
             raise ValueError("loaded layer count differs from cache metadata")
-        if (
-            self.layout == KVLayout.PACKED_CHUNKS_SINGLE_LAYER.value
-            or self.chunking_mode == ChunkingMode.WHOLE_SKILL.value
-        ):
+        if self.layout == KVLayout.PACKED_CHUNKS_SINGLE_LAYER.value:
             chunk_plan = self._build_chunk_plan(extents[0].shape[1])
             return tuple(
                 SingleLayerKVBuffer(
@@ -241,10 +229,7 @@ class LMCacheHostBufferPool:
     def _build_chunk_plan(self, token_count: int):
         return build_chunk_plan(
             token_count,
-            ChunkingSpec(
-                mode=ChunkingMode(self.chunking_mode),
-                chunk_size_tokens=self.chunk_tokens,
-            ),
+            ChunkingSpec(chunk_size_tokens=self.chunk_size_tokens),
         )
 
     @staticmethod

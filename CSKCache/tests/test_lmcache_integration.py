@@ -249,8 +249,7 @@ def test_lmcache_pool_allocates_chunk_single_layer_with_separate_method() -> Non
     pool = LMCacheHostBufferPool(
         backend,
         layout="chunk_single_layer",
-        chunking_mode="fixed_size",
-        chunk_tokens=4,
+        chunk_size_tokens=4,
     )
 
     groups = pool.acquire_chunk_single_layer(
@@ -289,8 +288,7 @@ def test_lmcache_chunk_pool_releases_partial_allocation_on_failure() -> None:
     pool = LMCacheHostBufferPool(
         backend,
         layout="chunk_single_layer",
-        chunking_mode="fixed_size",
-        chunk_tokens=4,
+        chunk_size_tokens=4,
     )
 
     with pytest.raises(MemoryError, match="chunk-layer buffers"):
@@ -411,9 +409,8 @@ def test_csk_t0_initialization_resolves_raw_block_plugin_key(monkeypatch) -> Non
     assert captured["metadata"] == ("/metadata.json", 40)
     assert captured["local_cpu_backend"] is local_cpu_backend
     assert captured["host_pool_kwargs"] == {
-        "layout": "chunk_single_layer",
-        "chunking_mode": "whole_skill",
-        "chunk_tokens": None,
+        "layout": "packed_chunks_single_layer",
+        "chunk_size_tokens": 256,
     }
     assert captured["raw_backend"] is raw_backend
     assert captured["storage_backend"] == "raw_block"

@@ -34,10 +34,9 @@ MAX_ITERATIONS = 2
 PROMPT_FILE = None
 
 # CSKCache chunking, persistent layout, host layout, and execution.
-CHUNKING_MODE = "whole_skill"  # whole_skill | fixed_size
-CHUNK_SIZE_TOKENS = None
-STORAGE_LAYOUT = "chunk_single_layer"
-HOST_LAYOUT = "chunk_single_layer"
+CHUNK_SIZE_TOKENS = 256
+STORAGE_LAYOUT = "packed_chunks_single_layer"
+HOST_LAYOUT = "packed_chunks_single_layer"
 EXECUTION_ORDER = "h2d_first"  # h2d_first | compute_first
 MINIMUM_FULL_RECOMPUTE_TOKENS = 32
 CALIBRATION_TOKENS = 32

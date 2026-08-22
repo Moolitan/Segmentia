@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 import re
 
-from ..chunking import ChunkingMode, ChunkingSpec, build_chunk_plan
+from ..chunking import ChunkingSpec, build_chunk_plan
 from ..layouts import KVLayout, build_layout_plan
 
 
@@ -251,10 +251,8 @@ class CacheObjectMetadata:
     container_id: str | None
     read_strategy: ReadStrategy
     layers: tuple[LayerExtent, ...]
-    chunking: ChunkingSpec = field(
-        default_factory=lambda: ChunkingSpec(ChunkingMode.WHOLE_SKILL)
-    )
-    storage_layout: KVLayout = KVLayout.CHUNK_SINGLE_LAYER
+    chunking: ChunkingSpec = field(default_factory=lambda: ChunkingSpec(256))
+    storage_layout: KVLayout = KVLayout.PACKED_CHUNKS_SINGLE_LAYER
     storage_backend: StorageBackend = StorageBackend.RAW_BLOCK
     status: CacheObjectStatus = CacheObjectStatus.ACTIVE
 
@@ -408,8 +406,7 @@ class CacheObjectMetadata:
             "chunking",
             "storage_layout",
         }
-        legacy = expected - {"chunking", "storage_layout"}
-        if set(payload) not in (expected, legacy):
+        if set(payload) != expected:
             raise ValueError(
                 f"CacheObjectMetadata fields differ: expected={sorted(expected)}, "
                 f"actual={sorted(payload)}"
@@ -434,14 +431,8 @@ class CacheObjectMetadata:
             storage_backend=StorageBackend(str(payload["storage_backend"])),
             read_strategy=ReadStrategy(str(payload["read_strategy"])),
             layers=tuple(LayerExtent.from_dict(item) for item in payload["layers"]),
-            chunking=(
-                ChunkingSpec(ChunkingMode.WHOLE_SKILL)
-                if "chunking" not in payload
-                else ChunkingSpec.from_dict(payload["chunking"])
-            ),
-            storage_layout=KVLayout(
-                payload.get("storage_layout", KVLayout.CHUNK_SINGLE_LAYER.value)
-            ),
+            chunking=ChunkingSpec.from_dict(payload["chunking"]),
+            storage_layout=KVLayout(payload["storage_layout"]),
             status=CacheObjectStatus(str(payload["status"])),
         )
 

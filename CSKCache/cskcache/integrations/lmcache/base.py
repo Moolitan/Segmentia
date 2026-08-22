@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ...chunking import ChunkingMode
 from ...layouts import KVLayout
 from ...runtime.base import ReusePolicy
 
@@ -16,10 +15,9 @@ class LMCacheRuntimeSettings:
     metadata_path: str
     tokenizer_path: str | None
     storage_backend: str
-    chunking_mode: str
     storage_layout: str
     host_layout: str
-    chunk_size_tokens: int | None
+    chunk_size_tokens: int
     ticket_ttl_seconds: float
     reuse_policy: ReusePolicy
 
@@ -32,14 +30,10 @@ class LMCacheRuntimeSettings:
             raise ValueError(
                 "csk_storage_backend must be 'raw_block' or 'local_disk'"
             )
-        chunking = ChunkingMode(self.chunking_mode)
         storage_layout = KVLayout(self.storage_layout)
         host_layout = KVLayout(self.host_layout)
-        if chunking is ChunkingMode.FIXED_SIZE:
-            if self.chunk_size_tokens is None or self.chunk_size_tokens <= 0:
-                raise ValueError("fixed_size chunking requires csk_chunk_size_tokens")
-        elif self.chunk_size_tokens is not None:
-            raise ValueError("whole_skill chunking derives its chunk size")
+        if self.chunk_size_tokens <= 0:
+            raise ValueError("csk_chunk_size_tokens must be positive")
         if storage_layout not in (
             KVLayout.CHUNK_SINGLE_LAYER,
             KVLayout.PACKED_CHUNKS_SINGLE_LAYER,

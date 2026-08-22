@@ -1,7 +1,6 @@
 """CSKCache metadata, runtime lifecycle, and storage primitives."""
 
 from .chunking import (
-    ChunkingMode,
     ChunkingSpec,
     ChunkSpan,
     SkillChunkPlan,
@@ -98,7 +97,6 @@ from .storage.backends.raw_block import (
 
 __all__ = [
     "BindingState",
-    "ChunkingMode",
     "ChunkingSpec",
     "ChunkSpan",
     "SkillChunkPlan",

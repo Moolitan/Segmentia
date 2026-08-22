@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .base import ChunkingMode, ChunkingSpec, ChunkSpan, SkillChunkPlan
+from .base import ChunkingSpec, ChunkSpan, SkillChunkPlan
 
 
 def build_fixed_size_plan(
@@ -11,10 +11,7 @@ def build_fixed_size_plan(
 ) -> SkillChunkPlan:
     """Partition a Skill into fixed chunks and retain the exact tail."""
 
-    spec = ChunkingSpec(
-        mode=ChunkingMode.FIXED_SIZE,
-        chunk_size_tokens=chunk_size_tokens,
-    )
+    spec = ChunkingSpec(chunk_size_tokens=chunk_size_tokens)
     if skill_token_count <= 0:
         raise ValueError("skill_token_count must be positive")
     chunks = tuple(

@@ -3,48 +3,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
 from typing import Any, Protocol
-
-
-class ChunkingMode(str, Enum):
-    """How one logical Skill token span is partitioned."""
-
-    FIXED_SIZE = "fixed_size"
-    WHOLE_SKILL = "whole_skill"
 
 
 @dataclass(frozen=True)
 class ChunkingSpec:
-    """Offline chunking choice; chunk count is always derived."""
+    """One positive token budget from which chunk count is derived."""
 
-    mode: ChunkingMode
-    chunk_size_tokens: int | None = None
+    chunk_size_tokens: int
 
     def __post_init__(self) -> None:
-        mode = ChunkingMode(self.mode)
-        object.__setattr__(self, "mode", mode)
-        if mode is ChunkingMode.FIXED_SIZE:
-            if self.chunk_size_tokens is None or self.chunk_size_tokens <= 0:
-                raise ValueError("fixed_size chunking requires a positive chunk size")
-        elif self.chunk_size_tokens is not None:
-            raise ValueError("whole_skill chunking derives its size from the Skill")
+        if self.chunk_size_tokens <= 0:
+            raise ValueError("chunk_size_tokens must be positive")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "mode": self.mode.value,
-            "chunk_size_tokens": self.chunk_size_tokens,
-        }
+        return {"chunk_size_tokens": self.chunk_size_tokens}
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "ChunkingSpec":
-        if set(payload) != {"mode", "chunk_size_tokens"}:
+        if set(payload) != {"chunk_size_tokens"}:
             raise ValueError("ChunkingSpec fields differ from the canonical schema")
-        size = payload["chunk_size_tokens"]
-        return cls(
-            mode=ChunkingMode(str(payload["mode"])),
-            chunk_size_tokens=None if size is None else int(size),
-        )
+        return cls(chunk_size_tokens=int(payload["chunk_size_tokens"]))
 
 
 @dataclass(frozen=True)
@@ -95,10 +74,7 @@ class SkillChunkPlan:
 
     @property
     def effective_chunk_size_tokens(self) -> int:
-        if self.spec.mode is ChunkingMode.WHOLE_SKILL:
-            return self.skill_token_count
-        assert self.spec.chunk_size_tokens is not None
-        return self.spec.chunk_size_tokens
+        return min(self.spec.chunk_size_tokens, self.skill_token_count)
 
     def to_dict(self) -> dict[str, Any]:
         return {

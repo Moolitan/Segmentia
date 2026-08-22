@@ -10,7 +10,6 @@ from pathlib import Path
 
 from config import (
     CALIBRATION_TOKENS,
-    CHUNKING_MODE,
     CHUNK_SIZE_TOKENS,
     CORRECTION_ALPHA,
     EXECUTION_ORDER,
@@ -30,6 +29,7 @@ from config import (
     SKILL_TOKENS,
     STORAGE_LAYOUT,
     TAIL_TOKENS,
+    WARMUP_REQUESTS,
 )
 
 
@@ -39,6 +39,8 @@ RUN_DIR = RUN_DIR_OVERRIDE or (
 CATALOG_PATH = RUN_DIR / "catalog.json"
 CONTAINER_PATH = RUN_DIR / "synthetic_kv.bin"
 PROFILE_PATH = RUN_DIR / "cskcache_profile.jsonl"
+WARMUP_PROFILE_PATH = RUN_DIR / "warmup_profile.jsonl"
+WARMUP_RESULT_PATH = RUN_DIR / "warmup_request_result.json"
 
 
 def _prepare_catalog() -> tuple[list[int], str]:
@@ -46,7 +48,6 @@ def _prepare_catalog() -> tuple[list[int], str]:
 
     from cskcache import (
         CacheObjectMetadata,
-        ChunkingMode,
         ChunkingSpec,
         ContainerMetadata,
         LayerExtent,
@@ -121,10 +122,7 @@ def _prepare_catalog() -> tuple[list[int], str]:
         container_id=container.container_id,
         read_strategy=ReadStrategy.CONTIGUOUS,
         layers=layers,
-        chunking=ChunkingSpec(
-            ChunkingMode(CHUNKING_MODE),
-            CHUNK_SIZE_TOKENS,
-        ),
+        chunking=ChunkingSpec(CHUNK_SIZE_TOKENS),
         storage_layout=KVLayout(STORAGE_LAYOUT),
     )
     metadata = MetadataManager(CATALOG_PATH, expected_layers=num_layers)
@@ -141,7 +139,6 @@ def _configure_environment(container_path: str) -> None:
         "cskcache_metadata_path": str(CATALOG_PATH),
         "cskcache_tokenizer_path": str(MODEL_PATH),
         "csk_storage_backend": "raw_block",
-        "csk_chunking_mode": CHUNKING_MODE,
         "csk_chunk_size_tokens": CHUNK_SIZE_TOKENS,
         "csk_storage_layout": STORAGE_LAYOUT,
         "csk_minimum_full_recompute_tokens": MINIMUM_FULL_RECOMPUTE_TOKENS,
@@ -175,13 +172,74 @@ def _configure_environment(container_path: str) -> None:
     )
 
 
-async def _run_request(object_token_ids: list[int]) -> None:
+async def _execute_request(
+    engine: object,
+    object_token_ids: list[int],
+    *,
+    phase: str,
+) -> dict[str, object]:
     from cskcache import render_skill_payload
     from cskcache.integrations.vllm.base import (
         INSPECT_TOOL_OBSERVATION,
         SUBMIT_PREFETCH,
     )
     from vllm import SamplingParams
+    ticket = f"synthetic-pinned-{phase}-ticket"
+    await engine.execute_connector_control(
+        SUBMIT_PREFETCH,
+        {"ticket": ticket, "skill_name": SKILL_NAME},
+    )
+    await engine.execute_connector_control(
+        INSPECT_TOOL_OBSERVATION,
+        {
+            "ticket": ticket,
+            "tool_name": "skill",
+            "content": render_skill_payload(
+                SKILL_NAME, "synthetic pipeline input"
+            ),
+        },
+    )
+    prompt_token_ids = (
+        [PROMPT_FILL_TOKEN_ID] * PREFIX_TOKENS
+        + object_token_ids
+        + [PROMPT_FILL_TOKEN_ID] * TAIL_TOKENS
+    )
+    sampling_params = SamplingParams(
+        max_tokens=MAX_TOKENS,
+        temperature=0.0,
+        extra_args={
+            "kv_transfer_params": {"cskcache_candidate": {"ticket": ticket}}
+        },
+    )
+    final_output = None
+    request_start = time.perf_counter_ns()
+    async for output in engine.generate(
+        {"prompt_token_ids": prompt_token_ids},
+        sampling_params,
+        request_id=f"pinned-kv-pipeline-{phase}",
+    ):
+        final_output = output
+    request_end = time.perf_counter_ns()
+    generated_token_ids = []
+    if final_output is not None and final_output.outputs:
+        generated_token_ids = list(final_output.outputs[0].token_ids)
+    return {
+        "request_id": getattr(final_output, "request_id", None),
+        "phase": phase,
+        "prompt_tokens": len(prompt_token_ids),
+        "skill_tokens": SKILL_TOKENS,
+        "calibration_tokens": CALIBRATION_TOKENS,
+        "execution_order": EXECUTION_ORDER,
+        "host_layout": HOST_LAYOUT,
+        "chunk_size_tokens": CHUNK_SIZE_TOKENS,
+        "storage_layout": STORAGE_LAYOUT,
+        "warmup_requests": WARMUP_REQUESTS,
+        "request_elapsed_ms": (request_end - request_start) / 1_000_000,
+        "generated_token_ids": generated_token_ids,
+    }
+
+
+async def _run_request(object_token_ids: list[int]) -> None:
     from vllm.config import KVTransferConfig
     from vllm.engine.arg_utils import AsyncEngineArgs
     from vllm.v1.engine.async_llm import AsyncLLM
@@ -202,68 +260,36 @@ async def _run_request(object_token_ids: list[int]) -> None:
         ),
     )
     engine = AsyncLLM.from_engine_args(engine_args)
-    ticket = "synthetic-pinned-ticket"
     try:
-        await engine.execute_connector_control(
-            SUBMIT_PREFETCH,
-            {"ticket": ticket, "skill_name": SKILL_NAME},
-        )
-        await engine.execute_connector_control(
-            INSPECT_TOOL_OBSERVATION,
-            {
-                "ticket": ticket,
-                "tool_name": "skill",
-                "content": render_skill_payload(
-                    SKILL_NAME, "synthetic pipeline input"
-                ),
-            },
-        )
-        prompt_token_ids = (
-            [PROMPT_FILL_TOKEN_ID] * PREFIX_TOKENS
-            + object_token_ids
-            + [PROMPT_FILL_TOKEN_ID] * TAIL_TOKENS
-        )
-        sampling_params = SamplingParams(
-            max_tokens=MAX_TOKENS,
-            temperature=0.0,
-            extra_args={
-                "kv_transfer_params": {
-                    "cskcache_candidate": {"ticket": ticket}
-                }
-            },
-        )
-        final_output = None
-        request_start = time.perf_counter_ns()
-        async for output in engine.generate(
-            {"prompt_token_ids": prompt_token_ids},
-            sampling_params,
-            request_id="pinned-kv-pipeline",
-        ):
-            final_output = output
-        request_end = time.perf_counter_ns()
-        generated_token_ids = []
-        if final_output is not None and final_output.outputs:
-            generated_token_ids = list(final_output.outputs[0].token_ids)
-        (RUN_DIR / "request_result.json").write_text(
-            json.dumps(
-                {
-                    "request_id": getattr(final_output, "request_id", None),
-                    "prompt_tokens": len(prompt_token_ids),
-                    "skill_tokens": SKILL_TOKENS,
-                    "calibration_tokens": CALIBRATION_TOKENS,
-                    "execution_order": EXECUTION_ORDER,
-                    "host_layout": HOST_LAYOUT,
-                    "chunking_mode": CHUNKING_MODE,
-                    "chunk_size_tokens": CHUNK_SIZE_TOKENS,
-                    "storage_layout": STORAGE_LAYOUT,
-                    "request_elapsed_ms": (
-                        request_end - request_start
-                    ) / 1_000_000,
-                    "generated_token_ids": generated_token_ids,
-                },
-                indent=2,
+        warmup_results = []
+        for index in range(WARMUP_REQUESTS):
+            warmup_results.append(
+                await _execute_request(
+                    engine,
+                    object_token_ids,
+                    phase=f"warmup-{index}",
+                )
             )
-            + "\n",
+            if not await engine.reset_prefix_cache(
+                reset_running_requests=False,
+                reset_connector=False,
+            ):
+                raise RuntimeError("prefix cache reset failed after warm-up")
+        if warmup_results:
+            WARMUP_RESULT_PATH.write_text(
+                json.dumps(warmup_results, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            PROFILE_PATH.replace(WARMUP_PROFILE_PATH)
+            PROFILE_PATH.touch()
+
+        measured = await _execute_request(
+            engine,
+            object_token_ids,
+            phase="measured",
+        )
+        (RUN_DIR / "request_result.json").write_text(
+            json.dumps(measured, indent=2) + "\n",
             encoding="utf-8",
         )
     finally:

@@ -24,14 +24,8 @@ def backend_root() -> Path:
 def validate_config() -> None:
     if cfg.STORAGE_BACKEND not in {"raw_block", "local_disk"}:
         raise ValueError("STORAGE_BACKEND must be raw_block or local_disk")
-    if cfg.CHUNKING_MODE not in {"whole_skill", "fixed_size"}:
-        raise ValueError("CHUNKING_MODE must be whole_skill or fixed_size")
-    if cfg.CHUNKING_MODE == "whole_skill" and cfg.CHUNK_SIZE_TOKENS is not None:
-        raise ValueError("whole_skill derives its chunk size")
-    if cfg.CHUNKING_MODE == "fixed_size" and (
-        cfg.CHUNK_SIZE_TOKENS is None or cfg.CHUNK_SIZE_TOKENS <= 0
-    ):
-        raise ValueError("fixed_size requires a positive CHUNK_SIZE_TOKENS")
+    if cfg.CHUNK_SIZE_TOKENS <= 0:
+        raise ValueError("CHUNK_SIZE_TOKENS must be positive")
     supported_layouts = {"chunk_single_layer", "packed_chunks_single_layer"}
     if (
         cfg.STORAGE_LAYOUT not in supported_layouts
@@ -58,7 +52,6 @@ def lmcache_extra_config() -> dict[str, object]:
         "exact_save_kv_2td": True,
         "cskcache_metadata_path": str(catalog_path),
         "csk_storage_backend": cfg.STORAGE_BACKEND,
-        "csk_chunking_mode": cfg.CHUNKING_MODE,
         "csk_chunk_size_tokens": cfg.CHUNK_SIZE_TOKENS,
         "csk_storage_layout": cfg.STORAGE_LAYOUT,
         "csk_host_layout": cfg.HOST_LAYOUT,

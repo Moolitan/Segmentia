@@ -10,27 +10,13 @@ import config as cfg
 def validate_config() -> None:
     if cfg.STORAGE_BACKEND not in {"raw_block", "local_disk"}:
         raise ValueError("STORAGE_BACKEND must be raw_block or local_disk")
-    if cfg.CHUNKING_MODE not in {"whole_skill", "fixed_size"}:
-        raise ValueError("CHUNKING_MODE must be whole_skill or fixed_size")
-    if cfg.CHUNKING_MODE == "whole_skill" and cfg.CHUNK_SIZE_TOKENS is not None:
-        raise ValueError("whole_skill derives its chunk size")
-    if cfg.CHUNKING_MODE == "fixed_size" and (
-        cfg.CHUNK_SIZE_TOKENS is None or cfg.CHUNK_SIZE_TOKENS <= 0
-    ):
-        raise ValueError("fixed_size requires a positive CHUNK_SIZE_TOKENS")
+    if cfg.CHUNK_SIZE_TOKENS <= 0:
+        raise ValueError("CHUNK_SIZE_TOKENS must be positive")
     if cfg.STORAGE_LAYOUT not in {
         "chunk_single_layer",
         "packed_chunks_single_layer",
     }:
         raise ValueError("the current offline encoder requires a single-layer layout")
-    if (
-        cfg.CHUNKING_MODE == "fixed_size"
-        and cfg.STORAGE_LAYOUT != "packed_chunks_single_layer"
-    ):
-        raise ValueError(
-            "fixed-size chunks require packed_chunks_single_layer because "
-            "exact-save writes one complete region per layer"
-        )
     if cfg.SKILLS and cfg.COLLECTION is not None:
         raise ValueError("configure SKILLS or COLLECTION, not both")
     if not cfg.SKILLS and cfg.COLLECTION is None:
@@ -47,10 +33,7 @@ def shell_environment() -> dict[str, str]:
     validate_config()
     return {
         "OFFLINE_STORAGE_BACKEND": cfg.STORAGE_BACKEND,
-        "CSKCACHE_CHUNKING_MODE": cfg.CHUNKING_MODE,
-        "CSKCACHE_CHUNK_SIZE_TOKENS": (
-            "" if cfg.CHUNK_SIZE_TOKENS is None else str(cfg.CHUNK_SIZE_TOKENS)
-        ),
+        "CSKCACHE_CHUNK_SIZE_TOKENS": str(cfg.CHUNK_SIZE_TOKENS),
         "CSKCACHE_STORAGE_LAYOUT": cfg.STORAGE_LAYOUT,
         "OFFLINE_SKILLS": "\n".join(cfg.SKILLS),
         "OFFLINE_COLLECTION": cfg.COLLECTION or "",

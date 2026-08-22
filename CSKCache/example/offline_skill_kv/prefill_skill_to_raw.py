@@ -347,11 +347,8 @@ def main() -> None:
             "tokenizer_fingerprint": tokenizer_digest,
             "token_count": len(token_ids),
             "chunking": {
-                "mode": os.environ.get("CSKCACHE_CHUNKING_MODE", "whole_skill"),
-                "chunk_size_tokens": (
-                    None
-                    if not os.environ.get("CSKCACHE_CHUNK_SIZE_TOKENS")
-                    else int(os.environ["CSKCACHE_CHUNK_SIZE_TOKENS"])
+                "chunk_size_tokens": int(
+                    os.environ["CSKCACHE_CHUNK_SIZE_TOKENS"]
                 ),
             },
             "storage_layout": os.environ.get(

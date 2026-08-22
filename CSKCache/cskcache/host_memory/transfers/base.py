@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from collections.abc import Sequence
 from typing import Any
 
-from ...chunking import ChunkingMode, ChunkingSpec, build_chunk_plan
+from ...chunking import ChunkingSpec, build_chunk_plan
 from ...layouts import KVLayout, KVLayoutPlan
 from ...layouts import build_layout_plan
 from ..base import SingleLayerChunkBuffers, SingleLayerKVBuffer
@@ -138,7 +138,7 @@ def bind_layer_buffers(
         chunk_size = first.chunks[0].token_end - first.chunks[0].token_start
         chunk_plan = build_chunk_plan(
             token_count,
-            ChunkingSpec(ChunkingMode.FIXED_SIZE, chunk_size),
+            ChunkingSpec(chunk_size),
         )
         expected = tuple(
             (chunk.chunk_id, chunk.token_start, chunk.token_end)
@@ -178,7 +178,7 @@ def bind_layer_buffers(
         # StorageManager buffers always carry an explicit plan.
         chunk_plan = build_chunk_plan(
             token_count,
-            ChunkingSpec(ChunkingMode.WHOLE_SKILL),
+            ChunkingSpec(token_count),
         )
         layout_plan = build_layout_plan(
             KVLayout.PACKED_CHUNKS_SINGLE_LAYER,

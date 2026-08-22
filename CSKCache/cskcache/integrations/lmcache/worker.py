@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Generator, Sequence
 from typing import Any
 
@@ -11,6 +12,7 @@ from ...execution.executor import CSKCacheReuseExecutor
 from ...profile import PROFILE_ENABLED, profile_event
 from ...runtime.base import ReusePlan
 from ...host_memory.transfers import PerObjectCopySession, bind_layer_buffers
+from .forward_profile import CalibrationForwardProfiler
 from lmcache import torch_device_type
 from lmcache.v1.compute.models.utils import (
     VLLMModelTracker,
@@ -31,19 +33,27 @@ class _CSKCalibrationBlender:
     def __init__(self, gpu_connector: Any) -> None:
         self._gpu_connector = gpu_connector
         self._model = None
+        self._profiler: CalibrationForwardProfiler | None = None
         self._plan: ReusePlan | None = None
         self._results: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
 
     def bind_model(self, model: Any) -> None:
         self._model = model
 
+    def bind_profiler(self, profiler: CalibrationForwardProfiler) -> None:
+        self._profiler = profiler
+
     def begin(self, plan: ReusePlan) -> None:
         if self._plan is not None:
             raise RuntimeError("a CSK calibration model is already active")
         self._plan = plan
         self._results.clear()
+        if self._profiler is not None:
+            self._profiler.begin(plan)
 
     def finish(self) -> None:
+        if self._profiler is not None:
+            self._profiler.finish()
         self._plan = None
         self._results.clear()
 
@@ -75,14 +85,22 @@ class _CSKCalibrationBlender:
 
         if attn_output is None:
             attn_output = torch.empty_like(q)
+        if self._profiler is not None:
+            self._profiler.start(layer_id, "position_build")
         positions = torch.arange(
             plan.calibration_start,
             plan.calibration_end,
             dtype=torch.int64,
             device=q.device,
         )
+        if self._profiler is not None:
+            self._profiler.end(layer_id, "position_build")
         layer = model.vllm_model.model.layers[layer_id]
+        if self._profiler is not None:
+            self._profiler.start(layer_id, "rope")
         q, k = layer.self_attn.rotary_emb(positions, q, k)
+        if self._profiler is not None:
+            self._profiler.end(layer_id, "rope")
 
         # Retain only the P fresh tokens.  The full attention bank below is a
         # temporary execution input and must not be mistaken for recomputed KV.
@@ -90,11 +108,19 @@ class _CSKCalibrationBlender:
         fresh_value = v.reshape(calibration_tokens, -1)
         self._results[layer_id] = (fresh_key, fresh_value)
 
+        if self._profiler is not None:
+            self._profiler.start(layer_id, "prefix_paged_kv")
         prefix_key, prefix_value = self._gpu_connector.get_paged_kv(
             layer_id, 0, plan.calibration_start
         )
+        if self._profiler is not None:
+            self._profiler.end(layer_id, "prefix_paged_kv")
+            self._profiler.start(layer_id, "kv_concat")
         key_bank = torch.cat((prefix_key, fresh_key), dim=0)
         value_bank = torch.cat((prefix_value, fresh_value), dim=0)
+        if self._profiler is not None:
+            self._profiler.end(layer_id, "kv_concat")
+            self._profiler.start(layer_id, "attention")
         return (
             q,
             key_bank,
@@ -126,6 +152,13 @@ class LMCacheCSKDataPlane:
         )
         self._calibration_blender.bind_model(self.layerwise_model)
         self.num_layers = len(vllm_model.model.layers)
+        profile_layers = os.getenv("CSKCACHE_FORWARD_PROFILE_LAYERS", "")
+        if profile_layers:
+            profiler = CalibrationForwardProfiler(
+                self.layerwise_model,
+                tuple(int(value) for value in profile_layers.split(",")),
+            )
+            self._calibration_blender.bind_profiler(profiler)
 
     def get_active_layer_buffers(
         self, ticket: str, request_id: str

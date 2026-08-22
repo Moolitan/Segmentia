@@ -20,7 +20,6 @@ import matplotlib.pyplot as plt
 from config import MAX_MODEL_LEN, MAX_TOKENS, PREFIX_TOKENS, TAIL_TOKENS
 from sweep_config import (
     CALIBRATION_RATIOS,
-    CALIBRATION_TOKEN_ALIGNMENT,
     CASE_RETRIES,
     CHUNK_SIZE_TOKENS,
     EXECUTION_ORDERS,
@@ -113,10 +112,7 @@ class CaseSpec:
 
 
 def _calibration_tokens(skill_tokens: int, ratio: float) -> int:
-    unaligned = skill_tokens * ratio
-    return math.floor(
-        unaligned / CALIBRATION_TOKEN_ALIGNMENT + 0.5
-    ) * CALIBRATION_TOKEN_ALIGNMENT
+    return max(1, math.floor(skill_tokens * ratio + 0.5))
 
 
 def _build_specs() -> list[CaseSpec]:
@@ -418,7 +414,7 @@ def _plot_stage_crossover(
     fig, axes = plt.subplots(
         1,
         len(SKILL_TOKEN_VALUES),
-        figsize=(7.2, 3.25),
+        figsize=(9.6, 3.25),
         sharey=True,
     )
     balances = {int(row["skill_tokens"]): row for row in balance_points}
@@ -580,7 +576,7 @@ def _prepare_root(specs: list[CaseSpec]) -> tuple[Path, Path, Path]:
         "warmup_requests": WARMUP_REQUESTS,
         "repetitions": REPETITIONS,
         "calibration_ratios": list(CALIBRATION_RATIOS),
-        "calibration_token_alignment": CALIBRATION_TOKEN_ALIGNMENT,
+        "calibration_token_rounding": "nearest_token_half_up",
         "calibration_tokens": {
             str(skill_tokens): {
                 f"{ratio:.2f}": _calibration_tokens(skill_tokens, ratio)

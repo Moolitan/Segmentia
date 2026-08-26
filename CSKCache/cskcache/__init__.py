@@ -44,6 +44,7 @@ from .metadata.skill_format import (
     render_skill_payload,
 )
 from .metadata.fingerprint import (
+    fingerprint_full_token_chunks,
     fingerprint_model,
     fingerprint_token_ids,
     fingerprint_tokenizer,
@@ -61,15 +62,24 @@ from .runtime.request_manager import RequestManager
 from .runtime.coordinator import SchedulerReuseCoordinator
 from .runtime.transport import PlanTransportCoordinator
 from .execution.base import (
+    CalibrationResidualCorrectionMethod,
+    DeviationTopKLayerResult,
+    DeviationTopKRecomputeMethod,
+    DirectReuseMethod,
     ExecutionOrder,
+    ExecutionMethod,
     LayerwiseCalibrationModel,
+    LayerwiseDeviationTopKModel,
     LayerwiseReuseStream,
+    NormalPrefillMethod,
     ReuseDataPlane,
     ReuseExecutionResult,
+    execution_method_for,
 )
 from .execution.executor import CSKCacheReuseExecutor
 from .runtime.base import (
     BindingState,
+    CorrectionStrategy,
     HostLoadState,
     ReusePlan,
     ReuseFailure,
@@ -77,6 +87,7 @@ from .runtime.base import (
     ReuseReadiness,
     ReuseReadinessResult,
     RuntimeReuseState,
+    SkillMatchMode,
     VerifiedRequestBinding,
 )
 from .storage.base import (
@@ -85,8 +96,8 @@ from .storage.base import (
     ExtentReadBackend,
     HostBufferPool,
     LayerObjectReadBackend,
-    StorageLoader,
 )
+from .storage.transfers import StorageTransfer
 from .storage.manager import (
     StorageManager,
 )
@@ -97,6 +108,7 @@ from .storage.backends.raw_block import (
 
 __all__ = [
     "BindingState",
+    "CorrectionStrategy",
     "ChunkingSpec",
     "ChunkSpan",
     "SkillChunkPlan",
@@ -122,6 +134,13 @@ __all__ = [
     "CSKCacheReuseExecutor",
     "ExtentReadBackend",
     "ExecutionOrder",
+    "ExecutionMethod",
+    "NormalPrefillMethod",
+    "DirectReuseMethod",
+    "CalibrationResidualCorrectionMethod",
+    "DeviationTopKRecomputeMethod",
+    "DeviationTopKLayerResult",
+    "execution_method_for",
     "HostBufferPool",
     "LayerObjectReadBackend",
     "HostLoadState",
@@ -131,6 +150,7 @@ __all__ = [
     "SingleLayerKVBuffer",
     "LayerwiseReuseStream",
     "LayerwiseCalibrationModel",
+    "LayerwiseDeviationTopKModel",
     "LayerBuildInput",
     "LMCacheHostBufferPool",
     "LMCacheLayerObjectReader",
@@ -153,17 +173,19 @@ __all__ = [
     "ReuseReadiness",
     "ReuseReadinessResult",
     "RuntimeReuseState",
+    "SkillMatchMode",
     "RequestManager",
     "SchedulerReuseCoordinator",
     "PlanTransportCoordinator",
     "VerifiedRequestBinding",
     "StorageManager",
-    "StorageLoader",
+    "StorageTransfer",
     "StorageBackend",
     "SOURCE_ARTIFACT_TYPE",
     "build_skill_token_identity",
     "generation_sidecar_path",
     "fingerprint_model",
+    "fingerprint_full_token_chunks",
     "fingerprint_token_ids",
     "fingerprint_tokenizer",
     "parse_skill_payload",

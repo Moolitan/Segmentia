@@ -10,7 +10,7 @@ import torch
 from ...metadata.fingerprint import fingerprint_model, fingerprint_tokenizer
 from ...metadata.manager import MetadataManager
 from ...profile import profile_event
-from ...runtime.base import ReusePolicy
+from ...runtime.base import CorrectionStrategy, ReusePolicy
 from ...runtime.request_manager import RequestManager
 from ...runtime.validator import validate_catalog_layout
 from ...host_memory.pool import LMCacheHostBufferPool
@@ -69,6 +69,13 @@ class LMCacheRuntimeBridge:
                 )
             ),
             reuse_policy=ReusePolicy(
+                correction_strategy=CorrectionStrategy(
+                    str(
+                        config.get_extra_config_value(
+                            "csk_correction_strategy", "fixed_prefix"
+                        )
+                    )
+                ),
                 minimum_full_recompute_tokens=int(
                     config.get_extra_config_value(
                         "csk_minimum_full_recompute_tokens", 32
@@ -77,6 +84,27 @@ class LMCacheRuntimeBridge:
                 calibration_tokens=int(
                     config.get_extra_config_value(
                         "csk_calibration_tokens", 32
+                    )
+                ),
+                calibration_ratio=(
+                    None
+                    if config.get_extra_config_value(
+                        "csk_calibration_ratio", None
+                    ) is None
+                    else float(
+                        config.get_extra_config_value(
+                            "csk_calibration_ratio", None
+                        )
+                    )
+                ),
+                deviation_recompute_ratio=float(
+                    config.get_extra_config_value(
+                        "csk_deviation_recompute_ratio", 0.15
+                    )
+                ),
+                deviation_check_layer=int(
+                    config.get_extra_config_value(
+                        "csk_deviation_check_layer", 1
                     )
                 ),
                 minimum_reuse_tokens=int(
@@ -211,6 +239,8 @@ class LMCacheRuntimeBridge:
             segment_start=binding.segment_start,
             segment_end=binding.segment_end,
             matched_tokens=binding.segment_end - binding.segment_start,
+            match_mode=binding.match_mode.value,
+            matched_chunk_count=binding.matched_chunk_count,
         )
         return {
             "ticket": binding.ticket,
@@ -218,6 +248,8 @@ class LMCacheRuntimeBridge:
             "request_id": binding.request_id,
             "segment_start": binding.segment_start,
             "segment_end": binding.segment_end,
+            "match_mode": binding.match_mode.value,
+            "matched_chunk_count": binding.matched_chunk_count,
         }
 
     def prepare_reuse(

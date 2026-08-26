@@ -7,18 +7,22 @@ from collections.abc import Sequence
 import torch
 
 from .base import (
+    CalibrationResidualCorrectionMethod,
+    DeviationTopKRecomputeMethod,
+    DirectReuseMethod,
     ExecutionOrder,
     LayerComputeEvents,
     LayerwiseCalibrationModel,
     LayerwiseReuseStream,
     ReuseDataPlane,
     ReuseExecutionResult,
+    execution_method_for,
 )
 from .compute_first import execute_compute_first
 from .corrector import ContextAwareKVCorrector
 from .h2d_first import execute_h2d_first
 from ..profile import PROFILE_ENABLED, profile_event
-from ..runtime.base import ReusePlan
+from ..runtime.base import CorrectionStrategy, ReusePlan
 
 
 class CSKCacheReuseExecutor:
@@ -85,9 +89,43 @@ class CSKCacheReuseExecutor:
             slot_mapping=slot_mapping,
             profile_t0_event=profile_t0_event,
         )
-        calibration_model = self._data_plane.open_calibration_model(
-            plan, token_ids
-        )
+        strategy = CorrectionStrategy(plan.correction_strategy)
+        method = execution_method_for(strategy)
+        if isinstance(method, DirectReuseMethod):
+            try:
+                self._execute_direct(plan, stream)
+                stream.finish()
+            except Exception:
+                stream.abort()
+                raise
+            return ReuseExecutionResult(
+                ticket=plan.ticket,
+                request_id=plan.request_id,
+                processed_layers=self._expected_layers,
+                correction_alpha=plan.correction_alpha,
+                correction_strategy=strategy,
+                method=method,
+            )
+
+        if isinstance(method, DeviationTopKRecomputeMethod):
+            self._execute_deviation_topk(
+                plan,
+                stream,
+                token_ids=token_ids,
+            )
+            return ReuseExecutionResult(
+                ticket=plan.ticket,
+                request_id=plan.request_id,
+                processed_layers=self._expected_layers,
+                correction_alpha=plan.correction_alpha,
+                correction_strategy=strategy,
+                method=method,
+            )
+
+        if not isinstance(method, CalibrationResidualCorrectionMethod):
+            raise RuntimeError(f"unsupported reuse execution method: {method.name}")
+
+        calibration_model = self._data_plane.open_calibration_model(plan, token_ids)
         try:
             if self._execution_order == "h2d_first":
                 compute_events = execute_h2d_first(
@@ -164,7 +202,117 @@ class CSKCacheReuseExecutor:
             request_id=plan.request_id,
             processed_layers=self._expected_layers,
             correction_alpha=plan.correction_alpha,
+            correction_strategy=strategy,
+            method=method,
         )
+
+    def _execute_deviation_topk(
+        self,
+        plan: ReusePlan,
+        stream: LayerwiseReuseStream,
+        *,
+        token_ids: Sequence[int],
+    ) -> None:
+        """Run full-through-check-layer then selective top-k recomputation."""
+
+        if plan.deviation_check_layer >= self._expected_layers:
+            stream.abort()
+            raise ValueError("deviation_topk check layer is outside the model")
+        candidate_tokens = plan.reuse_end - plan.reuse_start
+        selected_tokens = max(
+            1,
+            int(candidate_tokens * plan.deviation_recompute_ratio),
+        )
+        model = None
+        try:
+            model = self._data_plane.open_deviation_topk_model(plan, token_ids)
+            stream.submit_layer(0)
+            stream.wait_layer(0)
+            for layer_id in range(self._expected_layers):
+                next_layer = layer_id + 1
+                if (
+                    self._execution_order == ExecutionOrder.H2D_FIRST.value
+                    and next_layer < self._expected_layers
+                ):
+                    stream.submit_layer(next_layer)
+                try:
+                    layer_result = next(model)
+                except StopIteration as exc:
+                    raise RuntimeError(
+                        f"deviation model ended before layer {layer_id}"
+                    ) from exc
+                expected_recomputed = (
+                    candidate_tokens
+                    if layer_id < plan.deviation_check_layer
+                    else selected_tokens
+                )
+                if (
+                    layer_result.layer_id != layer_id
+                    or layer_result.candidate_tokens != candidate_tokens
+                    or layer_result.recomputed_tokens != expected_recomputed
+                    or layer_result.selection_applied
+                    != (layer_id == plan.deviation_check_layer)
+                ):
+                    raise RuntimeError(
+                        "deviation_topk model returned inconsistent layer evidence"
+                    )
+                self._data_plane.mark_layer_loaded(
+                    plan.ticket, plan.request_id, layer_id
+                )
+                stream.commit_layer(layer_id)
+                self._data_plane.mark_layer_corrected(
+                    plan.ticket, plan.request_id, layer_id
+                )
+                profile_event(
+                    "cskcache_deviation_topk_layer",
+                    plan.request_id,
+                    ticket=plan.ticket,
+                    layer=layer_id,
+                    candidate_tokens=candidate_tokens,
+                    recomputed_tokens=layer_result.recomputed_tokens,
+                    selection_applied=layer_result.selection_applied,
+                    recompute_ratio=plan.deviation_recompute_ratio,
+                    check_layer=plan.deviation_check_layer,
+                )
+                if next_layer < self._expected_layers:
+                    if self._execution_order == ExecutionOrder.COMPUTE_FIRST.value:
+                        stream.submit_layer(next_layer)
+                    stream.wait_layer(next_layer)
+            try:
+                next(model)
+            except StopIteration:
+                pass
+            else:
+                raise RuntimeError("deviation model produced too many layers")
+            stream.finish()
+        except Exception:
+            stream.abort()
+            raise
+        finally:
+            if model is not None:
+                model.close()
+
+    def _execute_direct(
+        self,
+        plan: ReusePlan,
+        stream: LayerwiseReuseStream,
+    ) -> None:
+        """Install staged offline KV without running the auxiliary model."""
+
+        stream.submit_layer(0)
+        stream.wait_layer(0)
+        for layer_id in range(self._expected_layers):
+            self._data_plane.mark_layer_loaded(
+                plan.ticket, plan.request_id, layer_id
+            )
+            stream.commit_layer(layer_id)
+            self._data_plane.mark_layer_corrected(
+                plan.ticket, plan.request_id, layer_id
+            )
+            next_layer = layer_id + 1
+            if next_layer < self._expected_layers:
+                stream.submit_layer(next_layer)
+                stream.wait_layer(next_layer)
 
     def _compute_correct_install_layer(
         self,

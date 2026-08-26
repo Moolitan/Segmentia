@@ -9,8 +9,9 @@ from typing import Any
 import torch
 
 from ...execution.executor import CSKCacheReuseExecutor
+from ...execution.base import DeviationTopKLayerResult
 from ...profile import PROFILE_ENABLED, profile_event
-from ...runtime.base import ReusePlan
+from ...runtime.base import CorrectionStrategy, ReusePlan
 from ...host_memory.transfers import PerObjectCopySession, bind_layer_buffers
 from .forward_profile import CalibrationForwardProfiler
 from lmcache import torch_device_type
@@ -22,12 +23,12 @@ from lmcache.v1.gpu_connector.utils import assert_layerwise_gpu_connector
 
 
 class _CSKCalibrationBlender:
-    """Supply current-prefix KV to LMCache's auxiliary model.
+    """Supply request-local KV to CSKCache's auxiliary correction model.
 
-    Unlike CacheBlend's deviation selector, this adapter always forwards the
-    fixed contiguous calibration suffix.  For each layer it combines the
-    request's already-computed PagedKV prefix with the fresh calibration K/V,
-    then retains the fresh K/V for CSKCache's residual/install stage.
+    Prefix-residual correction forwards one contiguous calibration suffix.
+    Deviation top-k forwards the complete reusable suffix through the check
+    layer, selects the largest key deviations once, and propagates only those
+    token rows through later layers.
     """
 
     def __init__(self, gpu_connector: Any) -> None:
@@ -36,6 +37,9 @@ class _CSKCalibrationBlender:
         self._profiler: CalibrationForwardProfiler | None = None
         self._plan: ReusePlan | None = None
         self._results: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
+        self._deviation_results: dict[int, DeviationTopKLayerResult] = {}
+        self._deviation_indices: torch.Tensor | None = None
+        self._deviation_positions: torch.Tensor | None = None
 
     def bind_model(self, model: Any) -> None:
         self._model = model
@@ -46,8 +50,21 @@ class _CSKCalibrationBlender:
     def begin(self, plan: ReusePlan) -> None:
         if self._plan is not None:
             raise RuntimeError("a CSK calibration model is already active")
+        if (
+            CorrectionStrategy(plan.correction_strategy)
+            is CorrectionStrategy.DEVIATION_TOPK
+            and self._model is not None
+            and plan.deviation_check_layer
+            >= len(self._model.vllm_model.model.layers)
+        ):
+            raise ValueError(
+                "deviation_topk check layer is outside the model"
+            )
         self._plan = plan
         self._results.clear()
+        self._deviation_results.clear()
+        self._deviation_indices = None
+        self._deviation_positions = None
         if self._profiler is not None:
             self._profiler.begin(plan)
 
@@ -56,6 +73,9 @@ class _CSKCalibrationBlender:
             self._profiler.finish()
         self._plan = None
         self._results.clear()
+        self._deviation_results.clear()
+        self._deviation_indices = None
+        self._deviation_positions = None
 
     def take_result(self, layer_id: int) -> tuple[torch.Tensor, torch.Tensor]:
         try:
@@ -63,6 +83,16 @@ class _CSKCalibrationBlender:
         except KeyError as exc:
             raise RuntimeError(
                 f"calibration model did not produce layer {layer_id} KV"
+            ) from exc
+
+    def take_deviation_result(
+        self, layer_id: int
+    ) -> DeviationTopKLayerResult:
+        try:
+            return self._deviation_results.pop(layer_id)
+        except KeyError as exc:
+            raise RuntimeError(
+                f"deviation model did not produce layer {layer_id} evidence"
             ) from exc
 
     def process_qkv(
@@ -79,6 +109,19 @@ class _CSKCalibrationBlender:
         model = self._model
         if plan is None or model is None:
             raise RuntimeError("CSK calibration model is not initialized")
+        if (
+            CorrectionStrategy(plan.correction_strategy)
+            is CorrectionStrategy.DEVIATION_TOPK
+        ):
+            return self._process_deviation_topk(
+                q,
+                k,
+                v,
+                residual,
+                layer_id,
+                attn_output,
+                attn_metadata,
+            )
         calibration_tokens = plan.calibration_end - plan.calibration_start
         if q.shape[0] != calibration_tokens:
             raise RuntimeError("calibration query length differs from ReusePlan")
@@ -121,6 +164,119 @@ class _CSKCalibrationBlender:
         if self._profiler is not None:
             self._profiler.end(layer_id, "kv_concat")
             self._profiler.start(layer_id, "attention")
+        return (
+            q,
+            key_bank,
+            value_bank,
+            residual,
+            attn_output,
+            attn_metadata,
+        )
+
+    def _process_deviation_topk(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        residual: torch.Tensor,
+        layer_id: int,
+        attn_output: torch.Tensor | None,
+        attn_metadata: Any,
+    ):
+        """Apply native CacheBlend's check-once deviation top-k semantics."""
+
+        plan = self._plan
+        model = self._model
+        assert plan is not None and model is not None
+        candidate_tokens = plan.reuse_end - plan.reuse_start
+        expected_queries = (
+            candidate_tokens
+            if self._deviation_indices is None
+            else len(self._deviation_indices)
+        )
+        if q.shape[0] != expected_queries:
+            raise RuntimeError(
+                "deviation_topk query length differs from selected token count"
+            )
+        if attn_output is None:
+            attn_output = torch.empty_like(q)
+        if self._deviation_positions is None:
+            self._deviation_positions = torch.arange(
+                plan.reuse_start,
+                plan.reuse_end,
+                dtype=torch.int64,
+                device=q.device,
+            )
+
+        layer = model.vllm_model.model.layers[layer_id]
+        q, k = layer.self_attn.rotary_emb(
+            self._deviation_positions, q, k
+        )
+        fresh_key = k.reshape(k.shape[0], -1)
+        fresh_value = v.reshape(v.shape[0], -1)
+        staged_key, staged_value = self._gpu_connector.get_kv(layer_id)
+        if (
+            staged_key.ndim != 2
+            or staged_value.ndim != 2
+            or staged_key.shape[0] != candidate_tokens
+            or staged_value.shape[0] != candidate_tokens
+        ):
+            raise ValueError("deviation_topk staged candidate range is invalid")
+        candidate_key = staged_key
+        candidate_value = staged_value
+
+        selection_applied = False
+        if layer_id < plan.deviation_check_layer:
+            candidate_key.copy_(fresh_key)
+            candidate_value.copy_(fresh_value)
+            recomputed_tokens = candidate_tokens
+        elif layer_id == plan.deviation_check_layer:
+            diff_key = torch.sum(
+                (fresh_key.to(torch.float32) - candidate_key.to(torch.float32))
+                ** 2,
+                dim=1,
+            )
+            topk_tokens = max(
+                1,
+                int(candidate_tokens * plan.deviation_recompute_ratio),
+            )
+            top_indices = torch.topk(diff_key, k=topk_tokens).indices
+            top_indices, _ = torch.sort(top_indices)
+            self._deviation_indices = top_indices
+            self._deviation_positions = self._deviation_positions[top_indices]
+            q = q[top_indices]
+            k = k[top_indices]
+            v = v[top_indices]
+            residual = residual[top_indices]
+            fresh_key = fresh_key[top_indices]
+            fresh_value = fresh_value[top_indices]
+            candidate_key[top_indices] = fresh_key
+            candidate_value[top_indices] = fresh_value
+            attn_output = attn_output[:topk_tokens]
+            attn_metadata.update_from_top_indices(top_indices)
+            recomputed_tokens = topk_tokens
+            selection_applied = True
+        else:
+            top_indices = self._deviation_indices
+            if top_indices is None:
+                raise RuntimeError(
+                    "deviation_topk reached a later layer before selection"
+                )
+            candidate_key[top_indices] = fresh_key
+            candidate_value[top_indices] = fresh_value
+            recomputed_tokens = len(top_indices)
+
+        prefix_key, prefix_value = self._gpu_connector.get_paged_kv(
+            layer_id, 0, plan.reuse_start
+        )
+        key_bank = torch.cat((prefix_key, candidate_key), dim=0)
+        value_bank = torch.cat((prefix_value, candidate_value), dim=0)
+        self._deviation_results[layer_id] = DeviationTopKLayerResult(
+            layer_id=layer_id,
+            candidate_tokens=candidate_tokens,
+            recomputed_tokens=recomputed_tokens,
+            selection_applied=selection_applied,
+        )
         return (
             q,
             key_bank,
@@ -218,6 +374,50 @@ class LMCacheCSKDataPlane:
 
         return run()
 
+    def open_deviation_topk_model(
+        self,
+        plan: ReusePlan,
+        token_ids: Sequence[int],
+    ) -> Generator[DeviationTopKLayerResult, None, None]:
+        """Create the check-once, top-k-selective auxiliary forward."""
+
+        if (
+            CorrectionStrategy(plan.correction_strategy)
+            is not CorrectionStrategy.DEVIATION_TOPK
+        ):
+            raise ValueError("deviation model requires deviation_topk strategy")
+        candidate_ids = token_ids[plan.reuse_start : plan.reuse_end]
+        if len(candidate_ids) != plan.reuse_end - plan.reuse_start:
+            raise ValueError("token_ids do not cover the deviation candidate range")
+        tokens = torch.tensor(
+            candidate_ids,
+            dtype=torch.long,
+            device=torch_device_type,
+        )
+        self._calibration_blender.begin(plan)
+        try:
+            model_executor = self.layerwise_model.compute_layer(
+                tokens,
+                position_start=plan.reuse_start,
+                kv_seq_len=plan.reuse_end,
+            )
+        except Exception:
+            self._calibration_blender.finish()
+            raise
+
+        def run():
+            try:
+                for layer_id in range(self.num_layers):
+                    next(model_executor)
+                    yield self._calibration_blender.take_deviation_result(
+                        layer_id
+                    )
+            finally:
+                model_executor.close()
+                self._calibration_blender.finish()
+
+        return run()
+
     def mark_layer_loaded(
         self, ticket: str, request_id: str, layer_id: int
     ) -> None:
@@ -250,7 +450,7 @@ class _LMCacheCSKLayerStream:
         self._pending_layer: int | None = None
         self._finished = False
 
-        token_count = plan.segment_end - plan.segment_start
+        token_count = plan.source_object_token_count
         source_position_start = plan.source_reuse_start - (
             plan.reuse_start - plan.segment_start
         )
@@ -456,9 +656,19 @@ class LMCacheWorkerIntegration:
             ticket=result.ticket,
             layers=result.processed_layers,
             correction_alpha=result.correction_alpha,
+            correction_strategy=result.correction_strategy.value,
+            execution_method=result.method.name,
             calibration_tokens=(
                 plan.calibration_end - plan.calibration_start
             ),
-            correction="auxiliary_forward_then_key_headwise",
+            correction=(
+                "direct_install"
+                if result.method.name == "direct_reuse"
+                else (
+                    "deviation_topk_selective_recompute"
+                    if result.method.name == "deviation_topk"
+                    else "auxiliary_forward_then_key_headwise"
+                )
+            ),
         )
         return result

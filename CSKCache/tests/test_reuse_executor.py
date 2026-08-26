@@ -6,11 +6,18 @@ import pytest
 import torch
 
 from cskcache import (
+    CalibrationResidualCorrectionMethod,
     CSKCacheReuseExecutor,
+    CorrectionStrategy,
     ContextAwareKVCorrector,
+    DeviationTopKLayerResult,
+    DeviationTopKRecomputeMethod,
+    DirectReuseMethod,
+    NormalPrefillMethod,
     ChunkLayerBuffer,
     SingleLayerChunkBuffers,
     ReusePlan,
+    execution_method_for,
 )
 
 
@@ -29,6 +36,65 @@ def plan() -> ReusePlan:
         calibration_end=16,
         correction_alpha=0.6,
         block_alignment=2,
+    )
+
+
+def direct_plan() -> ReusePlan:
+    return ReusePlan(
+        ticket="call-direct",
+        cache_object_id="skill-v1",
+        request_id="request-direct",
+        segment_start=10,
+        segment_end=22,
+        reuse_start=16,
+        reuse_end=20,
+        source_reuse_start=6,
+        source_reuse_end=10,
+        calibration_start=16,
+        calibration_end=16,
+        correction_alpha=0.6,
+        block_alignment=2,
+        correction_strategy=CorrectionStrategy.DIRECT,
+    )
+
+
+def deviation_plan() -> ReusePlan:
+    return ReusePlan(
+        ticket="call-topk",
+        cache_object_id="skill-v1",
+        request_id="request-topk",
+        segment_start=10,
+        segment_end=22,
+        reuse_start=16,
+        reuse_end=20,
+        source_reuse_start=6,
+        source_reuse_end=10,
+        calibration_start=16,
+        calibration_end=16,
+        correction_alpha=0.6,
+        block_alignment=2,
+        correction_strategy=CorrectionStrategy.DEVIATION_TOPK,
+        deviation_recompute_ratio=0.5,
+        deviation_check_layer=1,
+    )
+
+
+def test_execution_method_classes_cover_all_latency_arms() -> None:
+    assert NormalPrefillMethod().reuses_cache is False
+    assert isinstance(
+        execution_method_for(CorrectionStrategy.DIRECT), DirectReuseMethod
+    )
+    assert isinstance(
+        execution_method_for(CorrectionStrategy.FIXED_PREFIX),
+        CalibrationResidualCorrectionMethod,
+    )
+    assert isinstance(
+        execution_method_for(CorrectionStrategy.RATIO_PREFIX),
+        CalibrationResidualCorrectionMethod,
+    )
+    assert isinstance(
+        execution_method_for(CorrectionStrategy.DEVIATION_TOPK),
+        DeviationTopKRecomputeMethod,
     )
 
 
@@ -162,6 +228,52 @@ class FakeDataPlane:
         self_outer = self
         return ModelExecutor()
 
+    def open_deviation_topk_model(self, reuse_plan, token_ids):
+        self.calls.append(
+            (
+                "open_topk_model",
+                tuple(token_ids[reuse_plan.reuse_start : reuse_plan.reuse_end]),
+            )
+        )
+        stream = self.stream
+
+        class ModelExecutor:
+            def __init__(self):
+                self.layer_id = 0
+
+            def __next__(self):
+                layer_id = self.layer_id
+                if layer_id >= len(self_outer.buffers):
+                    raise StopIteration
+                self.layer_id += 1
+                stream.calls.append(("forward_topk", layer_id))
+                candidate_tokens = reuse_plan.reuse_end - reuse_plan.reuse_start
+                selected_tokens = max(
+                    1,
+                    int(
+                        candidate_tokens
+                        * reuse_plan.deviation_recompute_ratio
+                    ),
+                )
+                return DeviationTopKLayerResult(
+                    layer_id=layer_id,
+                    candidate_tokens=candidate_tokens,
+                    recomputed_tokens=(
+                        candidate_tokens
+                        if layer_id < reuse_plan.deviation_check_layer
+                        else selected_tokens
+                    ),
+                    selection_applied=(
+                        layer_id == reuse_plan.deviation_check_layer
+                    ),
+                )
+
+            def close(self):
+                stream.calls.append(("topk_model_close",))
+
+        self_outer = self
+        return ModelExecutor()
+
     def get_active_layer_buffers(self, ticket: str, request_id: str):
         self.calls.append(("get_buffers", ticket, request_id))
         return self.buffers
@@ -238,6 +350,58 @@ def test_executor_runs_h2d_first_for_packed_layer_buffers() -> None:
     assert torch.allclose(
         data_plane.stream.keys[1][2:], torch.full((4, 4), 1.2)
     )
+
+
+def test_executor_direct_installs_without_opening_calibration_model() -> None:
+    data_plane = FakeDataPlane(2)
+    executor = CSKCacheReuseExecutor(data_plane, expected_layers=2)
+
+    result = executor.execute(
+        direct_plan(),
+        token_ids=tuple(range(20)),
+        kvcaches=(torch.empty(0), torch.empty(0)),
+        slot_mapping=torch.arange(20),
+    )
+
+    assert result.correction_strategy is CorrectionStrategy.DIRECT
+    assert not any(call[0] == "open_model" for call in data_plane.calls)
+    assert data_plane.stream.calls == [
+        ("submit", 0),
+        ("wait", 0),
+        ("commit", 0),
+        ("submit", 1),
+        ("wait", 1),
+        ("commit", 1),
+        ("finish",),
+    ]
+
+
+def test_executor_runs_deviation_topk_as_an_independent_method() -> None:
+    data_plane = FakeDataPlane(2)
+    executor = CSKCacheReuseExecutor(data_plane, expected_layers=2)
+
+    result = executor.execute(
+        deviation_plan(),
+        token_ids=tuple(range(20)),
+        kvcaches=(torch.empty(0), torch.empty(0)),
+        slot_mapping=torch.arange(20),
+    )
+
+    assert isinstance(result.method, DeviationTopKRecomputeMethod)
+    assert result.correction_strategy is CorrectionStrategy.DEVIATION_TOPK
+    assert ("open_topk_model", (16, 17, 18, 19)) in data_plane.calls
+    assert data_plane.stream.calls == [
+        ("submit", 0),
+        ("wait", 0),
+        ("submit", 1),
+        ("forward_topk", 0),
+        ("commit", 0),
+        ("wait", 1),
+        ("forward_topk", 1),
+        ("commit", 1),
+        ("finish",),
+        ("topk_model_close",),
+    ]
 
 
 def test_executor_runs_compute_first_for_chunk_single_layer_buffers() -> None:

@@ -56,6 +56,7 @@ class CacheObjectBuildInput:
     token_ids_sha256: str
     start_marker_token_ids: tuple[int, ...]
     layers: tuple[LayerBuildInput, ...]
+    chunk_token_ids_sha256: tuple[str, ...] = ()
     chunking: ChunkingSpec = ChunkingSpec(256)
     storage_layout: KVLayout = KVLayout.PACKED_CHUNKS_SINGLE_LAYER
 
@@ -87,6 +88,7 @@ class DirectRawCacheObjectBuildInput:
     token_ids_sha256: str
     start_marker_token_ids: tuple[int, ...]
     layers: tuple[DirectRawLayerBuildInput, ...]
+    chunk_token_ids_sha256: tuple[str, ...] = ()
     chunking: ChunkingSpec = ChunkingSpec(256)
     storage_layout: KVLayout = KVLayout.PACKED_CHUNKS_SINGLE_LAYER
 
@@ -118,5 +120,6 @@ class LocalDiskCacheObjectBuildInput:
     token_ids_sha256: str
     start_marker_token_ids: tuple[int, ...]
     layers: tuple[LocalDiskLayerBuildInput, ...]
+    chunk_token_ids_sha256: tuple[str, ...] = ()
     chunking: ChunkingSpec = ChunkingSpec(256)
     storage_layout: KVLayout = KVLayout.PACKED_CHUNKS_SINGLE_LAYER

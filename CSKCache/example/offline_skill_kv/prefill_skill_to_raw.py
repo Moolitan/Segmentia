@@ -20,8 +20,10 @@ import torch
 from transformers import AutoConfig, AutoTokenizer
 
 from cskcache import (
+    ChunkingSpec,
     MetadataManager,
     build_skill_token_identity,
+    fingerprint_full_token_chunks,
     fingerprint_model,
     fingerprint_tokenizer,
 )
@@ -209,6 +211,12 @@ def main() -> None:
     )
     token_identity = build_skill_token_identity(tokenizer, skill_name, text)
     token_ids = list(token_identity.token_ids)
+    chunking = ChunkingSpec(
+        chunk_size_tokens=int(os.environ["CSKCACHE_CHUNK_SIZE_TOKENS"])
+    )
+    chunk_token_ids_sha256 = fingerprint_full_token_chunks(
+        token_ids, chunking.chunk_size_tokens
+    )
     if len(token_ids) > args.max_input_tokens:
         raise ValueError(
             f"Skill has {len(token_ids)} tokens; limit is {args.max_input_tokens}"
@@ -260,7 +268,24 @@ def main() -> None:
             existing is not None
             and existing.skill_version == skill_version
             and existing.token_ids_sha256 == token_identity.token_ids_sha256
+            and existing.token_count == len(token_ids)
         ):
+            if (
+                existing.chunking != chunking
+                or existing.chunk_token_ids_sha256
+                != chunk_token_ids_sha256
+            ):
+                manager.configure_chunk_authentication(
+                    existing.object_id,
+                    token_ids_sha256=token_identity.token_ids_sha256,
+                    chunking=chunking,
+                    chunk_token_ids_sha256=chunk_token_ids_sha256,
+                )
+                print(
+                    f"[indexed] {args.cache_id} tokens={len(token_ids)} "
+                    f"chunks={len(chunk_token_ids_sha256)} (KV unchanged)"
+                )
+                return
             print(
                 f"[skipped] {args.cache_id} tokens={len(token_ids)} "
                 "(identical Catalog object exists)"
@@ -347,15 +372,14 @@ def main() -> None:
             "tokenizer_fingerprint": tokenizer_digest,
             "token_count": len(token_ids),
             "chunking": {
-                "chunk_size_tokens": int(
-                    os.environ["CSKCACHE_CHUNK_SIZE_TOKENS"]
-                ),
+                "chunk_size_tokens": chunking.chunk_size_tokens,
             },
             "storage_layout": os.environ.get(
                 "CSKCACHE_STORAGE_LAYOUT", "chunk_single_layer"
             ),
             "source_position_start": 0,
             "token_ids_sha256": token_identity.token_ids_sha256,
+            "chunk_token_ids_sha256": list(chunk_token_ids_sha256),
             "start_marker_token_ids": list(token_identity.start_marker_token_ids),
             "request_id": request_id,
             "response_id": response.get("id"),

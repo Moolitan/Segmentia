@@ -10,6 +10,8 @@ import time
 from cskcache import (
     BindingState,
     CacheObjectMetadata,
+    ChunkingSpec,
+    CorrectionStrategy,
     ContainerMetadata,
     HostLoadState,
     LayerExtent,
@@ -18,7 +20,9 @@ from cskcache import (
     ReusePolicy,
     ReuseReadiness,
     RequestManager,
+    SkillMatchMode,
     StorageManager,
+    fingerprint_full_token_chunks,
     publish_generation_sidecar,
 )
 
@@ -92,6 +96,7 @@ def build_runtime(
     *,
     ttl_seconds: float = 60.0,
     skill_tokens: Sequence[int] = SKILL_TOKENS,
+    chunk_size_tokens: int = 256,
 ):
     raw_path = tmp_path / "skill.raw"
     raw_path.write_bytes(b"\0" * 16384)
@@ -127,10 +132,14 @@ def build_runtime(
         token_count=len(skill_tokens),
         source_position_start=0,
         token_ids_sha256=token_sha256(skill_tokens),
+        chunk_token_ids_sha256=fingerprint_full_token_chunks(
+            skill_tokens, chunk_size_tokens
+        ),
         start_marker_token_ids=tuple(skill_tokens[:2]),
         container_id=container.container_id,
         read_strategy=ReadStrategy.BATCHED,
         layers=extents,
+        chunking=ChunkingSpec(chunk_size_tokens),
     )
     metadata = MetadataManager(tmp_path / "metadata.json", expected_layers=2)
     metadata.publish_container(container)
@@ -153,14 +162,16 @@ def bind_verified_request(
     *,
     skill_tokens: Sequence[int],
     prompt_prefix: Sequence[int] = (),
+    ticket: str = "call-1",
+    request_id: str = "request-1",
 ) -> None:
     content = (
         '<context_segment skill_name="internal-comms">\n'
         "body\n</context_segment>\n"
     )
-    assert requests.inspect_tool_observation("call-1", "skill", content)
+    assert requests.inspect_tool_observation(ticket, "skill", content)
     prompt = [*prompt_prefix, *skill_tokens, 9999]
-    assert requests.authenticate_and_bind("call-1", "request-1", prompt)
+    assert requests.authenticate_and_bind(ticket, request_id, prompt)
 
 
 def test_select_is_nonblocking_and_duplicate_is_idempotent(tmp_path: Path) -> None:
@@ -355,6 +366,120 @@ def test_binding_selects_newest_authenticated_occurrence(tmp_path: Path) -> None
         requests.close()
 
 
+def test_binding_reuses_only_longest_unchanged_chunk_prefix(
+    tmp_path: Path,
+) -> None:
+    skill_tokens = tuple(range(1000, 2024))
+    metadata, backend, _pool, _storage, requests = build_runtime(
+        tmp_path,
+        skill_tokens=skill_tokens,
+        chunk_size_tokens=64,
+    )
+    try:
+        assert requests.select_skill("call-1", "internal-comms")
+        assert backend.started.wait(timeout=5)
+        content = (
+            '<context_segment skill_name="internal-comms">\n'
+            "changed body\n</context_segment>\n"
+        )
+        assert requests.inspect_tool_observation("call-1", "skill", content)
+        variant = list(skill_tokens)
+        variant[6 * 64] = 999_999
+        prompt_prefix = tuple(range(13))
+
+        binding = requests.authenticate_and_bind(
+            "call-1",
+            "request-1",
+            [*prompt_prefix, *variant, 55],
+        )
+
+        assert binding is not None
+        assert binding.match_mode is SkillMatchMode.PARTIAL_PREFIX
+        assert binding.matched_chunk_count == 6
+        assert (binding.segment_start, binding.segment_end) == (13, 397)
+        state = metadata.get_runtime("call-1")
+        assert state.match_mode is SkillMatchMode.PARTIAL_PREFIX
+        assert state.matched_chunk_count == 6
+
+        plan = requests.prepare_reuse(
+            "call-1", "request-1", block_alignment=16
+        )
+        assert plan is not None
+        assert plan.source_object_token_count == len(skill_tokens)
+        assert (plan.segment_start, plan.segment_end) == (13, 397)
+        assert (plan.reuse_start, plan.reuse_end) == (80, 384)
+        assert (plan.source_reuse_start, plan.source_reuse_end) == (67, 371)
+    finally:
+        backend.complete.set()
+        requests.close()
+
+
+def test_newest_variant_does_not_fall_back_to_older_exact_skill(
+    tmp_path: Path,
+) -> None:
+    skill_tokens = tuple(range(1000, 1512))
+    _metadata, backend, _pool, _storage, requests = build_runtime(
+        tmp_path,
+        skill_tokens=skill_tokens,
+        chunk_size_tokens=64,
+    )
+    try:
+        assert requests.select_skill("call-1", "internal-comms")
+        assert backend.started.wait(timeout=5)
+        content = (
+            '<context_segment skill_name="internal-comms">\n'
+            "changed body\n</context_segment>\n"
+        )
+        assert requests.inspect_tool_observation("call-1", "skill", content)
+        variant = list(skill_tokens)
+        variant[3 * 64] = 999_999
+        newest_start = len(skill_tokens) + 1
+        prompt = [*skill_tokens, 77, *variant, 88]
+
+        binding = requests.authenticate_and_bind("call-1", "request-1", prompt)
+
+        assert binding is not None
+        assert binding.segment_start == newest_start
+        assert binding.segment_end == newest_start + 3 * 64
+        assert binding.matched_chunk_count == 3
+        assert binding.match_mode is SkillMatchMode.PARTIAL_PREFIX
+    finally:
+        backend.complete.set()
+        requests.close()
+
+
+def test_partial_authentication_stops_before_an_unchanged_suffix(
+    tmp_path: Path,
+) -> None:
+    skill_tokens = tuple(range(1000, 1384))
+    _metadata, backend, _pool, _storage, requests = build_runtime(
+        tmp_path,
+        skill_tokens=skill_tokens,
+        chunk_size_tokens=64,
+    )
+    try:
+        assert requests.select_skill("call-1", "internal-comms")
+        assert backend.started.wait(timeout=5)
+        content = (
+            '<context_segment skill_name="internal-comms">\n'
+            "changed body\n</context_segment>\n"
+        )
+        assert requests.inspect_tool_observation("call-1", "skill", content)
+        variant = list(skill_tokens)
+        variant[2 * 64] = 999_999
+
+        binding = requests.authenticate_and_bind(
+            "call-1", "request-1", [*variant, 55]
+        )
+
+        assert binding is not None
+        assert binding.matched_chunk_count == 2
+        assert binding.segment_end == 2 * 64
+    finally:
+        backend.complete.set()
+        requests.close()
+
+
 def test_failed_skill_observation_cancels_prefetch(tmp_path: Path) -> None:
     metadata, backend, pool, _storage, requests = build_runtime(tmp_path)
     try:
@@ -435,6 +560,66 @@ def test_prepare_reuse_aligns_online_and_source_ranges(tmp_path: Path) -> None:
     finally:
         backend.complete.set()
         requests.close()
+
+
+def test_prepare_reuse_resolves_ratio_and_direct_strategies(tmp_path: Path) -> None:
+    skill_tokens = tuple(range(1000, 2024))
+
+    def prepare(ticket: str, request_id: str, policy: ReusePolicy):
+        (tmp_path / ticket).mkdir()
+        _metadata, backend, _pool, _storage, requests = build_runtime(
+            tmp_path / ticket, skill_tokens=skill_tokens
+        )
+        assert requests.select_skill(ticket, "internal-comms")
+        assert backend.started.wait(timeout=5)
+        bind_verified_request(
+            requests,
+            ticket=ticket,
+            request_id=request_id,
+            skill_tokens=skill_tokens,
+        )
+        result = requests.prepare_reuse(
+            ticket, request_id, block_alignment=16, policy=policy
+        )
+        backend.complete.set()
+        requests.close()
+        return result
+
+    ratio = prepare(
+        "ratio-call",
+        "ratio-request",
+        ReusePolicy(
+            correction_strategy=CorrectionStrategy.RATIO_PREFIX,
+            calibration_ratio=0.15,
+        ),
+    )
+    assert ratio is not None
+    assert ratio.correction_strategy is CorrectionStrategy.RATIO_PREFIX
+    assert ratio.calibration_end - ratio.calibration_start == 154
+
+    direct = prepare(
+        "direct-call",
+        "direct-request",
+        ReusePolicy(correction_strategy=CorrectionStrategy.DIRECT),
+    )
+    assert direct is not None
+    assert direct.correction_strategy is CorrectionStrategy.DIRECT
+    assert direct.calibration_start == direct.calibration_end == direct.reuse_start
+
+    deviation = prepare(
+        "deviation-call",
+        "deviation-request",
+        ReusePolicy(
+            correction_strategy=CorrectionStrategy.DEVIATION_TOPK,
+            deviation_recompute_ratio=0.15,
+            deviation_check_layer=1,
+        ),
+    )
+    assert deviation is not None
+    assert deviation.correction_strategy is CorrectionStrategy.DEVIATION_TOPK
+    assert deviation.calibration_start == deviation.calibration_end
+    assert deviation.deviation_recompute_ratio == 0.15
+    assert deviation.deviation_check_layer == 1
 
 
 def test_readiness_is_orthogonal_to_verified_request(tmp_path: Path) -> None:

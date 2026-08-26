@@ -68,3 +68,23 @@ def fingerprint_token_ids(token_ids: Sequence[int]) -> str:
             raise ValueError(f"token ID is outside uint32: {value}")
         digest.update(value.to_bytes(4, "little", signed=False))
     return digest.hexdigest()
+
+
+def fingerprint_full_token_chunks(
+    token_ids: Sequence[int],
+    chunk_size_tokens: int,
+) -> tuple[str, ...]:
+    """Fingerprint complete fixed-size chunks for prefix authentication.
+
+    The final short tail is deliberately omitted.  A partial-version hit may
+    end only at a complete logical-chunk boundary; an exact full-object hit is
+    still authenticated by ``token_ids_sha256``.
+    """
+
+    if chunk_size_tokens <= 0:
+        raise ValueError("chunk_size_tokens must be > 0")
+    complete_tokens = len(token_ids) - (len(token_ids) % chunk_size_tokens)
+    return tuple(
+        fingerprint_token_ids(token_ids[start : start + chunk_size_tokens])
+        for start in range(0, complete_tokens, chunk_size_tokens)
+    )

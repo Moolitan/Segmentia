@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum
+import math
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
@@ -53,9 +54,25 @@ class LeaseOwner(str, Enum):
     RELEASED = "released"
 
 
+class SkillMatchMode(str, Enum):
+    """How much of an online Skill was authenticated against one object."""
+
+    EXACT = "exact"
+    PARTIAL_PREFIX = "partial_prefix"
+
+
+class CorrectionStrategy(str, Enum):
+    """Online contextualization policy for one authenticated Skill span."""
+
+    DIRECT = "direct"
+    FIXED_PREFIX = "fixed_prefix"
+    RATIO_PREFIX = "ratio_prefix"
+    DEVIATION_TOPK = "deviation_topk"
+
+
 @dataclass(frozen=True)
 class ReusePolicy:
-    """Fixed CSKCache token-axis correction policy for one deployment.
+    """CSKCache token-axis correction policy for one deployment.
 
     All token counts are relative to the beginning of the authenticated Skill
     span.  They are converted to absolute prompt positions only when a request
@@ -64,21 +81,69 @@ class ReusePolicy:
 
     minimum_full_recompute_tokens: int = 32
     calibration_tokens: int = 32
+    calibration_ratio: float | None = None
+    deviation_recompute_ratio: float = 0.15
+    deviation_check_layer: int = 1
     minimum_reuse_tokens: int = 256
     correction_alpha: float = 0.6
+    correction_strategy: CorrectionStrategy = CorrectionStrategy.FIXED_PREFIX
 
     def __post_init__(self) -> None:
         self.validate()
 
     def validate(self) -> None:
+        try:
+            strategy = CorrectionStrategy(self.correction_strategy)
+        except ValueError as exc:
+            raise ValueError(
+                f"unsupported correction_strategy: {self.correction_strategy}"
+            ) from exc
         if self.minimum_full_recompute_tokens <= 0:
             raise ValueError("minimum_full_recompute_tokens must be > 0")
-        if self.calibration_tokens <= 0:
+        if strategy is CorrectionStrategy.FIXED_PREFIX and self.calibration_tokens <= 0:
             raise ValueError("calibration_tokens must be > 0")
+        if strategy is CorrectionStrategy.RATIO_PREFIX and (
+            self.calibration_ratio is None
+            or isinstance(self.calibration_ratio, bool)
+            or not 0.0 < self.calibration_ratio <= 1.0
+        ):
+            raise ValueError(
+                "ratio_prefix requires calibration_ratio in (0, 1]"
+            )
+        if strategy is CorrectionStrategy.DEVIATION_TOPK and (
+            isinstance(self.deviation_recompute_ratio, bool)
+            or not 0.0 < self.deviation_recompute_ratio <= 1.0
+        ):
+            raise ValueError(
+                "deviation_topk requires deviation_recompute_ratio in (0, 1]"
+            )
+        if strategy is CorrectionStrategy.DEVIATION_TOPK and (
+            isinstance(self.deviation_check_layer, bool)
+            or self.deviation_check_layer < 0
+        ):
+            raise ValueError(
+                "deviation_topk requires deviation_check_layer >= 0"
+            )
         if self.minimum_reuse_tokens <= 0:
             raise ValueError("minimum_reuse_tokens must be > 0")
         if not 0.0 <= self.correction_alpha <= 1.0:
             raise ValueError("correction_alpha must be in [0, 1]")
+
+    def resolve_calibration_tokens(self, authenticated_tokens: int) -> int:
+        """Resolve the concrete contiguous budget for one request."""
+
+        if authenticated_tokens <= 0:
+            raise ValueError("authenticated_tokens must be positive")
+        strategy = CorrectionStrategy(self.correction_strategy)
+        if strategy in (
+            CorrectionStrategy.DIRECT,
+            CorrectionStrategy.DEVIATION_TOPK,
+        ):
+            return 0
+        if strategy is CorrectionStrategy.FIXED_PREFIX:
+            return self.calibration_tokens
+        assert self.calibration_ratio is not None
+        return max(1, math.ceil(authenticated_tokens * self.calibration_ratio))
 
 
 @dataclass(frozen=True)
@@ -103,10 +168,20 @@ class ReusePlan:
     calibration_end: int
     correction_alpha: float
     block_alignment: int
+    source_token_count: int | None = None
+    correction_strategy: CorrectionStrategy = CorrectionStrategy.FIXED_PREFIX
+    deviation_recompute_ratio: float = 0.15
+    deviation_check_layer: int = 1
 
     def __post_init__(self) -> None:
         """Validate once when the immutable execution plan is constructed."""
 
+        if self.source_token_count is None:
+            object.__setattr__(
+                self,
+                "source_token_count",
+                self.segment_end - self.segment_start,
+            )
         self.validate()
 
     @classmethod
@@ -151,18 +226,65 @@ class ReusePlan:
                 "CSKCache reuse plan requires numeric correction_alpha"
             )
         values["correction_alpha"] = float(alpha)
+        source_token_count = payload.get("source_token_count")
+        if source_token_count is not None and (
+            not isinstance(source_token_count, int)
+            or isinstance(source_token_count, bool)
+        ):
+            raise ValueError(
+                "CSKCache reuse plan requires integer source_token_count"
+            )
+        values["source_token_count"] = source_token_count
+        strategy = payload.get(
+            "correction_strategy", CorrectionStrategy.FIXED_PREFIX.value
+        )
+        if not isinstance(strategy, str):
+            raise ValueError(
+                "CSKCache reuse plan requires string correction_strategy"
+            )
+        try:
+            values["correction_strategy"] = CorrectionStrategy(strategy)
+        except ValueError as exc:
+            raise ValueError(
+                f"unsupported CSKCache correction_strategy: {strategy}"
+            ) from exc
+        ratio = payload.get("deviation_recompute_ratio", 0.15)
+        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)):
+            raise ValueError(
+                "CSKCache reuse plan requires numeric deviation_recompute_ratio"
+            )
+        values["deviation_recompute_ratio"] = float(ratio)
+        check_layer = payload.get("deviation_check_layer", 1)
+        if not isinstance(check_layer, int) or isinstance(check_layer, bool):
+            raise ValueError(
+                "CSKCache reuse plan requires integer deviation_check_layer"
+            )
+        values["deviation_check_layer"] = check_layer
         return cls(**values)  # type: ignore[arg-type]
+
+    @property
+    def source_object_token_count(self) -> int:
+        """Full offline object length, including an unmatched online suffix."""
+
+        assert self.source_token_count is not None
+        return self.source_token_count
 
     def validate(self) -> None:
         """Fail closed on malformed request-local execution ranges."""
 
         if not self.ticket or not self.cache_object_id or not self.request_id:
             raise ValueError("CSKCache reuse plan identities must be non-empty")
+        try:
+            strategy = CorrectionStrategy(self.correction_strategy)
+        except ValueError as exc:
+            raise ValueError(
+                f"unsupported CSKCache correction_strategy: {self.correction_strategy}"
+            ) from exc
         if not (
             0
             <= self.segment_start
             <= self.calibration_start
-            < self.calibration_end
+            <= self.calibration_end
             <= self.reuse_start
             < self.reuse_end
             <= self.segment_end
@@ -170,8 +292,36 @@ class ReusePlan:
             raise ValueError("CSKCache reuse plan token ranges are invalid")
         if self.calibration_end != self.reuse_start:
             raise ValueError("CSKCache calibration must end at the reuse boundary")
+        calibration_tokens = self.calibration_end - self.calibration_start
+        no_calibration_strategies = (
+            CorrectionStrategy.DIRECT,
+            CorrectionStrategy.DEVIATION_TOPK,
+        )
+        if strategy in no_calibration_strategies and calibration_tokens != 0:
+            raise ValueError(
+                f"{strategy.value} reuse cannot contain calibration tokens"
+            )
+        if strategy not in no_calibration_strategies and calibration_tokens <= 0:
+            raise ValueError("prefix correction requires calibration tokens")
+        if strategy is CorrectionStrategy.DEVIATION_TOPK:
+            if not 0.0 < self.deviation_recompute_ratio <= 1.0:
+                raise ValueError(
+                    "deviation_topk recompute ratio must be in (0, 1]"
+                )
+            if self.deviation_check_layer < 0:
+                raise ValueError("deviation_topk check layer must be >= 0")
         if self.source_reuse_start < 0:
             raise ValueError("CSKCache source reuse range must be non-negative")
+        source_position_start = self.source_reuse_start - (
+            self.reuse_start - self.segment_start
+        )
+        if (
+            self.source_object_token_count <= 0
+            or source_position_start < 0
+            or self.source_reuse_end
+            > source_position_start + self.source_object_token_count
+        ):
+            raise ValueError("CSKCache source object range is invalid")
         if (
             self.source_reuse_end - self.source_reuse_start
             != self.reuse_end - self.reuse_start
@@ -202,6 +352,12 @@ class ReusePlan:
             "calibration_end": self.calibration_end,
             "correction_alpha": self.correction_alpha,
             "block_alignment": self.block_alignment,
+            "source_token_count": self.source_object_token_count,
+            "correction_strategy": CorrectionStrategy(
+                self.correction_strategy
+            ).value,
+            "deviation_recompute_ratio": self.deviation_recompute_ratio,
+            "deviation_check_layer": self.deviation_check_layer,
         }
 
     def failure(self, reason: str) -> "ReuseFailure":
@@ -340,6 +496,9 @@ class RuntimeReuseState:
     request_id: str | None = None
     segment_start: int | None = None
     segment_end: int | None = None
+    match_mode: SkillMatchMode | None = None
+    matched_chunk_count: int | None = None
+    source_token_count: int | None = None
     reuse_start: int | None = None
     reuse_end: int | None = None
     source_reuse_start: int | None = None
@@ -347,6 +506,9 @@ class RuntimeReuseState:
     calibration_start: int | None = None
     calibration_end: int | None = None
     correction_alpha: float | None = None
+    correction_strategy: CorrectionStrategy | None = None
+    deviation_recompute_ratio: float | None = None
+    deviation_check_layer: int | None = None
     block_alignment: int | None = None
     io_operation_id: str | None = None
     loaded_through_layer: int = -1
@@ -366,3 +528,5 @@ class VerifiedRequestBinding:
     request_id: str
     segment_start: int
     segment_end: int
+    match_mode: SkillMatchMode
+    matched_chunk_count: int

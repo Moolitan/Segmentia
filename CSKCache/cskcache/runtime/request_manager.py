@@ -7,10 +7,11 @@ import time
 from typing import Sequence
 
 from ..metadata.skill_format import parse_skill_payload
-from ..metadata.fingerprint import fingerprint_token_ids
 from ..metadata.manager import MetadataManager
+from .authentication import locate_authenticated_skill_prefix
 from .base import (
     BindingState,
+    CorrectionStrategy,
     HostLoadState,
     ReusePlan,
     ReusePolicy,
@@ -153,12 +154,13 @@ class RequestManager:
         request_id: str,
         prompt_token_ids: Sequence[int],
     ) -> VerifiedRequestBinding | None:
-        """Authenticate the newest exact Skill span and bind it to a request.
+        """Authenticate the newest Skill's longest unchanged chunk prefix.
 
         The final prompt tokens come from vLLM's normal tokenizer.  CSKCache
-        searches with its persistent marker metadata, authenticates the full
-        cached span, and chooses the last exact match because the observation
-        accepted above is the newly appended trailing Tool result.
+        searches with its persistent marker metadata and authenticates the
+        newest occurrence.  Exact identity remains the fast path; otherwise
+        independent logical chunks are checked in order until the first
+        difference.
         """
 
         ticket = ticket.strip()
@@ -176,11 +178,14 @@ class RequestManager:
             if state.binding_state is not BindingState.OBSERVED:
                 return None
             cache_object = self._metadata_manager.get_object(state.cache_object_id)
-            span = self._locate_authenticated_span(prompt_token_ids, cache_object)
-            if span is None:
+            authenticated = locate_authenticated_skill_prefix(
+                prompt_token_ids, cache_object
+            )
+            if authenticated is None:
                 self.cancel(ticket, "skill_token_authentication_failed")
                 return None
-            start, end = span
+            start = authenticated.segment_start
+            end = authenticated.segment_end
             try:
                 bound = self._metadata_manager.bind_request(
                     ticket,
@@ -188,6 +193,8 @@ class RequestManager:
                     verified_cache_object_id=cache_object.object_id,
                     segment_start=start,
                     segment_end=end,
+                    match_mode=authenticated.match_mode,
+                    matched_chunk_count=authenticated.matched_chunk_count,
                 )
             except ValueError:
                 self.cancel(ticket, "request_binding_failed")
@@ -198,6 +205,8 @@ class RequestManager:
                 request_id=request_id,
                 segment_start=start,
                 segment_end=end,
+                match_mode=authenticated.match_mode,
+                matched_chunk_count=authenticated.matched_chunk_count,
             )
 
     def cancel(self, ticket: str, reason: str = "request_cancelled") -> None:
@@ -251,14 +260,18 @@ class RequestManager:
             ):
                 return None
             cache_object = self._metadata_manager.get_object(state.cache_object_id)
-            if state.segment_end - state.segment_start != cache_object.token_count:
-                self.cancel(ticket, "verified_span_length_mismatch")
+            matched_tokens = state.segment_end - state.segment_start
+            if matched_tokens > cache_object.token_count:
+                self.cancel(ticket, "verified_prefix_exceeds_source_object")
                 return None
 
+            calibration_tokens = selected_policy.resolve_calibration_tokens(
+                matched_tokens
+            )
             nominal_start = (
                 state.segment_start
                 + selected_policy.minimum_full_recompute_tokens
-                + selected_policy.calibration_tokens
+                + calibration_tokens
             )
             reuse_start = _round_up(nominal_start, block_alignment)
             reuse_end = _round_down(state.segment_end, block_alignment)
@@ -273,7 +286,7 @@ class RequestManager:
             )
             source_reuse_end = cache_object.source_position_start + relative_end
             calibration_end = reuse_start
-            calibration_start = reuse_start - selected_policy.calibration_tokens
+            calibration_start = reuse_start - calibration_tokens
             plan = ReusePlan(
                 ticket=ticket,
                 cache_object_id=state.cache_object_id,
@@ -288,6 +301,14 @@ class RequestManager:
                 calibration_end=calibration_end,
                 correction_alpha=selected_policy.correction_alpha,
                 block_alignment=block_alignment,
+                source_token_count=cache_object.token_count,
+                correction_strategy=CorrectionStrategy(
+                    selected_policy.correction_strategy
+                ),
+                deviation_recompute_ratio=(
+                    selected_policy.deviation_recompute_ratio
+                ),
+                deviation_check_layer=selected_policy.deviation_check_layer,
             )
             if state.reuse_start is not None:
                 existing = self._plan_from_state(state)
@@ -461,25 +482,6 @@ class RequestManager:
         return payload.skill_name == cache_object.skill_name
 
     @staticmethod
-    def _locate_authenticated_span(prompt_token_ids, cache_object):
-        marker = cache_object.start_marker_token_ids
-        token_count = cache_object.token_count
-        if token_count < len(marker) or len(prompt_token_ids) < token_count:
-            return None
-        matches: list[tuple[int, int]] = []
-        last_start = len(prompt_token_ids) - token_count
-        for start in range(last_start + 1):
-            if tuple(prompt_token_ids[start : start + len(marker)]) != marker:
-                continue
-            end = start + token_count
-            if (
-                fingerprint_token_ids(prompt_token_ids[start:end])
-                == cache_object.token_ids_sha256
-            ):
-                matches.append((start, end))
-        return matches[-1] if matches else None
-
-    @staticmethod
     def _duplicate_is_live(state: RuntimeReuseState, object_id: str) -> bool:
         return (
             state.cache_object_id == object_id
@@ -498,6 +500,7 @@ class RequestManager:
             state.request_id,
             state.segment_start,
             state.segment_end,
+            state.source_token_count,
             state.reuse_start,
             state.reuse_end,
             state.source_reuse_start,
@@ -505,6 +508,9 @@ class RequestManager:
             state.calibration_start,
             state.calibration_end,
             state.correction_alpha,
+            state.correction_strategy,
+            state.deviation_recompute_ratio,
+            state.deviation_check_layer,
             state.block_alignment,
         )
         if any(value is None for value in required):
@@ -523,6 +529,10 @@ class RequestManager:
             calibration_end=int(state.calibration_end),
             correction_alpha=float(state.correction_alpha),
             block_alignment=int(state.block_alignment),
+            source_token_count=int(state.source_token_count),
+            correction_strategy=CorrectionStrategy(state.correction_strategy),
+            deviation_recompute_ratio=float(state.deviation_recompute_ratio),
+            deviation_check_layer=int(state.deviation_check_layer),
         )
 
 def _round_up(value: int, alignment: int) -> int:

@@ -70,6 +70,7 @@ class LocalDiskCacheBuilder:
             token_count=source.token_count,
             source_position_start=source.source_position_start,
             token_ids_sha256=source.token_ids_sha256,
+            chunk_token_ids_sha256=source.chunk_token_ids_sha256,
             start_marker_token_ids=source.start_marker_token_ids,
             container_id=None,
             read_strategy=ReadStrategy.BATCHED,

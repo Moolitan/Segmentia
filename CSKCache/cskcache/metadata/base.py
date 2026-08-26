@@ -251,6 +251,7 @@ class CacheObjectMetadata:
     container_id: str | None
     read_strategy: ReadStrategy
     layers: tuple[LayerExtent, ...]
+    chunk_token_ids_sha256: tuple[str, ...] = ()
     chunking: ChunkingSpec = field(default_factory=lambda: ChunkingSpec(256))
     storage_layout: KVLayout = KVLayout.PACKED_CHUNKS_SINGLE_LAYER
     storage_backend: StorageBackend = StorageBackend.RAW_BLOCK
@@ -301,6 +302,17 @@ class CacheObjectMetadata:
         if self.source_position_start < 0:
             raise ValueError("source_position_start must be >= 0")
         _require_sha256(self.token_ids_sha256, "token_ids_sha256")
+        expected_chunk_digests = (
+            self.token_count // self.chunking.chunk_size_tokens
+        )
+        if self.chunk_token_ids_sha256 and (
+            len(self.chunk_token_ids_sha256) != expected_chunk_digests
+        ):
+            raise ValueError(
+                "chunk_token_ids_sha256 must cover every complete logical chunk"
+            )
+        for index, digest in enumerate(self.chunk_token_ids_sha256):
+            _require_sha256(digest, f"chunk_token_ids_sha256[{index}]")
         if not self.start_marker_token_ids or any(
             token < 0 for token in self.start_marker_token_ids
         ):
@@ -373,6 +385,7 @@ class CacheObjectMetadata:
             "token_count": self.token_count,
             "source_position_start": self.source_position_start,
             "token_ids_sha256": self.token_ids_sha256,
+            "chunk_token_ids_sha256": list(self.chunk_token_ids_sha256),
             "start_marker_token_ids": list(self.start_marker_token_ids),
             "container_id": self.container_id,
             "storage_backend": self.storage_backend.value,
@@ -388,7 +401,7 @@ class CacheObjectMetadata:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "CacheObjectMetadata":
-        expected = {
+        legacy_expected = {
             "object_id",
             "skill_name",
             "skill_version",
@@ -406,7 +419,8 @@ class CacheObjectMetadata:
             "chunking",
             "storage_layout",
         }
-        if set(payload) != expected:
+        expected = legacy_expected | {"chunk_token_ids_sha256"}
+        if set(payload) not in (legacy_expected, expected):
             raise ValueError(
                 f"CacheObjectMetadata fields differ: expected={sorted(expected)}, "
                 f"actual={sorted(payload)}"
@@ -420,6 +434,10 @@ class CacheObjectMetadata:
             token_count=int(payload["token_count"]),
             source_position_start=int(payload["source_position_start"]),
             token_ids_sha256=str(payload["token_ids_sha256"]),
+            chunk_token_ids_sha256=tuple(
+                str(digest)
+                for digest in payload.get("chunk_token_ids_sha256", ())
+            ),
             start_marker_token_ids=tuple(
                 int(token) for token in payload["start_marker_token_ids"]
             ),

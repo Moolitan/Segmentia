@@ -262,6 +262,10 @@ def _load_pending(path: Path) -> DirectRawCacheObjectBuildInput:
         token_count=int(payload["token_count"]),
         source_position_start=int(payload["source_position_start"]),
         token_ids_sha256=str(payload["token_ids_sha256"]),
+        chunk_token_ids_sha256=tuple(
+            str(digest)
+            for digest in payload.get("chunk_token_ids_sha256", ())
+        ),
         start_marker_token_ids=tuple(
             int(token) for token in payload["start_marker_token_ids"]
         ),

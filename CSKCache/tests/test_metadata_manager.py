@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from cskcache import (
     BindingState,
     CacheObjectMetadata,
     CacheObjectStatus,
+    ChunkingSpec,
     ContainerMetadata,
     HostLoadState,
     LayerExtent,
@@ -100,6 +102,68 @@ def test_publish_round_trip_and_resolve(tmp_path: Path) -> None:
         )
         == original
     )
+
+
+def test_catalog_v1_loads_with_legacy_chunk_and_layout_defaults(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "metadata.json"
+    manager = MetadataManager(path, expected_layers=4)
+    manager.publish_container(make_container())
+    manager.publish_object(make_object())
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["catalog_version"] = 1
+    for item in payload["objects"]:
+        item.pop("storage_backend")
+        item.pop("chunking")
+        item.pop("storage_layout")
+        item.pop("chunk_token_ids_sha256")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = MetadataManager(path, expected_layers=4).get_object(
+        make_object().object_id
+    )
+
+    assert loaded.storage_backend.value == "raw_block"
+    assert loaded.chunking == ChunkingSpec(256)
+    assert loaded.storage_layout.value == "packed_chunks_single_layer"
+    assert loaded.chunk_token_ids_sha256 == ()
+
+
+def test_chunk_authentication_index_can_upgrade_existing_kv(tmp_path: Path) -> None:
+    path = tmp_path / "metadata.json"
+    manager = MetadataManager(path, expected_layers=4)
+    manager.publish_container(make_container())
+    original = replace(make_object(), chunking=ChunkingSpec(128))
+    manager.publish_object(original)
+    digests = (SHA_A,)
+
+    upgraded = manager.configure_chunk_authentication(
+        original.object_id,
+        token_ids_sha256=original.token_ids_sha256,
+        chunking=ChunkingSpec(128),
+        chunk_token_ids_sha256=digests,
+    )
+
+    assert upgraded.chunk_token_ids_sha256 == digests
+    assert MetadataManager(
+        path, expected_layers=4
+    ).get_object(original.object_id).chunk_token_ids_sha256 == digests
+    reconfigured = manager.configure_chunk_authentication(
+        original.object_id,
+        token_ids_sha256=original.token_ids_sha256,
+        chunking=ChunkingSpec(64),
+        chunk_token_ids_sha256=(SHA_A, SHA_B),
+    )
+    assert reconfigured.chunking == ChunkingSpec(64)
+    assert reconfigured.chunk_token_ids_sha256 == (SHA_A, SHA_B)
+    with pytest.raises(ValueError, match="token identity"):
+        manager.configure_chunk_authentication(
+            original.object_id,
+            token_ids_sha256=SHA_A,
+            chunking=ChunkingSpec(128),
+            chunk_token_ids_sha256=digests,
+        )
 
 
 def test_publish_rejects_missing_layer_and_bad_strategy(tmp_path: Path) -> None:

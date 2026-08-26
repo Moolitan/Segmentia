@@ -16,15 +16,18 @@ from .base import (
     ContainerMetadata,
     StorageBackend,
 )
+from ..chunking import ChunkingSpec
+from ..layouts import KVLayout
 from ..runtime.base import (
     BindingState,
     HostLoadState,
     ReusePlan,
     RuntimeReuseState,
+    SkillMatchMode,
 )
 
 
-CATALOG_VERSION = 2
+CATALOG_VERSION = 3
 
 
 class MetadataManager:
@@ -121,6 +124,52 @@ class MetadataManager:
             with self._lock:
                 self._objects = updated
             return invalidated
+
+    def configure_chunk_authentication(
+        self,
+        object_id: str,
+        *,
+        token_ids_sha256: str,
+        chunking: ChunkingSpec,
+        chunk_token_ids_sha256: tuple[str, ...],
+    ) -> CacheObjectMetadata:
+        """Atomically configure logical-chunk authentication metadata.
+
+        The complete token digest guards this metadata-only upgrade, so the
+        existing packed KV extents never need to be regenerated or rewritten.
+        Reconfiguring the logical chunk size changes authentication resolution,
+        not the one-complete-Skill-per-layer persistent payload.
+        """
+
+        if not isinstance(chunking, ChunkingSpec):
+            raise ValueError("chunking must be a ChunkingSpec")
+        with self._persistent_write_lock:
+            with self._lock:
+                current = self._require_object(object_id)
+                if current.token_ids_sha256 != token_ids_sha256:
+                    raise ValueError("chunk index token identity does not match object")
+                if (
+                    current.chunking == chunking
+                    and current.chunk_token_ids_sha256
+                    == chunk_token_ids_sha256
+                ):
+                    return current
+                upgraded = replace(
+                    current,
+                    chunking=chunking,
+                    chunk_token_ids_sha256=chunk_token_ids_sha256,
+                )
+                container = None
+                if upgraded.storage_backend is StorageBackend.RAW_BLOCK:
+                    assert upgraded.container_id is not None
+                    container = self._require_container(upgraded.container_id)
+                upgraded.validate(self.expected_layers, container)
+                updated = dict(self._objects)
+                updated[object_id] = upgraded
+            self._write_file(self._containers, updated)
+            with self._lock:
+                self._objects = updated
+            return upgraded
 
     def get_object(self, object_id: str) -> CacheObjectMetadata:
         with self._lock:
@@ -257,6 +306,8 @@ class MetadataManager:
         verified_cache_object_id: str,
         segment_start: int,
         segment_end: int,
+        match_mode: SkillMatchMode = SkillMatchMode.EXACT,
+        matched_chunk_count: int = 1,
     ) -> RuntimeReuseState:
         """Bind token-authenticated request state without waiting for SSD I/O."""
 
@@ -264,6 +315,10 @@ class MetadataManager:
             raise ValueError("request_id must be non-empty")
         if segment_start < 0 or segment_end <= segment_start:
             raise ValueError("verified Skill span is invalid")
+        if not isinstance(match_mode, SkillMatchMode):
+            raise ValueError("match_mode must be a SkillMatchMode")
+        if matched_chunk_count <= 0:
+            raise ValueError("matched_chunk_count must be > 0")
         with self._lock:
             state = self._require_runtime(ticket)
             self._require_live(state)
@@ -282,6 +337,8 @@ class MetadataManager:
                 request_id=request_id,
                 segment_start=segment_start,
                 segment_end=segment_end,
+                match_mode=match_mode,
+                matched_chunk_count=matched_chunk_count,
                 binding_state=BindingState.VERIFIED,
             )
             self._ticket_by_request[request_id] = ticket
@@ -318,6 +375,7 @@ class MetadataManager:
             if state.request_id != plan.request_id:
                 raise ValueError("reuse plan request does not match ticket binding")
             values = (
+                plan.source_object_token_count,
                 plan.reuse_start,
                 plan.reuse_end,
                 plan.source_reuse_start,
@@ -325,9 +383,13 @@ class MetadataManager:
                 plan.calibration_start,
                 plan.calibration_end,
                 plan.correction_alpha,
+                plan.correction_strategy,
+                plan.deviation_recompute_ratio,
+                plan.deviation_check_layer,
                 plan.block_alignment,
             )
             existing = (
+                state.source_token_count,
                 state.reuse_start,
                 state.reuse_end,
                 state.source_reuse_start,
@@ -335,6 +397,9 @@ class MetadataManager:
                 state.calibration_start,
                 state.calibration_end,
                 state.correction_alpha,
+                state.correction_strategy,
+                state.deviation_recompute_ratio,
+                state.deviation_check_layer,
                 state.block_alignment,
             )
             if state.reuse_start is not None:
@@ -343,6 +408,7 @@ class MetadataManager:
                 return state
             return self._store_runtime(
                 state.updated(
+                    source_token_count=plan.source_object_token_count,
                     reuse_start=plan.reuse_start,
                     reuse_end=plan.reuse_end,
                     source_reuse_start=plan.source_reuse_start,
@@ -350,6 +416,9 @@ class MetadataManager:
                     calibration_start=plan.calibration_start,
                     calibration_end=plan.calibration_end,
                     correction_alpha=plan.correction_alpha,
+                    correction_strategy=plan.correction_strategy,
+                    deviation_recompute_ratio=plan.deviation_recompute_ratio,
+                    deviation_check_layer=plan.deviation_check_layer,
                     block_alignment=plan.block_alignment,
                 )
             )
@@ -500,7 +569,7 @@ class MetadataManager:
         }:
             raise ValueError("persistent metadata has unexpected top-level fields")
         version = int(payload["catalog_version"])
-        if version not in (1, CATALOG_VERSION):
+        if version not in (1, 2, CATALOG_VERSION):
             raise ValueError(
                 f"unsupported Catalog version: {payload['catalog_version']}"
             )
@@ -524,6 +593,10 @@ class MetadataManager:
             if version == 1:
                 item = dict(item)
                 item["storage_backend"] = StorageBackend.RAW_BLOCK.value
+                item["chunking"] = ChunkingSpec(256).to_dict()
+                item["storage_layout"] = (
+                    KVLayout.PACKED_CHUNKS_SINGLE_LAYER.value
+                )
             metadata = CacheObjectMetadata.from_dict(item)
             container = None
             if metadata.storage_backend is StorageBackend.RAW_BLOCK:

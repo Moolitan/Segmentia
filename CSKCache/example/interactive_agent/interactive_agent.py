@@ -16,6 +16,7 @@ from cskcache import (
     CacheObjectMetadata,
     MetadataManager,
     build_skill_token_identity,
+    fingerprint_full_token_chunks,
     fingerprint_model,
     fingerprint_tokenizer,
 )
@@ -173,7 +174,7 @@ def load_cached_skills(
     model_path: Path,
     require_all: bool = False,
 ) -> dict[str, CacheObjectMetadata]:
-    """Authenticate exposed Skills against the authoritative raw Catalog."""
+    """Resolve exact or chunk-authenticated cached candidates for each Skill."""
 
     catalog_path = pool_dir if pool_dir.is_file() else pool_dir / "catalog.json"
     if not catalog_path.is_file():
@@ -219,16 +220,31 @@ def load_cached_skills(
         skill_version = hashlib.sha256(
             token_identity.cache_text.encode("utf-8")
         ).hexdigest()
-        if cache_object.skill_version != skill_version:
-            raise RuntimeError(f"offline Skill version is stale for Skill {name}")
-        if cache_object.token_ids_sha256 != token_identity.token_ids_sha256:
-            raise RuntimeError(f"offline token hash is stale for Skill {name}")
-        if cache_object.token_count != len(token_identity.token_ids):
-            raise RuntimeError(f"offline token count is stale for Skill {name}")
         if cache_object.start_marker_token_ids != (
             token_identity.start_marker_token_ids
         ):
             raise RuntimeError(f"offline locator tokens are stale for Skill {name}")
+        exact_identity = (
+            cache_object.skill_version == skill_version
+            and cache_object.token_ids_sha256 == token_identity.token_ids_sha256
+            and cache_object.token_count == len(token_identity.token_ids)
+        )
+        if exact_identity:
+            expected_chunk_digests = fingerprint_full_token_chunks(
+                token_identity.token_ids,
+                cache_object.chunking.chunk_size_tokens,
+            )
+            if (
+                cache_object.chunk_token_ids_sha256
+                and cache_object.chunk_token_ids_sha256
+                != expected_chunk_digests
+            ):
+                raise RuntimeError(
+                    f"offline chunk authentication is stale for Skill {name}"
+                )
+        elif not cache_object.chunk_token_ids_sha256:
+            unavailable.append(f"{name}:stale_exact_only")
+            continue
         cached[name] = cache_object
 
     if require_all and unavailable:

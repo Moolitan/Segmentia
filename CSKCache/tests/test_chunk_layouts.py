@@ -21,7 +21,6 @@ from cskcache.host_memory.transfers import (
     bind_layer_buffers,
     build_h2d_transfer_plan,
 )
-from cskcache.storage.loads import build_storage_load_plan
 
 
 def test_chunk_size_equal_to_skill_is_one_chunk() -> None:
@@ -52,18 +51,17 @@ def test_fixed_size_keeps_the_exact_tail() -> None:
 
 
 @pytest.mark.parametrize(
-    ("layout", "expected_regions", "expected_load_groups", "h2d_slices"),
+    ("layout", "expected_regions", "h2d_slices"),
     (
-        (KVLayout.CHUNK_ALL_LAYERS, 32, 32, 32),
-        (KVLayout.CHUNK_SINGLE_LAYER, 1280, 32, 32),
-        (KVLayout.PACKED_CHUNKS_SINGLE_LAYER, 40, 40, 1),
-        (KVLayout.PACKED_CHUNKS_ALL_LAYERS, 1, 1, 1),
+        (KVLayout.CHUNK_ALL_LAYERS, 32, 32),
+        (KVLayout.CHUNK_SINGLE_LAYER, 1280, 32),
+        (KVLayout.PACKED_CHUNKS_SINGLE_LAYER, 40, 1),
+        (KVLayout.PACKED_CHUNKS_ALL_LAYERS, 1, 1),
     ),
 )
 def test_four_layouts_share_one_chunk_plan(
     layout: KVLayout,
     expected_regions: int,
-    expected_load_groups: int,
     h2d_slices: int,
 ) -> None:
     chunk_plan = build_chunk_plan(
@@ -71,12 +69,10 @@ def test_four_layouts_share_one_chunk_plan(
         ChunkingSpec(256),
     )
     layout_plan = build_layout_plan(layout, chunk_plan, 40)
-    load_plan = build_storage_load_plan(layout_plan)
     transfer_plan = build_h2d_transfer_plan(layout_plan)
 
     assert layout_plan.chunk_plan is chunk_plan
     assert len(layout_plan.regions) == expected_regions
-    assert len(load_plan.groups) == expected_load_groups
     assert len(transfer_plan.steps) == 40
     assert all(len(step.slices) == h2d_slices for step in transfer_plan.steps)
     assert all(

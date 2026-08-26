@@ -1,4 +1,4 @@
-"""LocalDisk SSD-to-pinned loading for complete Skill-layer groups."""
+"""LMCache LocalDisk adapter for Catalog-owned layer objects."""
 
 from __future__ import annotations
 
@@ -10,8 +10,7 @@ import torch
 from lmcache.utils import parse_cache_key
 from lmcache.v1.memory_management import MemoryFormat
 
-from ...metadata.base import CacheObjectMetadata, ContainerMetadata, StorageBackend
-from ..base import CSKReadBatch, HostBufferPool, LayerObjectReadBackend
+from ...metadata.base import CacheObjectMetadata, StorageBackend
 
 
 class LMCacheLayerObjectReader:
@@ -120,40 +119,3 @@ class LMCacheLayerObjectReader:
                 raise first_error
             raise RuntimeError("LMCache returned an incomplete layer group")
         return tuple(results)
-
-
-class LocalDiskLoader:
-    """Load per-layer Skill objects through LMCache's LocalDisk interface."""
-
-    storage_backend = StorageBackend.LOCAL_DISK
-
-    def __init__(
-        self,
-        backend: LayerObjectReadBackend,
-        host_buffer_pool: HostBufferPool | None,
-    ) -> None:
-        self._backend = backend
-        self._host_buffer_pool = host_buffer_pool
-
-    def validate_container(self, container: ContainerMetadata | None) -> None:
-        """Reject raw-container metadata for a key-addressed LocalDisk object."""
-
-        if container is not None:
-            raise ValueError("local_disk storage must not reference a raw container")
-
-    def load(self, batch: CSKReadBatch) -> tuple[Any, ...]:
-        """Read all Skill-layer files and arrange the selected host layout."""
-
-        if self._host_buffer_pool is None:
-            raise RuntimeError("local_disk loading has no host buffer pool")
-        loaded = tuple(
-            self._backend.read_layer_objects(
-                [extent.backend_key for extent in batch.extents]
-            )
-        )
-        if len(loaded) != len(batch.extents):
-            self._host_buffer_pool.release(loaded)
-            raise RuntimeError("LocalDisk returned an incomplete layer group")
-        return tuple(
-            self._host_buffer_pool.arrange_loaded_layers(batch.extents, loaded)
-        )

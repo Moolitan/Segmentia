@@ -16,10 +16,7 @@ from ..metadata.base import (
     StorageBackend,
 )
 from ..layouts import KVLayout
-from ..chunking import SkillChunkPlan, build_chunk_plan
-from ..layouts import KVLayoutPlan, build_layout_plan
 from .formats import StorageFormat
-from .loads import StorageLoadPlan, build_storage_load_plan
 
 
 @dataclass(frozen=True)
@@ -43,7 +40,12 @@ class StorageSpec:
 
 
 class ExtentReadBackend(Protocol):
-    """Physical reader for offset-addressed raw-block extents."""
+    """Physical reader for offset-addressed raw-block extents.
+
+    The injected implementation owns its sync/io_uring engine, buffered/direct
+    open mode, and queue depth.  CSKCache only submits validated physical
+    extents through this protocol.
+    """
 
     device_path: str
     capacity_bytes: int
@@ -65,7 +67,7 @@ class LayerObjectReadBackend(Protocol):
 
 
 class HostBufferPool(Protocol):
-    """Pinned-memory allocation and layout contract used by storage loaders."""
+    """Pinned-memory allocation and layout contract used by storage transfers."""
 
     def acquire(self, extents: Sequence[LayerExtent]) -> Sequence[Any]: ...
 
@@ -82,16 +84,6 @@ class HostBufferPool(Protocol):
     ) -> Sequence[Any]: ...
 
 
-class StorageLoader(Protocol):
-    """One selected SSD-to-pinned implementation used by StorageManager."""
-
-    storage_backend: StorageBackend
-
-    def validate_container(self, container: ContainerMetadata | None) -> None: ...
-
-    def load(self, batch: "CSKReadBatch") -> tuple[Any, ...]: ...
-
-
 @dataclass(frozen=True)
 class CSKReadBatch:
     """One complete, layer-ordered physical read request for a Skill object."""
@@ -99,9 +91,6 @@ class CSKReadBatch:
     cache_object_id: str
     container_id: str | None
     extents: tuple[LayerExtent, ...]
-    chunk_plan: SkillChunkPlan
-    layout_plan: KVLayoutPlan
-    load_plan: StorageLoadPlan
 
     @classmethod
     def from_metadata(
@@ -112,22 +101,10 @@ class CSKReadBatch:
         expected_layers: int,
     ) -> "CSKReadBatch":
         metadata.validate(expected_layers, container)
-        chunk_plan = build_chunk_plan(metadata.token_count, metadata.chunking)
-        layout_plan = build_layout_plan(
-            metadata.storage_layout,
-            chunk_plan,
-            expected_layers,
-        )
-        load_plan = build_storage_load_plan(layout_plan)
-        if len(layout_plan.regions) != len(metadata.layers):
-            raise ValueError("Catalog extents differ from the storage layout plan")
         return cls(
             cache_object_id=metadata.object_id,
             container_id=None if container is None else container.container_id,
             extents=tuple(sorted(metadata.layers, key=lambda item: item.layer_id)),
-            chunk_plan=chunk_plan,
-            layout_plan=layout_plan,
-            load_plan=load_plan,
         )
 
     @property

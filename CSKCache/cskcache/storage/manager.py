@@ -18,10 +18,10 @@ from .base import (
     ExtentReadBackend,
     HostBufferPool,
     LayerObjectReadBackend,
-    StorageLoader,
 )
-from .backends.local_disk import LocalDiskLoader
-from .backends.raw_block import RawBlockLoader
+from .transfers.base import StorageTransfer
+from .transfers.layer_objects import LayerObjectTransfer
+from .transfers.raw_extents import RawExtentTransfer
 
 
 @dataclass
@@ -60,16 +60,16 @@ class StorageManager:
             raise ValueError("local_disk storage requires a layer-object backend")
         if storage_backend == "raw_block":
             assert backend is not None
-            loader: StorageLoader = RawBlockLoader(
+            transfer: StorageTransfer = RawExtentTransfer(
                 metadata_manager,
                 backend,
                 host_buffer_pool,
             )
         else:
             assert local_disk_backend is not None
-            loader = LocalDiskLoader(local_disk_backend, host_buffer_pool)
-        self._loader = loader
-        self.storage_backend = loader.storage_backend.value
+            transfer = LayerObjectTransfer(local_disk_backend, host_buffer_pool)
+        self._transfer = transfer
+        self.storage_backend = transfer.storage_backend.value
         self._host_buffer_pool = host_buffer_pool
         self._max_inflight_loads = max_inflight_loads
         self._lock = threading.RLock()
@@ -89,7 +89,7 @@ class StorageManager:
             raise RuntimeError("read_object_into is only available for raw_block")
         assert metadata.container_id is not None
         container = self._metadata_manager.get_container(metadata.container_id)
-        self._loader.validate_container(container)
+        self._transfer.validate_container(container)
         batch = CSKReadBatch.from_metadata(
             metadata,
             container,
@@ -99,7 +99,7 @@ class StorageManager:
             raise ValueError(
                 "destination count must equal the complete model layer count"
             )
-        read_into = getattr(self._loader, "read_into", None)
+        read_into = getattr(self._transfer, "read_into", None)
         if not callable(read_into):
             raise RuntimeError("read_object_into is only available for raw_block")
         return read_into(batch, destination_memory_objects)
@@ -128,9 +128,9 @@ class StorageManager:
         if metadata.storage_backend is StorageBackend.RAW_BLOCK:
             assert metadata.container_id is not None
             container = self._metadata_manager.get_container(metadata.container_id)
-            self._loader.validate_container(container)
+            self._transfer.validate_container(container)
         else:
-            self._loader.validate_container(None)
+            self._transfer.validate_container(None)
         batch = CSKReadBatch.from_metadata(
             metadata,
             container,
@@ -283,7 +283,7 @@ class StorageManager:
                 bytes=sum(batch.lengths),
                 storage_backend=self.storage_backend,
             )
-            memory_objects = self._loader.load(batch)
+            memory_objects = self._transfer.load(batch)
             profile_event(
                 "csk_host_read_complete",
                 ticket,

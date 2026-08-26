@@ -1,0 +1,134 @@
+[
+  {
+    "skill_name": "internal-comms",
+    "skill_path": "skills/internal-comms/SKILL.md",
+    "task_id": "incident_update",
+    "task_prompt": "Write a concise incident update with the literal headings Summary, Impact, and Next Steps.",
+    "rules": [
+      {"type": "contains", "value": "Summary"},
+      {"type": "contains", "value": "Impact"},
+      {"type": "contains", "value": "Next Steps"}
+    ]
+  },
+  {
+    "skill_name": "mcp-builder",
+    "skill_path": "skills/mcp-builder/SKILL.md",
+    "task_id": "mcp_plan",
+    "task_prompt": "Give a short MCP server implementation plan that explicitly mentions tools, input schema, and error handling.",
+    "rules": [
+      {"type": "contains", "value": "tools"},
+      {"type": "contains", "value": "schema"},
+      {"type": "contains", "value": "error"}
+    ]
+  },
+  {
+    "skill_name": "doc-coauthoring",
+    "skill_path": "skills/doc-coauthoring/SKILL.md",
+    "task_id": "design_doc",
+    "task_prompt": "Outline a design document with the literal headings Context, Goals, and Open Questions.",
+    "rules": [
+      {"type": "contains", "value": "Context"},
+      {"type": "contains", "value": "Goals"},
+      {"type": "contains", "value": "Open Questions"}
+    ]
+  },
+  {
+    "skill_name": "docx",
+    "skill_path": "skills/docx/SKILL.md",
+    "task_id": "docx_workflow",
+    "task_prompt": "Describe a DOCX editing workflow that explicitly includes inspect, edit, and verify.",
+    "rules": [
+      {"type": "contains", "value": "inspect"},
+      {"type": "contains", "value": "edit"},
+      {"type": "contains", "value": "verify"}
+    ]
+  },
+  {
+    "skill_name": "frontend-design",
+    "skill_path": "skills/frontend-design/SKILL.md",
+    "task_id": "dashboard_design",
+    "task_prompt": "Propose a dashboard design and explicitly discuss hierarchy, typography, and responsive behavior.",
+    "rules": [
+      {"type": "contains", "value": "hierarchy"},
+      {"type": "contains", "value": "typography"},
+      {"type": "contains", "value": "responsive"}
+    ]
+  },
+  {
+    "skill_name": "web-artifacts-builder",
+    "skill_path": "skills/web-artifacts-builder/SKILL.md",
+    "task_id": "artifact_plan",
+    "task_prompt": "Give a web artifact build plan that explicitly mentions components, state, and validation.",
+    "rules": [
+      {"type": "contains", "value": "components"},
+      {"type": "contains", "value": "state"},
+      {"type": "contains", "value": "validation"}
+    ]
+  },
+  {
+    "skill_name": "xlsx",
+    "skill_path": "skills/xlsx/SKILL.md",
+    "task_id": "spreadsheet_plan",
+    "task_prompt": "Describe a spreadsheet workflow that explicitly covers formulas, formatting, and validation.",
+    "rules": [
+      {"type": "contains", "value": "formulas"},
+      {"type": "contains", "value": "formatting"},
+      {"type": "contains", "value": "validation"}
+    ]
+  },
+  {
+    "skill_name": "pdf",
+    "skill_path": "skills/pdf/SKILL.md",
+    "task_id": "pdf_workflow",
+    "task_prompt": "Describe a PDF workflow that explicitly includes render, inspect, and verify.",
+    "rules": [
+      {"type": "contains", "value": "render"},
+      {"type": "contains", "value": "inspect"},
+      {"type": "contains", "value": "verify"}
+    ]
+  },
+  {
+    "skill_name": "pptx",
+    "skill_path": "skills/pptx/SKILL.md",
+    "task_id": "slides_workflow",
+    "task_prompt": "Describe a slide-deck workflow that explicitly covers narrative, layout, and visual review.",
+    "rules": [
+      {"type": "contains", "value": "narrative"},
+      {"type": "contains", "value": "layout"},
+      {"type": "contains", "value": "review"}
+    ]
+  },
+  {
+    "skill_name": "canvas-design",
+    "skill_path": "skills/canvas-design/SKILL.md",
+    "task_id": "canvas_workflow",
+    "task_prompt": "Give a canvas-design plan that explicitly discusses composition, color, and export.",
+    "rules": [
+      {"type": "contains", "value": "composition"},
+      {"type": "contains", "value": "color"},
+      {"type": "contains", "value": "export"}
+    ]
+  },
+  {
+    "skill_name": "brand-guidelines",
+    "skill_path": "skills/brand-guidelines/SKILL.md",
+    "task_id": "brand_review",
+    "task_prompt": "Give a brand review checklist that explicitly mentions logo, color, and typography.",
+    "rules": [
+      {"type": "contains", "value": "logo"},
+      {"type": "contains", "value": "color"},
+      {"type": "contains", "value": "typography"}
+    ]
+  },
+  {
+    "skill_name": "skill-creator",
+    "skill_path": "skills/skill-creator/SKILL.md",
+    "task_id": "skill_plan",
+    "task_prompt": "Describe how to create a Skill and explicitly mention scope, instructions, and validation.",
+    "rules": [
+      {"type": "contains", "value": "scope"},
+      {"type": "contains", "value": "instructions"},
+      {"type": "contains", "value": "validation"}
+    ]
+  }
+]

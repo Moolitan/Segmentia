@@ -12,6 +12,7 @@ from config import (
     CALIBRATION_RATIO,
     CALIBRATION_TOKENS,
     CHUNK_SIZE_TOKENS,
+    CONTENTION_ARM,
     CORRECTION_ALPHA,
     EXECUTION_ORDER,
     GPU_MEMORY_UTILIZATION,
@@ -147,6 +148,7 @@ def _configure_environment(container_path: str) -> None:
         "csk_minimum_reuse_tokens": MINIMUM_REUSE_TOKENS,
         "csk_correction_alpha": CORRECTION_ALPHA,
         "csk_execution_order": EXECUTION_ORDER,
+        "csk_contention_arm": CONTENTION_ARM,
         "csk_host_layout": HOST_LAYOUT,
         "storage_plugin.raw_block.module_path": "memory_backend",
         "storage_plugin.raw_block.class_name": (
@@ -246,6 +248,16 @@ async def _run_request(object_token_ids: list[int]) -> None:
     from vllm.engine.arg_utils import AsyncEngineArgs
     from vllm.v1.engine.async_llm import AsyncLLM
 
+    connector_name = (
+        "ContentionDiagnosticConnectorV1"
+        if CONTENTION_ARM
+        else "CSKCacheConnectorV1"
+    )
+    connector_module = (
+        "contention_connector"
+        if CONTENTION_ARM
+        else "cskcache.integrations.vllm.connector"
+    )
     engine_args = AsyncEngineArgs(
         model=str(MODEL_PATH),
         dtype="auto",
@@ -256,8 +268,8 @@ async def _run_request(object_token_ids: list[int]) -> None:
         async_scheduling=False,
         disable_log_stats=True,
         kv_transfer_config=KVTransferConfig(
-            kv_connector="CSKCacheConnectorV1",
-            kv_connector_module_path="cskcache.integrations.vllm.connector",
+            kv_connector=connector_name,
+            kv_connector_module_path=connector_module,
             kv_role="kv_both",
         ),
     )

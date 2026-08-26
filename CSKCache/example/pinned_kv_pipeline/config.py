@@ -37,6 +37,7 @@ HOST_LAYOUT = str(
     _CASE_CONFIG.get("host_layout", "packed_chunks_single_layer")
 )
 EXECUTION_ORDER = str(_CASE_CONFIG.get("execution_order", "h2d_first"))
+CONTENTION_ARM = str(_CASE_CONFIG.get("contention_arm", ""))
 WARMUP_REQUESTS = int(_CASE_CONFIG.get("warmup_requests", 0))
 MINIMUM_REUSE_TOKENS = 256
 CORRECTION_ALPHA = 0.6

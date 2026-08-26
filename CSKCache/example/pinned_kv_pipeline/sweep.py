@@ -1,10 +1,9 @@
-"""Run the warmed packed-layout stage-crossover sweep."""
+"""Compare per-chunk H2D, layer compute, and packed-layer H2D latency."""
 
 from __future__ import annotations
 
 import csv
 import json
-import math
 import os
 import statistics
 import subprocess
@@ -19,7 +18,7 @@ import matplotlib.pyplot as plt
 
 from config import MAX_MODEL_LEN, MAX_TOKENS, PREFIX_TOKENS, TAIL_TOKENS
 from sweep_config import (
-    CALIBRATION_RATIOS,
+    CALIBRATION_TOKENS,
     CASE_RETRIES,
     CHUNK_SIZE_TOKENS,
     EXECUTION_ORDERS,
@@ -40,7 +39,6 @@ RUN_SCRIPT = EXAMPLE_DIR / "run.py"
 EXPECTED_LAYERS = 40
 TOTAL_CASES = (
     len(SKILL_TOKEN_VALUES)
-    * len(CALIBRATION_RATIOS)
     * len(HOST_LAYOUTS)
     * len(EXECUTION_ORDERS)
     * REPETITIONS
@@ -90,9 +88,8 @@ class CaseSpec:
 
     @property
     def case_id(self) -> str:
-        ratio_basis_points = round(self.calibration_ratio * 10000)
         return (
-            f"b{self.skill_tokens}_p{ratio_basis_points:04d}_"
+            f"b{self.skill_tokens}_p{self.calibration_tokens}_"
             f"c{self.chunk_size_tokens}_{self.host_layout}_"
             f"{self.execution_order}_r{self.repetition}"
         )
@@ -111,33 +108,25 @@ class CaseSpec:
         }
 
 
-def _calibration_tokens(skill_tokens: int, ratio: float) -> int:
-    return max(1, math.floor(skill_tokens * ratio + 0.5))
-
-
 def _build_specs() -> list[CaseSpec]:
     specs = []
     for skill_tokens in SKILL_TOKEN_VALUES:
-        for calibration_ratio in CALIBRATION_RATIOS:
-            calibration_tokens = _calibration_tokens(
-                skill_tokens,
-                calibration_ratio,
-            )
-            for repetition in range(REPETITIONS):
-                for host_layout in HOST_LAYOUTS:
-                    for execution_order in EXECUTION_ORDERS:
-                        specs.append(
-                            CaseSpec(
-                                skill_tokens=skill_tokens,
-                                calibration_ratio=calibration_ratio,
-                                calibration_tokens=calibration_tokens,
-                                execution_order=execution_order,
-                                chunk_size_tokens=CHUNK_SIZE_TOKENS,
-                                storage_layout="packed_chunks_single_layer",
-                                host_layout=host_layout,
-                                repetition=repetition,
-                            )
+        calibration_ratio = CALIBRATION_TOKENS / skill_tokens
+        for repetition in range(REPETITIONS):
+            for host_layout in HOST_LAYOUTS:
+                for execution_order in EXECUTION_ORDERS:
+                    specs.append(
+                        CaseSpec(
+                            skill_tokens=skill_tokens,
+                            calibration_ratio=calibration_ratio,
+                            calibration_tokens=CALIBRATION_TOKENS,
+                            execution_order=execution_order,
+                            chunk_size_tokens=CHUNK_SIZE_TOKENS,
+                            storage_layout="packed_chunks_single_layer",
+                            host_layout=host_layout,
+                            repetition=repetition,
                         )
+                    )
     if len(specs) != TOTAL_CASES or len({spec.case_id for spec in specs}) != len(specs):
         raise ValueError("sweep matrix is incomplete or contains duplicates")
     return specs
@@ -333,173 +322,87 @@ def _aggregate(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return output
 
 
-def _estimate_balance_points(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _comparison_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_key = {
+        (int(row["skill_tokens"]), str(row["host_layout"])): row
+        for row in rows
+    }
     output = []
     for skill_tokens in SKILL_TOKEN_VALUES:
-        points = sorted(
-            (
-                {
-                    "nominal_ratio": float(row["calibration_ratio"]),
-                    "actual_ratio": (
-                        float(row["calibration_tokens"])
-                        / skill_tokens
-                    ),
-                    "calibration_tokens": float(row["calibration_tokens"]),
-                    "compute_ms": float(
-                        row["median_layer_adaptation_ms_median"]
-                    ),
-                    "h2d_ms": float(row["median_h2d_next_ms_median"]),
-                }
-                for row in rows
-                if int(row["skill_tokens"]) == skill_tokens
-                and row["execution_order"] == "compute_first"
-            ),
-            key=lambda point: point["actual_ratio"],
-        )
-        crossing = None
-        for left, right in zip(points, points[1:], strict=False):
-            left_gap = left["compute_ms"] - left["h2d_ms"]
-            right_gap = right["compute_ms"] - right["h2d_ms"]
-            if left_gap == 0.0:
-                crossing = (left, left, 0.0)
-                break
-            if left_gap * right_gap <= 0.0:
-                weight = -left_gap / (right_gap - left_gap)
-                crossing = (left, right, weight)
-                break
-        if crossing is None:
-            gaps = [point["compute_ms"] - point["h2d_ms"] for point in points]
-            status = (
-                "compute_always_longer"
-                if all(gap > 0.0 for gap in gaps)
-                else "h2d_always_longer"
-            )
-            output.append(
-                {
-                    "skill_tokens": skill_tokens,
-                    "status": status,
-                    "estimated_balance_ratio": "",
-                    "estimated_balance_percent": "",
-                    "estimated_calibration_tokens": "",
-                    "left_nominal_ratio": "",
-                    "right_nominal_ratio": "",
-                }
-            )
-            continue
-        left, right, weight = crossing
-        estimated_ratio = left["actual_ratio"] + weight * (
-            right["actual_ratio"] - left["actual_ratio"]
-        )
+        chunk = by_key[(skill_tokens, "chunk_single_layer")]
+        packed = by_key[(skill_tokens, "packed_chunks_single_layer")]
         output.append(
             {
                 "skill_tokens": skill_tokens,
-                "status": "interpolated",
-                "estimated_balance_ratio": estimated_ratio,
-                "estimated_balance_percent": 100.0 * estimated_ratio,
-                "estimated_calibration_tokens": left["calibration_tokens"]
-                + weight
-                * (right["calibration_tokens"] - left["calibration_tokens"]),
-                "left_nominal_ratio": left["nominal_ratio"],
-                "right_nominal_ratio": right["nominal_ratio"],
+                "calibration_tokens": CALIBRATION_TOKENS,
+                "chunk_size_tokens": CHUNK_SIZE_TOKENS,
+                "chunk_single_layer_h2d_ms": float(
+                    chunk["median_h2d_next_ms_median"]
+                ),
+                "compute_correct_install_ms": float(
+                    packed["median_layer_adaptation_ms_median"]
+                ),
+                "packed_chunks_single_layer_h2d_ms": float(
+                    packed["median_h2d_next_ms_median"]
+                ),
             }
         )
     return output
 
 
-def _plot_stage_crossover(
-    rows: list[dict[str, Any]],
-    balance_points: list[dict[str, Any]],
-) -> None:
-    colors = {"h2d": "#4C78A8", "compute": "#E45756"}
-    fig, axes = plt.subplots(
-        1,
-        len(SKILL_TOKEN_VALUES),
-        figsize=(9.6, 3.25),
-        sharey=True,
-    )
-    balances = {int(row["skill_tokens"]): row for row in balance_points}
-    for axis, skill_tokens in zip(axes, SKILL_TOKEN_VALUES, strict=True):
-        points = sorted(
-            (
-                row
-                for row in rows
-                if int(row["skill_tokens"]) == skill_tokens
-                and row["execution_order"] == "compute_first"
-            ),
-            key=lambda row: float(row["calibration_ratio"]),
+def _plot_latency_comparison(rows: list[dict[str, Any]]) -> None:
+    positions = list(range(len(rows)))
+    labels = []
+    for row in rows:
+        tokens = int(row["skill_tokens"])
+        if tokens == 1024:
+            labels.append("1K")
+        elif tokens == 8192:
+            labels.append("8K")
+        elif tokens >= 1000:
+            labels.append(f"{tokens / 1000:g}K")
+        else:
+            labels.append(str(tokens))
+
+    fig, axis = plt.subplots(figsize=(5.8, 3.0))
+    for field, label, color, linestyle in (
+        (
+            "chunk_single_layer_h2d_ms",
+            "Per-chunk layer H2D",
+            "#4C78A8",
+            "-",
+        ),
+        (
+            "compute_correct_install_ms",
+            "Calibration + correction + installation",
+            "#E45756",
+            "-",
+        ),
+        (
+            "packed_chunks_single_layer_h2d_ms",
+            "Packed-layer H2D",
+            "#59A14F",
+            "--",
+        ),
+    ):
+        axis.plot(
+            positions,
+            [float(row[field]) for row in rows],
+            marker="o",
+            markersize=4.5,
+            linewidth=1.6,
+            linestyle=linestyle,
+            color=color,
+            label=label,
         )
-        x_values = [
-            100.0 * float(row["calibration_tokens"]) / skill_tokens
-            for row in points
-        ]
-        for metric, label in (
-            ("median_h2d_next_ms", "Pinned CPU to GPU"),
-            ("median_layer_adaptation_ms", "Calibration compute"),
-        ):
-            medians = [float(row[f"{metric}_median"]) for row in points]
-            stds = [float(row[f"{metric}_std"]) for row in points]
-            series = "h2d" if metric == "median_h2d_next_ms" else "compute"
-            axis.plot(
-                x_values,
-                medians,
-                marker="o",
-                markersize=4.5,
-                linewidth=1.5,
-                color=colors[series],
-                label=label,
-            )
-            axis.fill_between(
-                x_values,
-                [median - std for median, std in zip(medians, stds, strict=True)],
-                [median + std for median, std in zip(medians, stds, strict=True)],
-                color=colors[series],
-                alpha=0.10,
-                linewidth=0,
-            )
-        balance = balances[skill_tokens]
-        if balance["status"] == "interpolated":
-            ratio_percent = float(balance["estimated_balance_percent"])
-            axis.axvline(
-                ratio_percent,
-                color="#555555",
-                linestyle="--",
-                linewidth=1.0,
-            )
-            axis.text(
-                ratio_percent,
-                0.96,
-                f"Balance ≈ {ratio_percent:.2f}%",
-                transform=axis.get_xaxis_transform(),
-                ha="center",
-                va="top",
-                fontsize=7,
-                color="#444444",
-            )
-        skill_label = (
-            f"{skill_tokens // 1024}K"
-            if skill_tokens % 1024 == 0
-            else f"{skill_tokens / 1000:g}K"
-        )
-        axis.set_title(f"Skill length = {skill_label} tokens", fontsize=9)
-        axis.set_xlabel("Calibration ratio (%)", fontsize=8)
-        axis.tick_params(axis="both", labelsize=7)
-        axis.grid(alpha=0.18)
-    axes[0].set_ylabel("Per-layer latency (ms)", fontsize=8)
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(
-        handles,
-        labels,
-        loc="upper center",
-        ncol=2,
-        frameon=False,
-        fontsize=7.5,
-    )
-    fig.tight_layout(rect=(0, 0, 1, 0.84), w_pad=0.8)
-    fig.savefig(
-        SWEEP_OUTPUT_ROOT / "stage_crossover_ratio_sweep.png",
-        dpi=240,
-    )
-    fig.savefig(SWEEP_OUTPUT_ROOT / "stage_crossover_ratio_sweep.pdf")
+    axis.set_xticks(positions, labels=labels)
+    axis.set_xlabel("Skill length (tokens)")
+    axis.set_ylabel("Stable per-layer latency (ms)")
+    axis.grid(axis="y", alpha=0.18)
+    axis.legend(frameon=False, fontsize=7.5)
+    fig.tight_layout()
+    fig.savefig(SWEEP_OUTPUT_ROOT / "layout_compute_latency.png", dpi=240)
+    fig.savefig(SWEEP_OUTPUT_ROOT / "layout_compute_latency.pdf")
     plt.close(fig)
 
 
@@ -575,15 +478,8 @@ def _prepare_root(specs: list[CaseSpec]) -> tuple[Path, Path, Path]:
         "skill_token_values": list(SKILL_TOKEN_VALUES),
         "warmup_requests": WARMUP_REQUESTS,
         "repetitions": REPETITIONS,
-        "calibration_ratios": list(CALIBRATION_RATIOS),
-        "calibration_token_rounding": "nearest_token_half_up",
-        "calibration_tokens": {
-            str(skill_tokens): {
-                f"{ratio:.2f}": _calibration_tokens(skill_tokens, ratio)
-                for ratio in CALIBRATION_RATIOS
-            }
-            for skill_tokens in SKILL_TOKEN_VALUES
-        },
+        "calibration_tokens": CALIBRATION_TOKENS,
+        "calibration_ratio": "calibration_tokens / skill_tokens",
         "chunk_size_tokens": CHUNK_SIZE_TOKENS,
         "host_layouts": list(HOST_LAYOUTS),
         "execution_orders": list(EXECUTION_ORDERS),
@@ -613,9 +509,9 @@ def _write_results(rows: list[dict[str, Any]], failed: list[str]) -> None:
         },
     )
     if len(rows) == TOTAL_CASES:
-        balance_points = _estimate_balance_points(aggregate)
-        _write_csv(SWEEP_OUTPUT_ROOT / "balance_points.csv", balance_points)
-        _plot_stage_crossover(aggregate, balance_points)
+        comparison = _comparison_rows(aggregate)
+        _write_csv(SWEEP_OUTPUT_ROOT / "latency_comparison.csv", comparison)
+        _plot_latency_comparison(comparison)
 
 
 def main() -> None:

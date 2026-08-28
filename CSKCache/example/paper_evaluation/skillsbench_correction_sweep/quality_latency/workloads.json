@@ -1,0 +1,63 @@
+[
+  {
+    "task_id": "data-to-d3",
+    "skill_name": "d3-visualization",
+    "tier": "core",
+    "smoke": true
+  },
+  {
+    "task_id": "3d-scan-calc",
+    "skill_name": "mesh-analysis",
+    "tier": "core"
+  },
+  {
+    "task_id": "jax-computing-basics",
+    "skill_name": "jax-skills",
+    "tier": "core"
+  },
+  {
+    "task_id": "azure-bgp-oscillation-route-leak",
+    "skill_name": "azure-bgp",
+    "tier": "core"
+  },
+  {
+    "task_id": "protein-expression-analysis",
+    "skill_name": "xlsx",
+    "tier": "core"
+  },
+  {
+    "task_id": "citation-check",
+    "skill_name": "citation-management",
+    "tier": "core"
+  },
+  {
+    "task_id": "dialogue-parser",
+    "skill_name": "dialogue-graph",
+    "tier": "extension"
+  },
+  {
+    "task_id": "manufacturing-codebook-normalization",
+    "skill_name": "manufacturing-failure-reason-codebook-normalization",
+    "tier": "extension"
+  },
+  {
+    "task_id": "manufacturing-fjsp-optimization",
+    "skill_name": "fjsp-baseline-repair-with-downtime-and-policy",
+    "tier": "extension"
+  },
+  {
+    "task_id": "court-form-filling",
+    "skill_name": "pdf",
+    "tier": "extension"
+  },
+  {
+    "task_id": "quantum-numerical-simulation",
+    "skill_name": "qutip",
+    "tier": "extension"
+  },
+  {
+    "task_id": "pptx-reference-formatting",
+    "skill_name": "pptx",
+    "tier": "extension"
+  }
+]

@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "selection_seed": "20260827",
+  "selection_rule": "closest_to_fixed_bucket_midpoint_with_frozen_sha256_tie_break",
+  "workloads": [
+    {
+      "length_bucket": "<1K",
+      "task_id": "latex-formula-extraction",
+      "source_type": "skillsbench",
+      "task_root": "skillsbench",
+      "task_relative_path": "tasks/latex-formula-extraction/task.md",
+      "task_text_sha256": "ca601e918a6404b8f7286bdbce7cc0067e00c57a7fe02e5798e9c632a884897d",
+      "skill_name": "marker",
+      "skill_root": "skillsbench",
+      "skill_relative_path": "tasks/latex-formula-extraction/environment/skills/marker/SKILL.md",
+      "skill_text_sha256": "c931b6398d4a9fe59126c8fda56e5c0d275550e907726820547ea9e84302843d",
+      "qwen3_14b_skill_tokens": 498,
+      "qwen3_14b_token_ids_sha256": "8f81b1cdecad5e09fdcfd38dfd4910d7f29043ff8d778d7816e5f313b48a4fae"
+    },
+    {
+      "length_bucket": "1K-3K",
+      "task_id": "fix-erlang-ssh-cve",
+      "source_type": "skillsbench",
+      "task_root": "skillsbench",
+      "task_relative_path": "tasks/fix-erlang-ssh-cve/task.md",
+      "task_text_sha256": "8d998c0d8d66ebe29b383a82bc3784b313c1553053494b9340236d552341f21e",
+      "skill_name": "erlang-concurrency",
+      "skill_root": "skillsbench",
+      "skill_relative_path": "tasks/fix-erlang-ssh-cve/environment/skills/erlang-concurrency/SKILL.md",
+      "skill_text_sha256": "eb762a07fbdc3162047bed8bab4674f7e3b8676c698b6c2afdfe10179237b36b",
+      "qwen3_14b_skill_tokens": 2004,
+      "qwen3_14b_token_ids_sha256": "f8cc2c9faec3958e5aa7c97b89987afc2b373e86283de597379a66ff814b934b"
+    },
+    {
+      "length_bucket": "3K-5K",
+      "task_id": "crystallographic-wyckoff-position-analysis",
+      "source_type": "skillsbench",
+      "task_root": "skillsbench",
+      "task_relative_path": "tasks/crystallographic-wyckoff-position-analysis/task.md",
+      "task_text_sha256": "654663a5bde548cb6965379ec553f963749de5fc352ce5bcab0d83e1197f32fe",
+      "skill_name": "sympy",
+      "skill_root": "skillsbench",
+      "skill_relative_path": "tasks/crystallographic-wyckoff-position-analysis/environment/skills/sympy/SKILL.md",
+      "skill_text_sha256": "1464cb81c992472072bdd66249623f55fa1709a74ca4148f7f5f40fa6cbb6616",
+      "qwen3_14b_skill_tokens": 4056,
+      "qwen3_14b_token_ids_sha256": "8cc249979b31d47604444e4f3dbaa7c1727804ab757d2f0bda8f142f1d0243ac"
+    },
+    {
+      "length_bucket": "5K-8K",
+      "task_id": "organize-messy-files",
+      "source_type": "skillsbench",
+      "task_root": "skillsbench",
+      "task_relative_path": "tasks/organize-messy-files/task.md",
+      "task_text_sha256": "013833bacf27d1e907faa4d0a4e8964784d4f9e2fd21f6ee7b039a6d02666dc8",
+      "skill_name": "pptx",
+      "skill_root": "skillsbench",
+      "skill_relative_path": "tasks/organize-messy-files/environment/skills/pptx/SKILL.md",
+      "skill_text_sha256": "7d39d6f9917d87886ebb89a3696394d7295f2dc1dd9bc1376bfa31d81e139532",
+      "qwen3_14b_skill_tokens": 6390,
+      "qwen3_14b_token_ids_sha256": "f58083b9532fec418adad2611271f761c7b695c5c67b41596f78788d566b2198"
+    },
+    {
+      "length_bucket": "8K-10K",
+      "task_id": "citation-check",
+      "source_type": "skillsbench",
+      "task_root": "skillsbench",
+      "task_relative_path": "tasks/citation-check/task.md",
+      "task_text_sha256": "8699c59d1ae337f72d137be07381eabb7450ec2835cd1b0693183b2fef7b2eb1",
+      "skill_name": "citation-management",
+      "skill_root": "skillsbench",
+      "skill_relative_path": "tasks/citation-check/environment/skills/citation-management/SKILL.md",
+      "skill_text_sha256": "2dff78725d4952afe1cc83240649b9240a4ef3d5fb817d076ddd930d574f831d",
+      "qwen3_14b_skill_tokens": 8285,
+      "qwen3_14b_token_ids_sha256": "14083730574cedeb50b13c731f0811184c55fae6f7259f7ac65e378ac68cc1be"
+    },
+    {
+      "length_bucket": ">10K",
+      "task_id": "proof-gradient-descent-audit",
+      "source_type": "curated_repository_task",
+      "task_root": "section",
+      "task_relative_path": "curated_tasks/proof-gradient-descent-audit/task.md",
+      "task_text_sha256": "369ad8a7c1bf149e6e548159563c5ccdba7294564b0759d9ef760b2ab85bda86",
+      "skill_name": "proof-checker",
+      "skill_root": "repository",
+      "skill_relative_path": "skills/Auto-claude-code-research-in-sleep/skills/proof-checker/SKILL.md",
+      "skill_text_sha256": "9ec2074f69fdbe7fe285deff055bd9d52936cb6756bab8e81c69fcdb3684de8e",
+      "qwen3_14b_skill_tokens": 13314,
+      "qwen3_14b_token_ids_sha256": "352115a3f34b5ebcd5b529e970e14fefa6133ba324b3c3fe5efef2d6f0925e70"
+    }
+  ]
+}

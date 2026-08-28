@@ -294,6 +294,64 @@ def test_direct_raw_publication_replaces_only_same_skill_identity(
     ]
 
 
+def test_direct_raw_publication_can_retain_skill_body_versions(
+    tmp_path: Path,
+) -> None:
+    container = make_container(tmp_path)
+    offsets = {
+        **{
+            f"lookup-layer-{layer}": 4096 * (layer + 1)
+            for layer in range(4)
+        },
+        **{
+            f"lookup-v2-layer-{layer}": 4096 * (layer + 9)
+            for layer in range(4)
+        },
+    }
+    builder = DirectRawCacheBuilder(
+        DirectOffsetBackend(container, offsets),
+        container,
+        expected_layers=4,
+    )
+    first = make_direct_source()
+    second = replace(
+        first,
+        object_id="internal-comms:direct-v2",
+        skill_version="v2",
+        token_ids_sha256="b" * 64,
+        layers=tuple(
+            replace(
+                layer,
+                backend_key=f"persistent-v2-layer-{layer.layer_id}",
+                lookup_key=f"lookup-v2-layer-{layer.layer_id}",
+            )
+            for layer in first.layers
+        ),
+    )
+    catalog = tmp_path / "versioned-catalog.json"
+
+    builder.publish_objects(
+        catalog,
+        [first, second],
+        retain_skill_versions=True,
+    )
+
+    manager = MetadataManager(catalog, expected_layers=4)
+    assert len(manager.list_objects()) == 2
+    with pytest.raises(ValueError, match="ambiguous"):
+        manager.resolve_object(
+            skill_name="internal-comms",
+            model_fingerprint="model-fingerprint",
+            tokenizer_fingerprint="tokenizer-fingerprint",
+        )
+    assert manager.resolve_object(
+        skill_name="internal-comms",
+        skill_version="v2",
+        model_fingerprint="model-fingerprint",
+        tokenizer_fingerprint="tokenizer-fingerprint",
+    ).object_id == "internal-comms:direct-v2"
+
+
 def test_builder_rejects_missing_raw_layer(tmp_path: Path) -> None:
     container = make_container(tmp_path)
     backend = make_backend()

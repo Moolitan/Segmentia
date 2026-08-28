@@ -68,8 +68,13 @@ CAPACITY_BYTES = int(os.environ.get("CSKCACHE_RAW_CAPACITY_BYTES", str(512 * 102
 ALIGNMENT_BYTES = 4096
 HEADER_BYTES = 4096
 SLOT_BYTES = int(os.environ.get("CSKCACHE_RAW_SLOT_BYTES", str(128 * 1024**2)))
-METADATA_BYTES = 64 * 1024**2
+METADATA_BYTES = int(
+    os.environ.get("CSKCACHE_RAW_METADATA_BYTES", str(64 * 1024**2))
+)
 CONTAINER_ID = os.environ.get("CSKCACHE_RAW_CONTAINER_ID", "qwen3-14b-skill-kv")
+RETAIN_SKILL_VERSIONS = os.environ.get(
+    "CSKCACHE_RETAIN_SKILL_VERSIONS", "0"
+) == "1"
 CONTAINER_FORMAT_VERSION = 1
 META_MAGIC = "CSKRAW01"
 IO_ENGINE = "io_uring"
@@ -313,7 +318,11 @@ def finalize(*, quarantine_unrecoverable: bool = False) -> None:
             expected_layers=EXPECTED_LAYERS,
         )
         try:
-            built = builder.publish_objects(CATALOG, sources)
+            built = builder.publish_objects(
+                CATALOG,
+                sources,
+                retain_skill_versions=RETAIN_SKILL_VERSIONS,
+            )
         except RawOffsetNotFoundError as exc:
             if not quarantine_unrecoverable:
                 raise

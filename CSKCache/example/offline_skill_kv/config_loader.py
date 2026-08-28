@@ -2,9 +2,30 @@
 
 from __future__ import annotations
 
+import importlib.util
+import os
+from pathlib import Path
 import shlex
 
-import config as cfg
+
+def load_config():
+    configured_path = os.environ.get("OFFLINE_CONFIG_PATH", "").strip()
+    if not configured_path:
+        import config
+
+        return config
+    path = Path(configured_path).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"offline config does not exist: {path}")
+    spec = importlib.util.spec_from_file_location("offline_skill_kv_config", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load offline config: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+cfg = load_config()
 
 
 def validate_config() -> None:
@@ -27,6 +48,17 @@ def validate_config() -> None:
         raise ValueError("PORT and EXPECTED_LAYERS must be positive")
     if not 0 < cfg.GPU_MEMORY_UTILIZATION <= 1:
         raise ValueError("GPU_MEMORY_UTILIZATION must be in (0, 1]")
+    if cfg.STORAGE_BACKEND == "raw_block":
+        metadata_bytes = getattr(cfg, "RAW_METADATA_BYTES", 64 * 1024**2)
+        for name, value in (
+            ("RAW_CAPACITY_BYTES", cfg.RAW_CAPACITY_BYTES),
+            ("RAW_SLOT_BYTES", cfg.RAW_SLOT_BYTES),
+            ("RAW_METADATA_BYTES", metadata_bytes),
+        ):
+            if value <= 0 or value % 4096 != 0:
+                raise ValueError(f"{name} must be a positive multiple of 4096")
+        if metadata_bytes >= cfg.RAW_CAPACITY_BYTES:
+            raise ValueError("RAW_METADATA_BYTES must be smaller than capacity")
 
 
 def shell_environment() -> dict[str, str]:
@@ -38,6 +70,12 @@ def shell_environment() -> dict[str, str]:
         "OFFLINE_SKILLS": "\n".join(cfg.SKILLS),
         "OFFLINE_COLLECTION": cfg.COLLECTION or "",
         "OFFLINE_EXCLUDED_SKILLS": "\n".join(cfg.EXCLUDED_SKILLS),
+        "OFFLINE_DEDUPLICATE_CONTENT": (
+            "1" if getattr(cfg, "DEDUPLICATE_CONTENT", False) else "0"
+        ),
+        "CSKCACHE_RETAIN_SKILL_VERSIONS": (
+            "1" if getattr(cfg, "RETAIN_SKILL_VERSIONS", False) else "0"
+        ),
         "OFFLINE_OVERWRITE": "1" if cfg.OVERWRITE else "0",
         "OFFLINE_DRY_RUN": "1" if cfg.DRY_RUN else "0",
         "OFFLINE_SKILLS_DIR": str(cfg.SKILLS_DIR),
@@ -55,6 +93,9 @@ def shell_environment() -> dict[str, str]:
         "VLLM_SHUTDOWN_TIMEOUT": str(cfg.SHUTDOWN_TIMEOUT_SECONDS),
         "CSKCACHE_RAW_CAPACITY_BYTES": str(cfg.RAW_CAPACITY_BYTES),
         "CSKCACHE_RAW_SLOT_BYTES": str(cfg.RAW_SLOT_BYTES),
+        "CSKCACHE_RAW_METADATA_BYTES": str(
+            getattr(cfg, "RAW_METADATA_BYTES", 64 * 1024**2)
+        ),
         "CSKCACHE_RAW_CONTAINER_ID": cfg.RAW_CONTAINER_ID,
     }
 

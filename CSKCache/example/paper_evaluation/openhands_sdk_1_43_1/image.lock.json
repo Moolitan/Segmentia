@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "image_tag": "cskcache/openhands-sdk-benchflow:1.43.1",
+  "image_id": "sha256:19b8d307521307410a853f42e29c3500fb29b96f0c7393d0485707da49191d40",
+  "repo_digests": [],
+  "architecture": "amd64",
+  "os": "linux",
+  "size_bytes": 688294806,
+  "created_utc": "2026-08-26T18:26:30.971395573Z",
+  "base_reference": "python:3.12-slim@sha256:7a8b475003c4fe15a2cd4e55e5cfc2f3560bdc9333d624f24cdd6d4340fd7a17",
+  "base_digest": "sha256:7a8b475003c4fe15a2cd4e55e5cfc2f3560bdc9333d624f24cdd6d4340fd7a17",
+  "source_sha256": "ef93265cbf17e333f03ee34d44e0393ab6d91e4992e67e455de917a947a30b6b",
+  "sdk_source_commit": "ddac55697c5d15cf8a34495b5ed6d46c86db092a",
+  "versions": {
+    "openhands-sdk": "1.43.1",
+    "openhands-tools": "1.43.1",
+    "agent-client-protocol": "0.10.1"
+  }
+}

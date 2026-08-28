@@ -50,6 +50,8 @@ def build_extra_config(
     use_odirect: bool = True,
     queue_depth: int = 64,
     catalog_override: Path | None = None,
+    raw_slot_bytes: int = 128 * 1024**2,
+    raw_metadata_bytes: int = 64 * 1024**2,
 ) -> dict[str, Any]:
     path = catalog_override or catalog_path(pool_root, model_id, backend)
     if not path.is_file():
@@ -76,6 +78,12 @@ def build_extra_config(
         return result
     if backend != "raw_block":
         raise ValueError(f"unsupported storage backend: {backend}")
+    for name, value in (
+        ("raw_slot_bytes", raw_slot_bytes),
+        ("raw_metadata_bytes", raw_metadata_bytes),
+    ):
+        if value <= 0 or value % 4096 != 0:
+            raise ValueError(f"{name} must be a positive multiple of 4096")
     catalog = json.loads(path.read_text(encoding="utf-8"))
     containers = catalog.get("containers") or []
     if len(containers) != 1:
@@ -91,10 +99,10 @@ def build_extra_config(
             "rust_raw_block.capacity_bytes": container["capacity_bytes"],
             "rust_raw_block.block_align": container["alignment_bytes"],
             "rust_raw_block.header_bytes": container["header_bytes"],
-            "rust_raw_block.slot_bytes": 128 * 1024**2,
+            "rust_raw_block.slot_bytes": raw_slot_bytes,
             "rust_raw_block.use_odirect": use_odirect,
             "rust_raw_block.enable_zero_copy": True,
-            "rust_raw_block.meta_total_bytes": 64 * 1024**2,
+            "rust_raw_block.meta_total_bytes": raw_metadata_bytes,
             "rust_raw_block.meta_magic": "CSKRAW01",
             "rust_raw_block.meta_version": container["container_format_version"],
             "rust_raw_block.meta_enable_periodic": False,

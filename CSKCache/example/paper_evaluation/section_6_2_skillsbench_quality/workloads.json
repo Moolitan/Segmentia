@@ -1,0 +1,6 @@
+[
+  {
+    "task_id": "llm-prefix-cache-replay",
+    "required_skills": ["prefix-cache-replay"]
+  }
+]

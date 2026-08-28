@@ -12,6 +12,8 @@ STORAGE_LAYOUT = "packed_chunks_single_layer"
 SKILLS = ("doc-coauthoring",)
 COLLECTION = None
 EXCLUDED_SKILLS = ()
+DEDUPLICATE_CONTENT = False
+RETAIN_SKILL_VERSIONS = False
 OVERWRITE = False
 DRY_RUN = False
 
@@ -38,4 +40,5 @@ SHUTDOWN_TIMEOUT_SECONDS = 30
 # Raw-block container geometry.
 RAW_CAPACITY_BYTES = 512 * 1024**3
 RAW_SLOT_BYTES = 128 * 1024**2
+RAW_METADATA_BYTES = 64 * 1024**2
 RAW_CONTAINER_ID = "qwen3-14b-skill-kv"

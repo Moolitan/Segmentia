@@ -81,9 +81,21 @@ def cacheblend_environment(
     }
 
 
-def cskcache_environment(extra_config: Mapping[str, Any]) -> dict[str, str]:
+def cskcache_environment(
+    extra_config: Mapping[str, Any], *, host_page_tokens: int | None = None
+) -> dict[str, str]:
+    logical_chunk_tokens = int(extra_config["csk_chunk_size_tokens"])
+    physical_page_tokens = (
+        logical_chunk_tokens if host_page_tokens is None else host_page_tokens
+    )
+    if physical_page_tokens <= 0:
+        raise ValueError("host_page_tokens must be positive")
+    if physical_page_tokens < logical_chunk_tokens:
+        raise ValueError(
+            "host_page_tokens must be at least csk_chunk_size_tokens"
+        )
     return {
-        "LMCACHE_CHUNK_SIZE": str(extra_config["csk_chunk_size_tokens"]),
+        "LMCACHE_CHUNK_SIZE": str(physical_page_tokens),
         "LMCACHE_USE_LAYERWISE": "True",
         "LMCACHE_FORCE_SKIP_SAVE": "1",
         "LMCACHE_LOCAL_CPU": "True",

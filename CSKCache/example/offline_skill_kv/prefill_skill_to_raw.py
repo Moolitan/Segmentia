@@ -61,6 +61,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--collection")
     parser.add_argument("--skill", action="append")
     parser.add_argument("--exclude-skill", action="append", default=[])
+    parser.add_argument(
+        "--deduplicate-content",
+        action="store_true",
+        help="Keep one path for each exact (Skill name, Skill body) pair",
+    )
     parser.add_argument("--cache-id")
     parser.add_argument("--skill-path", type=Path)
     parser.add_argument("--pending-dir", type=Path)
@@ -97,6 +102,8 @@ def discover_skills(
     collection: str | None,
     selected_skills: set[str] | None,
     excluded_skills: set[str] | None = None,
+    *,
+    deduplicate_content: bool = False,
 ) -> list[SkillSpec]:
     if not skills_dir.is_dir():
         raise FileNotFoundError(f"skills directory does not exist: {skills_dir}")
@@ -116,10 +123,26 @@ def discover_skills(
             raise RuntimeError(
                 f"duplicate cache ID {cache_id!r}: {found[cache_id]} and {source_path}"
             )
-        found[cache_id] = source_path.resolve()
+        # Preserve the path inside ``skills_dir`` for cache-ID authentication.
+        # The file may deliberately be a symlink to an authenticated frozen
+        # source; resolving it here would move it outside the logical bundle.
+        found[cache_id] = source_path.absolute()
     if not found:
         raise RuntimeError("no matching SKILL.md files found")
-    return [SkillSpec(key, found[key]) for key in sorted(found)]
+    specs = [SkillSpec(key, found[key]) for key in sorted(found)]
+    if not deduplicate_content:
+        return specs
+    unique: list[SkillSpec] = []
+    seen_content: set[tuple[str, str]] = set()
+    for spec in specs:
+        skill_name = spec.source_path.parent.name
+        body_sha256 = hashlib.sha256(spec.source_path.read_bytes()).hexdigest()
+        identity = (skill_name, body_sha256)
+        if identity in seen_content:
+            continue
+        seen_content.add(identity)
+        unique.append(spec)
+    return unique
 
 
 def post_completion(
@@ -190,13 +213,17 @@ def main() -> None:
             args.collection,
             set(args.skill or ()),
             set(args.exclude_skill),
+            deduplicate_content=args.deduplicate_content,
         ):
             print(f"{spec.cache_id}\t{spec.source_path}")
         return
 
     require_one_skill_args(args)
-    source_path = args.skill_path.resolve()
-    expected_cache_id = cache_id_for_path(args.skills_dir.resolve(), source_path)
+    source_path = args.skill_path.absolute()
+    skills_dir = args.skills_dir.absolute()
+    if not source_path.is_file():
+        raise FileNotFoundError(f"Skill source is missing: {source_path}")
+    expected_cache_id = cache_id_for_path(skills_dir, source_path)
     if args.cache_id != expected_cache_id:
         raise ValueError(
             f"cache ID/path mismatch: {args.cache_id!r} != {expected_cache_id!r}"
@@ -261,6 +288,7 @@ def main() -> None:
                 skill_name=skill_name,
                 model_fingerprint=model_digest,
                 tokenizer_fingerprint=tokenizer_digest,
+                skill_version=skill_version,
             )
         except (KeyError, ValueError):
             existing = None

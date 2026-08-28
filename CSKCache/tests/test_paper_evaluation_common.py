@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 
+from paper_evaluation.common.csk_config import build_extra_config
 from paper_evaluation.common.driver import (
     _benchmark_request_id,
     _fallback,
     _timeline_ttft,
 )
+from paper_evaluation.common.server import cskcache_environment
 from paper_evaluation.common.schema import SAMPLE_COLUMNS, normalize_row
 
 
@@ -69,6 +71,21 @@ def test_fallback_uses_exact_request_id(tmp_path):
     assert _fallback(trace, "measure1") == (True, "authentication")
 
 
+def test_fallback_accepts_vllm_engine_child_request_id(tmp_path):
+    trace = tmp_path / "profile.jsonl"
+    _write_jsonl(
+        trace,
+        [
+            {
+                "request_id": "measure1-92b02043",
+                "event": "csk_fallback",
+                "reason": "authentication",
+            }
+        ],
+    )
+    assert _fallback(trace, "measure1") == (True, "authentication")
+
+
 def test_sample_schema_has_cross_platform_merge_keys():
     row = normalize_row(
         {
@@ -94,3 +111,52 @@ def test_benchmark_request_id_triggers_timeline_and_is_stable():
     assert first == second
     assert first.startswith("cskcache-latency-")
     assert "%" not in first and " " not in first
+
+
+def test_raw_catalog_geometry_can_match_a_dedicated_pool(tmp_path):
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(
+        json.dumps(
+            {
+                "containers": [
+                    {
+                        "raw_file_path": "/tmp/pool.bin",
+                        "capacity_bytes": 512 * 1024**3,
+                        "alignment_bytes": 4096,
+                        "header_bytes": 4096,
+                        "container_format_version": 1,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    extra = build_extra_config(
+        pool_root=tmp_path,
+        model_id="Qwen3",
+        backend="raw_block",
+        chunk_tokens=256,
+        storage_layout="packed_chunks_single_layer",
+        host_layout="packed_chunks_single_layer",
+        execution_order="h2d_first",
+        correction_strategy="ratio_prefix",
+        calibration_tokens=0,
+        calibration_ratio=0.05,
+        correction_alpha=0.6,
+        minimum_full_recompute_tokens=32,
+        minimum_reuse_tokens=256,
+        catalog_override=catalog,
+        raw_slot_bytes=40 * 1024**2,
+        raw_metadata_bytes=256 * 1024**2,
+    )
+    assert extra["rust_raw_block.slot_bytes"] == 40 * 1024**2
+    assert extra["rust_raw_block.meta_total_bytes"] == 256 * 1024**2
+
+
+def test_cskcache_host_page_tokens_are_independent_from_logical_chunk() -> None:
+    extra = {"csk_chunk_size_tokens": 256}
+    environment = cskcache_environment(extra, host_page_tokens=512)
+    assert environment["LMCACHE_CHUNK_SIZE"] == "512"
+    assert json.loads(environment["LMCACHE_EXTRA_CONFIG"])[
+        "csk_chunk_size_tokens"
+    ] == 256

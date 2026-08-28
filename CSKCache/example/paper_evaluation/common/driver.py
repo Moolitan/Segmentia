@@ -85,6 +85,9 @@ def make_server_config(
     io_engine: str = "io_uring",
     use_odirect: bool = True,
     catalog_override: Path | None = None,
+    host_page_tokens: int | None = None,
+    raw_slot_bytes: int = 128 * 1024**2,
+    raw_metadata_bytes: int = 64 * 1024**2,
 ) -> ServerConfig:
     trace = case_root / "vllm_timeline.jsonl"
     log = case_root / "vllm.log"
@@ -137,8 +140,12 @@ def make_server_config(
         io_engine=io_engine,
         use_odirect=use_odirect,
         catalog_override=catalog_override,
+        raw_slot_bytes=raw_slot_bytes,
+        raw_metadata_bytes=raw_metadata_bytes,
     )
-    environment = cskcache_environment(extra)
+    environment = cskcache_environment(
+        extra, host_page_tokens=host_page_tokens
+    )
     environment["CSKCACHE_PROFILE_TRACE_PATH"] = str(
         case_root / "cskcache_profile.jsonl"
     )
@@ -168,6 +175,7 @@ def _forced_skill_call(
     model: str,
     skill_name: str,
     case_id: str,
+    selection_prompt: str | None = None,
 ) -> str:
     result = nonstream_chat(
         base_url,
@@ -176,7 +184,14 @@ def _forced_skill_call(
             "model": model,
             "request_id": f"{case_id}-select",
             "messages": [
-                {"role": "user", "content": f"Load the {skill_name} Skill."}
+                {
+                    "role": "user",
+                    "content": (
+                        selection_prompt
+                        if selection_prompt is not None
+                        else f"Load the {skill_name} Skill."
+                    ),
+                }
             ],
             "tools": skill_tool(skill_name),
             "tool_choice": {
@@ -196,7 +211,20 @@ def _forced_skill_call(
     calls = (message or {}).get("tool_calls") or []
     if len(calls) != 1 or calls[0].get("function", {}).get("name") != "skill":
         raise RuntimeError("forced request did not produce one Skill tool call")
-    return str(calls[0]["id"])
+    arguments = calls[0].get("function", {}).get("arguments")
+    try:
+        parsed_arguments = json.loads(arguments) if isinstance(arguments, str) else None
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("forced Skill tool call has invalid JSON arguments") from exc
+    if parsed_arguments != {"name": skill_name}:
+        raise RuntimeError(
+            f"forced Skill tool call selected {parsed_arguments!r}, "
+            f"expected {{'name': {skill_name!r}}}"
+        )
+    tool_call_id = str(calls[0].get("id") or "")
+    if not tool_call_id:
+        raise RuntimeError("forced Skill tool call has no ID")
+    return tool_call_id
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -213,6 +241,15 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
         if isinstance(record, dict):
             records.append(record)
     return records
+
+
+def _request_id_matches(candidate: object, request_id: str) -> bool:
+    """Match an API request ID or its unique vLLM engine-child ID."""
+
+    value = str(candidate or "")
+    return value == request_id or re.fullmatch(
+        rf"{re.escape(request_id)}-[0-9a-f]{{8}}", value
+    ) is not None
 
 
 def _wait_csk_ready(profile_path: Path, ticket: str) -> None:
@@ -254,7 +291,7 @@ def _timeline_ttft(path: Path, case_id: str) -> tuple[float, int, int]:
 def _fallback(profile_path: Path, case_id: str) -> tuple[bool, str]:
     reasons = []
     for record in _read_jsonl(profile_path):
-        if str(record.get("request_id", "")) != case_id:
+        if not _request_id_matches(record.get("request_id"), case_id):
             continue
         if "fallback" in str(record.get("event", "")):
             reasons.append(str(record.get("reason") or record.get("event")))
@@ -271,6 +308,7 @@ def prepare_request_pair(
     case_id: str,
     source_skill_text: str | None = None,
     wait_for_prefetch: bool = True,
+    selection_prompt: str | None = None,
 ) -> PreparedRequest:
     """Run excluded setup work without starting the measured request B."""
 
@@ -279,6 +317,7 @@ def prepare_request_pair(
         model=server.config.platform.served_model,
         skill_name=skill_name,
         case_id=case_id,
+        selection_prompt=selection_prompt,
     )
     profile_value = server.config.extra_env.get(
         "CSKCACHE_PROFILE_TRACE_PATH", ""
@@ -331,6 +370,8 @@ def execute_prepared_request(
     max_tokens: int,
     stream: bool,
     reset_prefix_cache: bool = True,
+    enable_thinking: bool = False,
+    seed: int | None = None,
 ) -> RequestResult:
     """Execute measured request B from a prepared, excluded setup state."""
 
@@ -346,8 +387,10 @@ def execute_prepared_request(
         "tool_choice": "none",
         "temperature": 0,
         "max_tokens": max_tokens,
-        "chat_template_kwargs": {"enable_thinking": False},
+        "chat_template_kwargs": {"enable_thinking": enable_thinking},
     }
+    if seed is not None:
+        payload["seed"] = seed
     completion = (
         stream_chat(
             server.base_url,
@@ -395,6 +438,9 @@ def run_request_pair(
     source_skill_text: str | None = None,
     wait_for_prefetch: bool = True,
     reset_prefix_cache: bool = True,
+    selection_prompt: str | None = None,
+    enable_thinking: bool = False,
+    seed: int | None = None,
 ) -> RequestResult:
     """Run excluded request A, then measure request B on the real server."""
 
@@ -407,6 +453,7 @@ def run_request_pair(
         case_id=case_id,
         source_skill_text=source_skill_text,
         wait_for_prefetch=wait_for_prefetch,
+        selection_prompt=selection_prompt,
     )
     return execute_prepared_request(
         server,
@@ -417,6 +464,8 @@ def run_request_pair(
         max_tokens=max_tokens,
         stream=stream,
         reset_prefix_cache=reset_prefix_cache,
+        enable_thinking=enable_thinking,
+        seed=seed,
     )
 
 

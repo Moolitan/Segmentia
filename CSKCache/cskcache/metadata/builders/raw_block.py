@@ -228,20 +228,24 @@ class DirectRawCacheBuilder:
         self,
         metadata_path: str | Path,
         sources: Sequence[DirectRawCacheObjectBuildInput],
+        *,
+        retain_skill_versions: bool = False,
     ) -> tuple[CacheObjectMetadata, ...]:
         """Verify a direct-save batch and publish one append-only snapshot.
 
         Every source is fully verified before the existing Catalog is touched.
-        Rebuilding a Skill replaces the active object for the same
-        Skill/model/tokenizer identity; its old raw slot becomes unreachable
-        and can be reclaimed by a future offline compaction.
+        By default, rebuilding a Skill replaces the active object for the same
+        Skill/model/tokenizer identity. ``retain_skill_versions`` instead keeps
+        distinct Skill-body versions side by side for body-aware workloads.
         """
 
         if not sources:
             raise ValueError("sources must be non-empty")
         built = tuple(self.build_object(source) for source in sources)
         identities = [
-            (
+            item.identity_key
+            if retain_skill_versions
+            else (
                 item.skill_name,
                 item.model_fingerprint,
                 item.tokenizer_fingerprint,
@@ -264,11 +268,14 @@ class DirectRawCacheBuilder:
                 item
                 for item in existing.list_objects(include_invalidated=True)
                 if (
-                    item.skill_name,
-                    item.model_fingerprint,
-                    item.tokenizer_fingerprint,
-                )
-                not in replaced
+                    item.identity_key
+                    if retain_skill_versions
+                    else (
+                        item.skill_name,
+                        item.model_fingerprint,
+                        item.tokenizer_fingerprint,
+                    )
+                ) not in replaced
             )
 
         complete_snapshot = tuple(

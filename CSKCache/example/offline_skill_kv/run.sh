@@ -35,6 +35,7 @@ PYTHONPATH_VALUE="$VLLM_ROOT:$LMCACHE_ROOT:$CSKCACHE_ROOT${PYTHONPATH:+:$PYTHONP
 COLLECTION="$OFFLINE_COLLECTION"
 OVERWRITE="$OFFLINE_OVERWRITE"
 DRY_RUN="$OFFLINE_DRY_RUN"
+DEDUPLICATE_CONTENT="$OFFLINE_DEDUPLICATE_CONTENT"
 SKILLS=()
 EXCLUDED_SKILLS=()
 while IFS= read -r skill; do
@@ -145,6 +146,9 @@ start_server() {
 }
 
 list_args=(--list --skills-dir "$OFFLINE_SKILLS_DIR")
+if [[ "$DEDUPLICATE_CONTENT" == "1" ]]; then
+  list_args+=(--deduplicate-content)
+fi
 [[ -z "$COLLECTION" ]] || list_args+=(--collection "$COLLECTION")
 for skill in "${SKILLS[@]}"; do
   list_args+=(--skill "$skill")

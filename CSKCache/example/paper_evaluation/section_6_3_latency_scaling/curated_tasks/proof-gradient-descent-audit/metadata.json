@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "task_id": "proof-gradient-descent-audit",
+  "source_type": "curated_repository_task",
+  "task_path": "task.md",
+  "task_text_sha256": "369ad8a7c1bf149e6e548159563c5ccdba7294564b0759d9ef760b2ab85bda86",
+  "skill_name": "proof-checker",
+  "skill_path": "../../../../../../skills/Auto-claude-code-research-in-sleep/skills/proof-checker/SKILL.md",
+  "skill_text_sha256": "9ec2074f69fdbe7fe285deff055bd9d52936cb6756bab8e81c69fcdb3684de8e",
+  "skill_token_ids_sha256": "352115a3f34b5ebcd5b529e970e14fefa6133ba324b3c3fe5efef2d6f0925e70",
+  "qwen3_14b_skill_tokens": 13314,
+  "length_bucket": ">10K",
+  "claim_scope": "Curated task paired with a repository Skill; not a SkillsBench task."
+}

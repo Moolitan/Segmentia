@@ -38,17 +38,21 @@ class RequestManager:
         *,
         model_fingerprint: str,
         tokenizer_fingerprint: str,
-        ticket_ttl_seconds: float = 60.0,
+        ticket_ttl_seconds: float | None = 60.0,
     ) -> None:
         if not model_fingerprint or not tokenizer_fingerprint:
             raise ValueError("deployment fingerprints must be non-empty")
-        if ticket_ttl_seconds <= 0:
+        if ticket_ttl_seconds is not None and ticket_ttl_seconds <= 0:
             raise ValueError("ticket_ttl_seconds must be > 0")
         self._metadata_manager = metadata_manager
         self._storage_manager = storage_manager
         self._model_fingerprint = model_fingerprint
         self._tokenizer_fingerprint = tokenizer_fingerprint
-        self._ticket_ttl_ns = int(ticket_ttl_seconds * 1_000_000_000)
+        self._ticket_ttl_ns = (
+            None
+            if ticket_ttl_seconds is None
+            else int(ticket_ttl_seconds * 1_000_000_000)
+        )
         self._lock = threading.RLock()
         self._closed = False
 
@@ -89,7 +93,11 @@ class RequestManager:
                 ticket,
                 cache_object.object_id,
                 now_ns=now_ns,
-                deadline_ns=now_ns + self._ticket_ttl_ns,
+                deadline_ns=(
+                    None
+                    if self._ticket_ttl_ns is None
+                    else now_ns + self._ticket_ttl_ns
+                ),
             )
             try:
                 self._storage_manager.submit_host_load(ticket, cache_object.object_id)

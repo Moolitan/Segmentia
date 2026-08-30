@@ -94,7 +94,7 @@ class RecordingPool:
 def build_runtime(
     tmp_path: Path,
     *,
-    ttl_seconds: float = 60.0,
+    ttl_seconds: float | None = 60.0,
     skill_tokens: Sequence[int] = SKILL_TOKENS,
     chunk_size_tokens: int = 256,
 ):
@@ -313,6 +313,33 @@ def test_expired_ticket_releases_storage_lease(tmp_path: Path) -> None:
         while pool.release_calls == 0:
             assert time.monotonic() < deadline
             time.sleep(0.005)
+    finally:
+        backend.complete.set()
+        requests.close()
+
+
+def test_disabled_ticket_ttl_keeps_load_live_until_explicit_release(
+    tmp_path: Path,
+) -> None:
+    metadata, backend, pool, _storage, requests = build_runtime(
+        tmp_path, ttl_seconds=None
+    )
+    try:
+        assert requests.select_skill("call-1", "internal-comms")
+        assert backend.started.wait(timeout=5)
+        time.sleep(0.005)
+        state = requests.poll("call-1")
+        assert state.binding_state is BindingState.UNBOUND
+        assert state.host_load_state is HostLoadState.LOADING
+        assert state.deadline_ns is None
+
+        backend.complete.set()
+        deadline = time.monotonic() + 5
+        while requests.poll("call-1").host_load_state is not HostLoadState.READY:
+            assert time.monotonic() < deadline
+            time.sleep(0.005)
+        requests.release("call-1")
+        assert pool.release_calls == 1
     finally:
         backend.complete.set()
         requests.close()

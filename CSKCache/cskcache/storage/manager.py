@@ -34,6 +34,7 @@ class _TicketHostLoad:
     batch: CSKReadBatch
     future: Future[tuple[Any, ...]] | None = None
     memory_objects: tuple[Any, ...] | None = None
+    resident_hit: bool = False
 
 
 class StorageManager:
@@ -48,9 +49,12 @@ class StorageManager:
         local_disk_backend: LayerObjectReadBackend | None = None,
         host_buffer_pool: HostBufferPool | None = None,
         max_inflight_loads: int = 1,
+        retain_last_host_object: bool = False,
     ) -> None:
         if max_inflight_loads <= 0:
             raise ValueError("max_inflight_loads must be > 0")
+        if not isinstance(retain_last_host_object, bool):
+            raise TypeError("retain_last_host_object must be a boolean")
         self._metadata_manager = metadata_manager
         if storage_backend not in ("raw_block", "local_disk"):
             raise ValueError(f"unsupported CSKCache storage backend: {storage_backend}")
@@ -75,6 +79,9 @@ class StorageManager:
         self._lock = threading.RLock()
         self._executor: ThreadPoolExecutor | None = None
         self._loads_by_ticket: dict[str, _TicketHostLoad] = {}
+        self._retain_last_host_object = retain_last_host_object
+        self._resident_cache_object_id: str | None = None
+        self._resident_memory_objects: tuple[Any, ...] | None = None
         self._closed = False
 
     def read_object_into(
@@ -144,6 +151,65 @@ class StorageManager:
             self._require_open()
             if ticket in self._loads_by_ticket:
                 raise ValueError(f"ticket already owns a host load: {ticket}")
+            if self._retain_last_host_object and self._loads_by_ticket:
+                raise RuntimeError(
+                    "retain-last-host-object mode requires sequential tickets"
+                )
+            if (
+                self._retain_last_host_object
+                and self._resident_cache_object_id == cache_object_id
+                and self._resident_memory_objects is not None
+            ):
+                load = _TicketHostLoad(
+                    ticket=ticket,
+                    cache_object_id=cache_object_id,
+                    io_operation_id=f"host-resident-{uuid.uuid4().hex}",
+                    batch=batch,
+                    memory_objects=self._resident_memory_objects,
+                    resident_hit=True,
+                )
+                self._loads_by_ticket[ticket] = load
+                try:
+                    self._metadata_manager.start_host_load(
+                        ticket,
+                        io_operation_id=load.io_operation_id,
+                    )
+                    state = self._metadata_manager.mark_host_ready(ticket)
+                    profile_event(
+                        "csk_host_resident_hit",
+                        ticket,
+                        cache_object_id=cache_object_id,
+                        io_operation_id=load.io_operation_id,
+                        buffers=len(load.memory_objects),
+                    )
+                    profile_event(
+                        "csk_host_ready",
+                        ticket,
+                        cache_object_id=cache_object_id,
+                        io_operation_id=load.io_operation_id,
+                        buffers=len(load.memory_objects),
+                        resident_hit=True,
+                    )
+                    return state
+                except Exception:
+                    self._loads_by_ticket.pop(ticket, None)
+                    raise
+            if (
+                self._retain_last_host_object
+                and self._resident_memory_objects is not None
+            ):
+                evicted_object_id = self._resident_cache_object_id
+                evicted_buffers = self._resident_memory_objects
+                self._resident_cache_object_id = None
+                self._resident_memory_objects = None
+                profile_event(
+                    "csk_host_resident_evict",
+                    ticket,
+                    cache_object_id=evicted_object_id,
+                    next_cache_object_id=cache_object_id,
+                    buffers=len(evicted_buffers),
+                )
+                self._release_buffers(evicted_buffers)
             load = _TicketHostLoad(
                 ticket=ticket,
                 cache_object_id=cache_object_id,
@@ -215,7 +281,10 @@ class StorageManager:
             raise ValueError("cancellation reason must be non-empty")
         buffers_to_release: tuple[Any, ...] | None = None
         with self._lock:
-            buffers_to_release = self._detach_ticket_locked(ticket)
+            load = self._detach_ticket_locked(ticket)
+            if not load.resident_hit:
+                buffers_to_release = load.memory_objects
+            load.memory_objects = None
             state = self._metadata_manager.get_runtime(ticket)
             if state.binding_state not in (
                 BindingState.FALLBACK,
@@ -229,8 +298,22 @@ class StorageManager:
 
         buffers_to_release: tuple[Any, ...] | None = None
         with self._lock:
-            buffers_to_release = self._detach_ticket_locked(ticket)
+            load = self._detach_ticket_locked(ticket)
             state = self._metadata_manager.release(ticket)
+            if self._retain_last_host_object and load.memory_objects is not None:
+                if not load.resident_hit:
+                    buffers_to_release = self._resident_memory_objects
+                    self._resident_cache_object_id = load.cache_object_id
+                    self._resident_memory_objects = load.memory_objects
+                    profile_event(
+                        "csk_host_resident_retain",
+                        ticket,
+                        cache_object_id=load.cache_object_id,
+                        buffers=len(load.memory_objects),
+                    )
+            else:
+                buffers_to_release = load.memory_objects
+            load.memory_objects = None
         self._release_buffers(buffers_to_release)
         return state
 
@@ -253,9 +336,13 @@ class StorageManager:
         buffers: list[tuple[Any, ...]] = []
         with self._lock:
             for load in self._loads_by_ticket.values():
-                if load.memory_objects is not None:
+                if load.memory_objects is not None and not load.resident_hit:
                     buffers.append(load.memory_objects)
             self._loads_by_ticket.clear()
+            if self._resident_memory_objects is not None:
+                buffers.append(self._resident_memory_objects)
+            self._resident_cache_object_id = None
+            self._resident_memory_objects = None
         for group in buffers:
             self._release_buffers(group)
 
@@ -347,13 +434,11 @@ class StorageManager:
                     release_now = memory_objects
         self._release_buffers(release_now)
 
-    def _detach_ticket_locked(self, ticket: str) -> tuple[Any, ...] | None:
+    def _detach_ticket_locked(self, ticket: str) -> _TicketHostLoad:
         load = self._loads_by_ticket.pop(ticket, None)
         if load is None:
             raise KeyError(f"ticket has no live host load: {ticket}")
-        buffers = load.memory_objects
-        load.memory_objects = None
-        return buffers
+        return load
 
     def _get_executor_locked(self) -> ThreadPoolExecutor:
         if self._executor is None:

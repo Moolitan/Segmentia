@@ -38,10 +38,31 @@ class LMCacheRuntimeBridge:
 
     def __init__(self, engine: Any) -> None:
         config = engine.config
+        metadata_path = config.get_extra_config_value(
+            "cskcache_metadata_path", None
+        )
+        if isinstance(metadata_path, str):
+            for placeholder, attribute in (
+                ("{worker_id}", "worker_id"),
+                ("{world_size}", "world_size"),
+            ):
+                if placeholder not in metadata_path:
+                    continue
+                value = getattr(engine.metadata, attribute, None)
+                if value is None:
+                    raise ValueError(
+                        f"cskcache_metadata_path uses {placeholder}, but "
+                        f"LMCache metadata has no {attribute}"
+                    )
+                metadata_path = metadata_path.replace(placeholder, str(value))
+        ticket_ttl_seconds = config.get_extra_config_value(
+            "csk_prefetch_handle_ttl_seconds", 60.0
+        )
+        retain_last_host_object = config.get_extra_config_value(
+            "csk_retain_last_host_object", False
+        )
         settings = LMCacheRuntimeSettings(
-            metadata_path=config.get_extra_config_value(
-                "cskcache_metadata_path", None
-            ),
+            metadata_path=metadata_path,
             tokenizer_path=config.get_extra_config_value(
                 "cskcache_tokenizer_path", None
             ),
@@ -63,10 +84,10 @@ class LMCacheRuntimeBridge:
             chunk_size_tokens=int(
                 config.get_extra_config_value("csk_chunk_size_tokens", 256)
             ),
-            ticket_ttl_seconds=float(
-                config.get_extra_config_value(
-                    "csk_prefetch_handle_ttl_seconds", 60.0
-                )
+            ticket_ttl_seconds=(
+                None
+                if ticket_ttl_seconds is None
+                else float(ticket_ttl_seconds)
             ),
             reuse_policy=ReusePolicy(
                 correction_strategy=CorrectionStrategy(
@@ -118,6 +139,7 @@ class LMCacheRuntimeBridge:
                     )
                 ),
             ),
+            retain_last_host_object=retain_last_host_object,
         )
         if not config.local_cpu or not engine.use_layerwise:
             raise ValueError(
@@ -172,6 +194,7 @@ class LMCacheRuntimeBridge:
             local_disk_backend=local_disk_reader,
             host_buffer_pool=host_pool,
             max_inflight_loads=4,
+            retain_last_host_object=settings.retain_last_host_object,
         )
         model_path = engine.metadata.model_name
         self._settings = settings

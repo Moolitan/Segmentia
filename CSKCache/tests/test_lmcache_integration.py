@@ -360,15 +360,18 @@ def test_csk_t0_initialization_resolves_raw_block_plugin_key(monkeypatch) -> Non
             local_disk_backend,
             host_buffer_pool,
             max_inflight_loads,
+            retain_last_host_object,
         ):
             captured["raw_backend"] = backend
             captured["storage_backend"] = storage_backend
             captured["local_disk_backend"] = local_disk_backend
             captured["max_inflight_loads"] = max_inflight_loads
+            captured["retain_last_host_object"] = retain_last_host_object
 
     class FakeRequestManager:
-        def __init__(self, *_args, **_kwargs):
+        def __init__(self, *_args, **kwargs):
             captured["request_manager_created"] = True
+            captured["request_manager_kwargs"] = kwargs
 
     monkeypatch.setattr(lmcache_runtime, "MetadataManager", FakeMetadataManager)
     monkeypatch.setattr(
@@ -392,9 +395,15 @@ def test_csk_t0_initialization_resolves_raw_block_plugin_key(monkeypatch) -> Non
         ),
         num_layers=40,
         use_layerwise=True,
-        metadata=SimpleNamespace(model_name="/model"),
+        metadata=SimpleNamespace(
+            model_name="/model", worker_id=2, world_size=4
+        ),
     )
-    extras = {"cskcache_metadata_path": "/metadata.json"}
+    extras = {
+        "cskcache_metadata_path": "/metadata-{worker_id}-{world_size}.json",
+        "csk_prefetch_handle_ttl_seconds": None,
+        "csk_retain_last_host_object": True,
+    }
     engine.config = SimpleNamespace(
         chunk_size=256,
         local_cpu=True,
@@ -406,7 +415,7 @@ def test_csk_t0_initialization_resolves_raw_block_plugin_key(monkeypatch) -> Non
 
     LMCacheRuntimeBridge(engine)
 
-    assert captured["metadata"] == ("/metadata.json", 40)
+    assert captured["metadata"] == ("/metadata-2-4.json", 40)
     assert captured["local_cpu_backend"] is local_cpu_backend
     assert captured["host_pool_kwargs"] == {
         "layout": "packed_chunks_single_layer",
@@ -416,4 +425,6 @@ def test_csk_t0_initialization_resolves_raw_block_plugin_key(monkeypatch) -> Non
     assert captured["storage_backend"] == "raw_block"
     assert captured["local_disk_backend"] is None
     assert captured["max_inflight_loads"] == 4
+    assert captured["retain_last_host_object"] is True
     assert captured["request_manager_created"] is True
+    assert captured["request_manager_kwargs"]["ticket_ttl_seconds"] is None

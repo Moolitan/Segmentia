@@ -278,6 +278,126 @@ def test_local_disk_load_dispatches_one_complete_skill_layer_group(
     storage.close()
 
 
+def test_retain_last_host_object_reuses_buffers_without_second_read(
+    tmp_path: Path,
+) -> None:
+    manager, objects = prepare_local_disk_manager(tmp_path)
+    reader = RecordingLayerObjectBackend(
+        {f"local-layer-{layer}": obj for layer, obj in enumerate(objects)}
+    )
+    pool = RecordingHostBufferPool()
+    storage = StorageManager(
+        manager,
+        storage_backend="local_disk",
+        local_disk_backend=reader,
+        host_buffer_pool=pool,
+        retain_last_host_object=True,
+    )
+
+    storage.submit_host_load("call-local", "internal-comms:local")
+    wait_for_host_state(storage, "call-local", HostLoadState.READY)
+    first_buffers = storage.get_ready_buffers("call-local")
+    storage.release_host_load("call-local")
+    assert pool.release_calls == 0
+
+    manager.create_ticket("call-local-2", "internal-comms:local")
+    state = storage.submit_host_load("call-local-2", "internal-comms:local")
+    assert state.host_load_state is HostLoadState.READY
+    assert storage.get_ready_buffers("call-local-2") is first_buffers
+    assert len(reader.calls) == 1
+    storage.release_host_load("call-local-2")
+    assert pool.release_calls == 0
+
+    storage.close()
+    assert pool.release_calls == 1
+    assert pool.released_groups == [first_buffers]
+
+
+def test_retain_last_host_object_rejects_overlapping_tickets(
+    tmp_path: Path,
+) -> None:
+    manager, objects = prepare_local_disk_manager(tmp_path)
+    reader = RecordingLayerObjectBackend(
+        {f"local-layer-{layer}": obj for layer, obj in enumerate(objects)}
+    )
+    pool = RecordingHostBufferPool()
+    storage = StorageManager(
+        manager,
+        storage_backend="local_disk",
+        local_disk_backend=reader,
+        host_buffer_pool=pool,
+        retain_last_host_object=True,
+    )
+    storage.submit_host_load("call-local", "internal-comms:local")
+    wait_for_host_state(storage, "call-local", HostLoadState.READY)
+    storage.release_host_load("call-local")
+
+    manager.create_ticket("call-local-2", "internal-comms:local")
+    storage.submit_host_load("call-local-2", "internal-comms:local")
+    manager.create_ticket("call-local-3", "internal-comms:local")
+    with pytest.raises(RuntimeError, match="sequential tickets"):
+        storage.submit_host_load("call-local-3", "internal-comms:local")
+
+    storage.cancel_host_load("call-local-2", "test_cancel")
+    assert pool.release_calls == 0
+    storage.close()
+    assert pool.release_calls == 1
+
+
+def test_retain_last_host_object_evicts_on_object_change(tmp_path: Path) -> None:
+    manager, objects = prepare_local_disk_manager(tmp_path)
+    original = manager.get_object("internal-comms:local")
+    other_layers = tuple(
+        replace(extent, backend_key=f"other-layer-{extent.layer_id}")
+        for extent in original.layers
+    )
+    other = replace(
+        original,
+        object_id="other:local",
+        skill_name="other",
+        token_ids_sha256="b" * 64,
+        layers=other_layers,
+    )
+    manager.publish_object(other)
+    other_objects = tuple(
+        Destination(bytearray([layer + 11] * 16)) for layer in range(4)
+    )
+    reader = RecordingLayerObjectBackend(
+        {
+            **{
+                f"local-layer-{layer}": obj
+                for layer, obj in enumerate(objects)
+            },
+            **{
+                f"other-layer-{layer}": obj
+                for layer, obj in enumerate(other_objects)
+            },
+        }
+    )
+    pool = RecordingHostBufferPool()
+    storage = StorageManager(
+        manager,
+        storage_backend="local_disk",
+        local_disk_backend=reader,
+        host_buffer_pool=pool,
+        retain_last_host_object=True,
+    )
+
+    storage.submit_host_load("call-local", original.object_id)
+    wait_for_host_state(storage, "call-local", HostLoadState.READY)
+    storage.release_host_load("call-local")
+    manager.create_ticket("call-other", other.object_id)
+    storage.submit_host_load("call-other", other.object_id)
+    wait_for_host_state(storage, "call-other", HostLoadState.READY)
+    assert pool.release_calls == 1
+    assert pool.released_groups == [objects]
+
+    storage.release_host_load("call-other")
+    storage.close()
+    assert pool.release_calls == 2
+    assert pool.released_groups[-1] == other_objects
+
+
 def test_40_extents_use_one_physical_submit_without_key_lookup(
     tmp_path: Path,
 ) -> None:

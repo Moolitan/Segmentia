@@ -17,9 +17,10 @@ from .forward_profile import CalibrationForwardProfiler
 from lmcache import torch_device_type
 from lmcache.v1.compute.models.utils import (
     VLLMModelTracker,
-    infer_model_from_vllm,
 )
 from lmcache.v1.gpu_connector.utils import assert_layerwise_gpu_connector
+
+from .model_adapters import MODEL_ADAPTERS
 
 
 class _CSKCalibrationBlender:
@@ -301,13 +302,13 @@ class LMCacheCSKDataPlane:
         assert_layerwise_gpu_connector(gpu_connector)
         vllm_model = VLLMModelTracker.get_model(engine_name)
         self._calibration_blender = _CSKCalibrationBlender(gpu_connector)
-        self.layerwise_model = infer_model_from_vllm(
+        self.model_binding = MODEL_ADAPTERS.bind(
             vllm_model,
             blender=self._calibration_blender,
-            enable_sparse=False,
         )
+        self.layerwise_model = self.model_binding.layerwise_model
         self._calibration_blender.bind_model(self.layerwise_model)
-        self.num_layers = len(vllm_model.model.layers)
+        self.num_layers = self.model_binding.num_layers
         profile_layers = os.getenv("CSKCACHE_FORWARD_PROFILE_LAYERS", "")
         if profile_layers:
             profiler = CalibrationForwardProfiler(

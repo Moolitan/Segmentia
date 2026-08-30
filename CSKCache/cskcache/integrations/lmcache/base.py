@@ -18,8 +18,9 @@ class LMCacheRuntimeSettings:
     storage_layout: str
     host_layout: str
     chunk_size_tokens: int
-    ticket_ttl_seconds: float
+    ticket_ttl_seconds: float | None
     reuse_policy: ReusePolicy
+    retain_last_host_object: bool = False
 
     def __post_init__(self) -> None:
         if not self.metadata_path:
@@ -50,5 +51,10 @@ class LMCacheRuntimeSettings:
                 "the current LMCache layerwise connector supports only "
                 "single-layer host layouts"
             )
-        if self.ticket_ttl_seconds <= 0:
+        if (
+            self.ticket_ttl_seconds is not None
+            and self.ticket_ttl_seconds <= 0
+        ):
             raise ValueError("csk_prefetch_handle_ttl_seconds must be positive")
+        if not isinstance(self.retain_last_host_object, bool):
+            raise ValueError("csk_retain_last_host_object must be a boolean")

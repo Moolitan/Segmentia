@@ -18,10 +18,14 @@ from typing import Any
 PROFILE_ENABLED = os.getenv("CSKCACHE_PROFILE", "0") == "1"
 PROFILE_MARKER = "CSKCACHE_PROFILE_EVENT"
 PROFILE_TRACE_PATH = os.getenv("CSKCACHE_PROFILE_TRACE_PATH")
+PROFILE_STDOUT_ENABLED = os.getenv(
+    "CSKCACHE_PROFILE_STDOUT",
+    "0" if PROFILE_TRACE_PATH else "1",
+) == "1"
 
 _LOGGER = logging.getLogger("cskcache.profile")
 
-if PROFILE_ENABLED:
+if PROFILE_ENABLED and PROFILE_STDOUT_ENABLED:
     # CSKCache profile records are experimental data rather than ordinary
     # application diagnostics.  Give them an explicit handler so their
     # visibility does not depend on the embedding server's root logger level.
@@ -48,7 +52,8 @@ def profile_event(event: str, request_id: str, **fields: Any) -> None:
         "pid": os.getpid(),
         **fields,
     }
-    _LOGGER.info("%s %s", PROFILE_MARKER, json.dumps(payload, sort_keys=True))
+    if PROFILE_STDOUT_ENABLED:
+        _LOGGER.info("%s %s", PROFILE_MARKER, json.dumps(payload, sort_keys=True))
     if PROFILE_TRACE_PATH:
         encoded = (
             json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"

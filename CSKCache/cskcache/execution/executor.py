@@ -34,10 +34,13 @@ class CSKCacheReuseExecutor:
         *,
         expected_layers: int,
         execution_order: str = "h2d_first",
+        correct_value: bool = True,
         corrector: ContextAwareKVCorrector | None = None,
     ) -> None:
         if expected_layers <= 0:
             raise ValueError("expected_layers must be positive")
+        if not isinstance(correct_value, bool):
+            raise TypeError("correct_value must be a boolean")
         try:
             parsed_order = ExecutionOrder(execution_order)
         except ValueError as exc:
@@ -47,7 +50,14 @@ class CSKCacheReuseExecutor:
         self._data_plane = data_plane
         self._expected_layers = expected_layers
         self._execution_order = parsed_order.value
+        self._correct_value = correct_value
         self._corrector = corrector or ContextAwareKVCorrector()
+
+    @property
+    def corrected_components(self) -> str:
+        """Which KV components residual compensation writes back."""
+
+        return "kv" if self._correct_value else "k"
 
     def execute(
         self,
@@ -68,14 +78,6 @@ class CSKCacheReuseExecutor:
         if len(slot_mapping) < plan.reuse_end:
             raise ValueError("slot_mapping does not cover the CSKCache reuse range")
 
-        buffers = tuple(
-            self._data_plane.get_active_layer_buffers(
-                plan.ticket, plan.request_id
-            )
-        )
-        if len(buffers) != self._expected_layers:
-            raise RuntimeError("CSKCache returned an incomplete layer group")
-
         profile_t0_event = None
         if PROFILE_ENABLED:
             profile_t0_event = torch.cuda.Event(enable_timing=True)
@@ -84,7 +86,6 @@ class CSKCacheReuseExecutor:
 
         stream = self._data_plane.open_layer_stream(
             plan,
-            buffers,
             kvcaches=kvcaches,
             slot_mapping=slot_mapping,
             profile_t0_event=profile_t0_event,
@@ -160,6 +161,7 @@ class CSKCacheReuseExecutor:
                     plan.request_id,
                     ticket=plan.ticket,
                     execution_order=self._execution_order,
+                    corrected_components=self.corrected_components,
                     synchronization="torch_cuda_device_wide_per_layer",
                     calibration_correct_install=[
                         {
@@ -204,6 +206,7 @@ class CSKCacheReuseExecutor:
             correction_alpha=plan.correction_alpha,
             correction_strategy=strategy,
             method=method,
+            corrected_components=self.corrected_components,
         )
 
     def _execute_deviation_topk(
@@ -352,7 +355,9 @@ class CSKCacheReuseExecutor:
             events[2].record()
 
         # Estimate the residual from P tokens, correct the remaining offline
-        # suffix, and install that suffix into PagedKV.
+        # suffix, and install that suffix into PagedKV.  Key and Value carry
+        # their own per-head residual; the Value arm is disabled only by the
+        # Key-only ablation.
         self._corrector.correct_key_(
             staged_key,
             recomputed_key,
@@ -360,6 +365,14 @@ class CSKCacheReuseExecutor:
             suffix_offset=calibration_tokens,
             alpha=plan.correction_alpha,
         )
+        if self._correct_value:
+            self._corrector.correct_value_(
+                stream.staged_value(layer_id),
+                recomputed_value,
+                calibration_tokens=calibration_tokens,
+                suffix_offset=calibration_tokens,
+                alpha=plan.correction_alpha,
+            )
         if events is not None:
             events[3].record()
         stream.commit_layer(layer_id)

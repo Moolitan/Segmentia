@@ -143,6 +143,8 @@ def _configure_environment(container_path: str) -> None:
         "csk_storage_backend": "raw_block",
         "csk_chunk_size_tokens": CHUNK_SIZE_TOKENS,
         "csk_storage_layout": STORAGE_LAYOUT,
+        "csk_progressive_loading": True,
+        "csk_prefetch_handle_ttl_seconds": None,
         "csk_minimum_full_recompute_tokens": MINIMUM_FULL_RECOMPUTE_TOKENS,
         "csk_calibration_tokens": CALIBRATION_TOKENS,
         "csk_minimum_reuse_tokens": MINIMUM_REUSE_TOKENS,

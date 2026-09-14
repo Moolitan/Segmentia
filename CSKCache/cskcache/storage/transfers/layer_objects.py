@@ -43,3 +43,27 @@ class LayerObjectTransfer:
         return tuple(
             self._host_buffer_pool.arrange_loaded_layers(batch.extents, loaded)
         )
+
+    def load_layer(self, batch: CSKReadBatch, layer_id: int) -> Any:
+        """Read and arrange one key-addressed layer object."""
+
+        if self._host_buffer_pool is None:
+            raise RuntimeError("local_disk loading has no host buffer pool")
+        if not 0 <= layer_id < len(batch.extents):
+            raise ValueError("local_disk layer_id is outside the read batch")
+        extent = batch.extents[layer_id]
+        if extent.layer_id != layer_id:
+            raise ValueError("local_disk batch is not in model-layer order")
+        loaded = tuple(
+            self._backend.read_layer_objects([extent.backend_key])
+        )
+        if len(loaded) != 1:
+            self._host_buffer_pool.release(loaded)
+            raise RuntimeError("LocalDisk did not return one layer")
+        arranged = tuple(
+            self._host_buffer_pool.arrange_loaded_layers((extent,), loaded)
+        )
+        if len(arranged) != 1:
+            self._host_buffer_pool.release(arranged)
+            raise RuntimeError("host layout did not return one arranged layer")
+        return arranged[0]

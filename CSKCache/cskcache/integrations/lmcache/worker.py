@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Generator, Sequence
+import time
+from collections.abc import Callable, Generator, Sequence
 from typing import Any
 
 import torch
@@ -317,15 +318,16 @@ class LMCacheCSKDataPlane:
             )
             self._calibration_blender.bind_profiler(profiler)
 
-    def get_active_layer_buffers(
-        self, ticket: str, request_id: str
-    ) -> Sequence[Any]:
-        return self._runtime.get_active_layer_buffers(ticket, request_id)
+    def get_active_layer_buffer(
+        self, ticket: str, request_id: str, layer_id: int
+    ) -> Any:
+        return self._runtime.get_active_layer_buffer(
+            ticket, request_id, layer_id
+        )
 
     def open_layer_stream(
         self,
         plan: ReusePlan,
-        buffers: Sequence[Any],
         *,
         kvcaches: Sequence[torch.Tensor],
         slot_mapping: torch.Tensor,
@@ -334,7 +336,8 @@ class LMCacheCSKDataPlane:
         return _LMCacheCSKLayerStream(
             self._gpu_connector,
             plan,
-            buffers,
+            layer_provider=self.get_active_layer_buffer,
+            h2d_progress_callback=self._runtime.mark_h2d_complete,
             kvcaches=kvcaches,
             slot_mapping=slot_mapping,
             profile_t0_event=profile_t0_event,
@@ -437,18 +440,25 @@ class _LMCacheCSKLayerStream:
         self,
         gpu_connector: Any,
         plan: ReusePlan,
-        buffers: Sequence[Any],
         *,
+        layer_provider: Callable[[str, str, int], Any],
+        h2d_progress_callback: Callable[..., None],
         kvcaches: Sequence[torch.Tensor],
         slot_mapping: torch.Tensor,
         profile_t0_event: torch.cuda.Event | None = None,
     ) -> None:
         self._gpu_connector = gpu_connector
         self._plan = plan
-        self._buffers = tuple(buffers)
+        self._layer_provider = layer_provider
+        self._h2d_progress_callback = h2d_progress_callback
+        self._expected_layers = len(kvcaches)
+        if self._expected_layers <= 0:
+            raise ValueError("CSKCache requires at least one KV cache layer")
         self._next_submit_layer = 0
         self._next_wait_layer = 0
         self._pending_layer: int | None = None
+        self._pending_bytes = 0
+        self._pending_started_ns = 0
         self._finished = False
 
         token_count = plan.source_object_token_count
@@ -457,39 +467,25 @@ class _LMCacheCSKLayerStream:
         )
         if not 0 <= source_position_start < source_position_start + token_count:
             raise ValueError("CSKCache source position range is invalid")
-        bound_transfer = bind_layer_buffers(
-            self._buffers,
-            token_count=token_count,
+        first_buffer = self._layer_provider(
+            plan.ticket, plan.request_id, 0
         )
-        for step, objects in zip(
-            bound_transfer.plan.steps,
-            bound_transfer.layer_objects,
-            strict=True,
-        ):
-            for source, memory_obj in zip(step.slices, objects, strict=True):
-                tensor = memory_obj.tensor
-                if (
-                    tensor is None
-                    or tensor.shape[1] != source.token_end - source.token_start
-                ):
-                    raise ValueError("host buffer token count is invalid")
-                memory_obj.metadata.cached_positions = torch.arange(
-                    source_position_start + source.token_start,
-                    source_position_start + source.token_end,
-                    dtype=torch.int64,
-                    device=tensor.device,
-                )
-
-        first_step = bound_transfer.plan.steps[0]
+        first_step, first_objects = self._bind_layer(
+            first_buffer,
+            token_count=token_count,
+            source_position_start=source_position_start,
+        )
+        self._first_layer_objects = first_objects
+        self._slice_signature = tuple(
+            (source.token_start, source.token_end)
+            for source in first_step.slices
+        )
         transfer_indices = tuple(
             index
             for index, source in enumerate(first_step.slices)
             if plan.segment_start + source.token_start < plan.reuse_end
         )
-        self._transfer_objects = tuple(
-            tuple(objects[index] for index in transfer_indices)
-            for objects in bound_transfer.layer_objects
-        )
+        self._transfer_indices = transfer_indices
         transfer_starts = [
             plan.segment_start + first_step.slices[index].token_start
             for index in transfer_indices
@@ -525,6 +521,56 @@ class _LMCacheCSKLayerStream:
             profile_t0_event=profile_t0_event,
         )
 
+    @staticmethod
+    def _bind_layer(
+        buffer: Any,
+        *,
+        token_count: int,
+        source_position_start: int,
+    ) -> tuple[Any, tuple[Any, ...]]:
+        """Bind one newly published Host layer to the common transfer plan."""
+
+        bound = bind_layer_buffers((buffer,), token_count=token_count)
+        step = bound.plan.steps[0]
+        objects = bound.layer_objects[0]
+        for source, memory_obj in zip(step.slices, objects, strict=True):
+            tensor = memory_obj.tensor
+            if (
+                tensor is None
+                or tensor.shape[1] != source.token_end - source.token_start
+            ):
+                raise ValueError("host buffer token count is invalid")
+            memory_obj.metadata.cached_positions = torch.arange(
+                source_position_start + source.token_start,
+                source_position_start + source.token_end,
+                dtype=torch.int64,
+                device=tensor.device,
+            )
+        return step, objects
+
+    def _transfer_objects_for_layer(self, layer_id: int) -> tuple[Any, ...]:
+        if layer_id == 0:
+            objects = self._first_layer_objects
+        else:
+            buffer = self._layer_provider(
+                self._plan.ticket, self._plan.request_id, layer_id
+            )
+            source_position_start = self._plan.source_reuse_start - (
+                self._plan.reuse_start - self._plan.segment_start
+            )
+            step, objects = self._bind_layer(
+                buffer,
+                token_count=self._plan.source_object_token_count,
+                source_position_start=source_position_start,
+            )
+            signature = tuple(
+                (source.token_start, source.token_end)
+                for source in step.slices
+            )
+            if signature != self._slice_signature:
+                raise ValueError("progressive Host layers disagree on layout")
+        return tuple(objects[index] for index in self._transfer_indices)
+
     def submit_layer(self, layer_id: int) -> None:
         if self._finished:
             raise RuntimeError("CSKCache layer stream is already finished")
@@ -532,13 +578,18 @@ class _LMCacheCSKLayerStream:
             raise RuntimeError("CSKCache already has a pending H2D layer")
         if (
             layer_id != self._next_submit_layer
-            or layer_id >= len(self._buffers)
+            or layer_id >= self._expected_layers
         ):
             raise ValueError(
                 "CSKCache layers must be submitted exactly once in order"
             )
-        self._copy_session.submit(self._transfer_objects[layer_id])
+        transfer_objects = self._transfer_objects_for_layer(layer_id)
+        self._copy_session.submit(transfer_objects)
         self._pending_layer = layer_id
+        self._pending_bytes = sum(
+            memory_obj.get_size() for memory_obj in transfer_objects
+        )
+        self._pending_started_ns = time.perf_counter_ns()
         self._next_submit_layer += 1
 
     def wait_layer(self, layer_id: int) -> None:
@@ -547,6 +598,15 @@ class _LMCacheCSKLayerStream:
         if layer_id != self._pending_layer or layer_id != self._next_wait_layer:
             raise ValueError("CSKCache must wait for the pending layer in order")
         self._copy_session.wait()
+        duration_ms = max(
+            (time.perf_counter_ns() - self._pending_started_ns) / 1_000_000,
+            0.001,
+        )
+        self._h2d_progress_callback(
+            self._plan.ticket,
+            transferred_bytes=self._pending_bytes,
+            duration_ms=duration_ms,
+        )
         self._pending_layer = None
         self._next_wait_layer += 1
 
@@ -555,6 +615,12 @@ class _LMCacheCSKLayerStream:
             raise ValueError("CSKCache layer has not been staged")
         key, _value = self._gpu_connector.get_kv(layer_id)
         return key
+
+    def staged_value(self, layer_id: int) -> torch.Tensor:
+        if not 0 <= layer_id < self._next_wait_layer:
+            raise ValueError("CSKCache layer has not been staged")
+        _key, value = self._gpu_connector.get_kv(layer_id)
+        return value
 
     def commit_calibration(
         self,
@@ -581,8 +647,8 @@ class _LMCacheCSKLayerStream:
         if self._pending_layer is not None:
             raise RuntimeError("CSKCache cannot finish with a pending H2D layer")
         if (
-            self._next_submit_layer != len(self._buffers)
-            or self._next_wait_layer != len(self._buffers)
+            self._next_submit_layer != self._expected_layers
+            or self._next_wait_layer != self._expected_layers
         ):
             raise RuntimeError("CSKCache cannot finish an incomplete layer stream")
         self._copy_session.finish()
@@ -603,7 +669,7 @@ class _LMCacheCSKLayerStream:
             "csk_worker_load_complete",
             self._plan.request_id,
             ticket=self._plan.ticket,
-            layers=len(self._buffers),
+            layers=self._expected_layers,
             reuse_start=self._plan.reuse_start,
             reuse_end=self._plan.reuse_end,
             loaded_tokens=self._plan.reuse_end - self._plan.reuse_start,
@@ -621,6 +687,7 @@ class LMCacheWorkerIntegration:
         engine_name: str,
         *,
         execution_order: str,
+        correct_value: bool = True,
     ) -> None:
         self._data_plane = LMCacheCSKDataPlane(
             runtime,
@@ -631,6 +698,7 @@ class LMCacheWorkerIntegration:
             self._data_plane,
             expected_layers=self._data_plane.num_layers,
             execution_order=execution_order,
+            correct_value=correct_value,
         )
 
     @property
@@ -659,6 +727,7 @@ class LMCacheWorkerIntegration:
             correction_alpha=result.correction_alpha,
             correction_strategy=result.correction_strategy.value,
             execution_method=result.method.name,
+            corrected_components=result.corrected_components,
             calibration_tokens=(
                 plan.calibration_end - plan.calibration_start
             ),
@@ -668,7 +737,8 @@ class LMCacheWorkerIntegration:
                 else (
                     "deviation_topk_selective_recompute"
                     if result.method.name == "deviation_topk"
-                    else "auxiliary_forward_then_key_headwise"
+                    else f"auxiliary_forward_then_{result.corrected_components}"
+                    "_headwise"
                 )
             ),
         )

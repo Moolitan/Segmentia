@@ -423,15 +423,88 @@ class MetadataManager:
                 )
             )
 
-    def activate(self, ticket: str) -> RuntimeReuseState:
-        """Activate reuse only after both authentication and host load complete."""
+    def finalize_reuse_plan(
+        self,
+        ticket: str,
+        plan: ReusePlan,
+    ) -> RuntimeReuseState:
+        """Replace a provisional plan while preserving its fixed boundary."""
+
+        if plan.ticket != ticket:
+            raise ValueError("reuse plan ticket does not match target ticket")
+        with self._lock:
+            state = self._require_runtime(ticket)
+            self._require_live(state)
+            if state.binding_state is not BindingState.VERIFIED:
+                raise ValueError("reuse finalization requires a verified request")
+            if state.cache_object_id != plan.cache_object_id:
+                raise ValueError("final plan changed the cache object")
+            if state.request_id != plan.request_id:
+                raise ValueError("final plan request does not match ticket binding")
+            if state.reuse_start is None:
+                raise ValueError("reuse finalization requires a provisional plan")
+            fixed = (
+                state.segment_start,
+                state.segment_end,
+                state.calibration_start,
+                state.reuse_end,
+                state.correction_alpha,
+                state.correction_strategy,
+                state.deviation_recompute_ratio,
+                state.deviation_check_layer,
+                state.block_alignment,
+                state.source_token_count,
+                int(state.source_reuse_start) - (
+                    int(state.reuse_start) - int(state.segment_start)
+                ),
+            )
+            proposed = (
+                plan.segment_start,
+                plan.segment_end,
+                plan.calibration_start,
+                plan.reuse_end,
+                plan.correction_alpha,
+                plan.correction_strategy,
+                plan.deviation_recompute_ratio,
+                plan.deviation_check_layer,
+                plan.block_alignment,
+                plan.source_object_token_count,
+                plan.source_reuse_start
+                - (plan.reuse_start - plan.segment_start),
+            )
+            if fixed != proposed:
+                raise ValueError("final plan changed a fixed reuse boundary")
+            if plan.reuse_start < int(state.reuse_start):
+                raise ValueError("final plan cannot reduce provisional calibration")
+            return self._store_runtime(
+                state.updated(
+                    source_token_count=plan.source_object_token_count,
+                    reuse_start=plan.reuse_start,
+                    source_reuse_start=plan.source_reuse_start,
+                    source_reuse_end=plan.source_reuse_end,
+                    calibration_end=plan.calibration_end,
+                )
+            )
+
+    def activate(
+        self,
+        ticket: str,
+        *,
+        require_complete_host_load: bool = True,
+    ) -> RuntimeReuseState:
+        """Activate one verified plan after its required Host prefix is ready."""
 
         with self._lock:
             state = self._require_runtime(ticket)
             if state.binding_state is not BindingState.VERIFIED:
                 raise ValueError("ticket must be verified before activation")
-            if state.host_load_state is not HostLoadState.READY:
+            if (
+                require_complete_host_load
+                and state.host_load_state is not HostLoadState.READY
+            ):
                 raise ValueError("host data must be ready before activation")
+            if state.host_load_state is HostLoadState.FAILED:
+                raise ValueError("failed host data cannot be activated")
             return self._store_runtime(
                 state.updated(binding_state=BindingState.ACTIVE)
             )

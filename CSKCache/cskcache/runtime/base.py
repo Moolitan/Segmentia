@@ -383,6 +383,10 @@ class SchedulerControlPort(Protocol):
         self, ticket: str, request_id: str
     ) -> dict[str, Any]: ...
 
+    def mark_csk_execution_selected(
+        self, ticket: str, request_id: str
+    ) -> None: ...
+
     def activate_csk_reuse(
         self, ticket: str, request_id: str
     ) -> ReusePlan | None: ...
@@ -427,6 +431,7 @@ class SchedulerReuseState:
     phase: SchedulerReusePhase = SchedulerReusePhase.INITIAL
     readiness: dict[str, Any] | None = None
     lease_owner: LeaseOwner = LeaseOwner.SCHEDULER
+    execution_selected_notified: bool = False
 
 
 @dataclass(frozen=True)

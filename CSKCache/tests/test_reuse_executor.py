@@ -119,6 +119,24 @@ def test_context_aware_corrector_changes_only_suffix_key() -> None:
     assert torch.equal(untouched_value, original_value)
 
 
+def test_context_aware_corrector_changes_only_suffix_value() -> None:
+    staged_value = torch.arange(32, dtype=torch.float32).reshape(8, 4)
+    original_value = staged_value.clone()
+    recomputed = staged_value[:2] + torch.tensor([1.0, 2.0, 3.0, 4.0])
+
+    offset = ContextAwareKVCorrector().correct_value_(
+        staged_value,
+        recomputed,
+        calibration_tokens=2,
+        suffix_offset=4,
+        alpha=0.6,
+    )
+
+    assert torch.allclose(offset, torch.tensor([0.6, 1.2, 1.8, 2.4]))
+    assert torch.equal(staged_value[:4], original_value[:4])
+    assert torch.allclose(staged_value[4:], original_value[4:] + offset)
+
+
 @pytest.mark.parametrize(
     ("suffix_offset", "alpha"),
     ((1, 0.6), (4, float("nan")), (8, 0.6)),
@@ -142,6 +160,7 @@ class FakeLayerStream:
     def __init__(self, layers: int, *, fail_layer: int | None = None) -> None:
         self.calls: list[tuple[object, ...]] = []
         self.keys = [torch.zeros((6, 4), dtype=torch.float32) for _ in range(layers)]
+        self.values = [torch.zeros((6, 4), dtype=torch.float32) for _ in range(layers)]
         self.fail_layer = fail_layer
 
     def submit_layer(self, layer_id: int) -> None:
@@ -153,6 +172,10 @@ class FakeLayerStream:
     def staged_key(self, layer_id: int) -> torch.Tensor:
         self.calls.append(("staged_key", layer_id))
         return self.keys[layer_id]
+
+    def staged_value(self, layer_id: int) -> torch.Tensor:
+        self.calls.append(("staged_value", layer_id))
+        return self.values[layer_id]
 
     def commit_calibration(self, layer_id: int, key, value) -> None:
         self.calls.append(
@@ -274,14 +297,15 @@ class FakeDataPlane:
         self_outer = self
         return ModelExecutor()
 
-    def get_active_layer_buffers(self, ticket: str, request_id: str):
-        self.calls.append(("get_buffers", ticket, request_id))
-        return self.buffers
+    def get_active_layer_buffer(
+        self, ticket: str, request_id: str, layer_id: int
+    ):
+        self.calls.append(("get_buffer", ticket, request_id, layer_id))
+        return self.buffers[layer_id]
 
     def open_layer_stream(
         self,
         reuse_plan,
-        buffers,
         *,
         kvcaches,
         slot_mapping,
@@ -292,7 +316,6 @@ class FakeDataPlane:
             (
                 "open",
                 reuse_plan.ticket,
-                len(buffers),
                 len(kvcaches),
                 len(slot_mapping),
             )
@@ -320,8 +343,7 @@ def test_executor_runs_h2d_first_for_packed_layer_buffers() -> None:
     assert result.processed_layers == 2
     assert result.correction_alpha == 0.6
     assert data_plane.calls == [
-        ("get_buffers", "call-1", "request-1"),
-        ("open", "call-1", 2, 2, 20),
+        ("open", "call-1", 2, 20),
         ("open_model", (14, 15)),
         ("loaded", "call-1", "request-1", 0),
         ("corrected", "call-1", "request-1", 0),
@@ -335,11 +357,13 @@ def test_executor_runs_h2d_first_for_packed_layer_buffers() -> None:
         ("forward", 0),
         ("staged_key", 0),
         ("commit_calibration", 0, (2, 4), (2, 4)),
+        ("staged_value", 0),
         ("commit", 0),
         ("wait", 1),
         ("forward", 1),
         ("staged_key", 1),
         ("commit_calibration", 1, (2, 4), (2, 4)),
+        ("staged_value", 1),
         ("commit", 1),
         ("finish",),
         ("model_close",),
@@ -350,6 +374,40 @@ def test_executor_runs_h2d_first_for_packed_layer_buffers() -> None:
     assert torch.allclose(
         data_plane.stream.keys[1][2:], torch.full((4, 4), 1.2)
     )
+    assert result.corrected_components == "kv"
+    assert torch.allclose(
+        data_plane.stream.values[0][2:], torch.full((4, 4), 6.0)
+    )
+    assert torch.allclose(
+        data_plane.stream.values[1][2:], torch.full((4, 4), 6.6)
+    )
+    assert torch.equal(
+        data_plane.stream.values[0][:2], torch.zeros((2, 4))
+    )
+
+
+def test_executor_key_only_ablation_leaves_staged_value_unchanged() -> None:
+    data_plane = FakeDataPlane(2)
+    executor = CSKCacheReuseExecutor(
+        data_plane, expected_layers=2, correct_value=False
+    )
+
+    result = executor.execute(
+        plan(),
+        token_ids=tuple(range(20)),
+        kvcaches=(torch.empty(0), torch.empty(0)),
+        slot_mapping=torch.arange(20),
+    )
+
+    assert result.corrected_components == "k"
+    assert ("staged_value", 0) not in data_plane.stream.calls
+    assert torch.allclose(
+        data_plane.stream.keys[0][2:], torch.full((4, 4), 0.6)
+    )
+    for layer_id in range(2):
+        assert torch.equal(
+            data_plane.stream.values[layer_id], torch.zeros((6, 4))
+        )
 
 
 def test_executor_direct_installs_without_opening_calibration_model() -> None:
@@ -426,12 +484,14 @@ def test_executor_runs_compute_first_for_chunk_single_layer_buffers() -> None:
         ("forward", 0),
         ("staged_key", 0),
         ("commit_calibration", 0, (2, 4), (2, 4)),
+        ("staged_value", 0),
         ("commit", 0),
         ("submit", 1),
         ("wait", 1),
         ("forward", 1),
         ("staged_key", 1),
         ("commit_calibration", 1, (2, 4), (2, 4)),
+        ("staged_value", 1),
         ("commit", 1),
         ("finish",),
         ("model_close",),

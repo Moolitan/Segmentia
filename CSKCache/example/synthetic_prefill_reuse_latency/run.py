@@ -204,6 +204,8 @@ def _configure_environment(method: str) -> None:
         "csk_storage_layout": cfg.STORAGE_LAYOUT,
         "csk_host_layout": cfg.HOST_LAYOUT,
         "csk_execution_order": cfg.EXECUTION_ORDER,
+        "csk_progressive_loading": True,
+        "csk_prefetch_handle_ttl_seconds": None,
         "csk_correction_strategy": correction_strategy,
         "csk_minimum_full_recompute_tokens": (
             cfg.MINIMUM_FULL_RECOMPUTE_TOKENS

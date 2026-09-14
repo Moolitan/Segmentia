@@ -24,6 +24,9 @@ class _Buffer:
         self.tensor = torch.zeros((2, tokens, 4), dtype=torch.bfloat16)
         self.metadata = SimpleNamespace(cached_positions=None)
 
+    def get_size(self) -> int:
+        return self.tensor.numel() * self.tensor.element_size()
+
 
 class _GPUConnector:
     def __init__(self, num_layers: int) -> None:
@@ -81,7 +84,8 @@ def test_lmcache_data_plane_maps_one_complete_layer_stream() -> None:
     stream = _LMCacheCSKLayerStream(
         gpu_connector,
         ReusePlan.from_dict(_plan()),
-        buffers,
+        layer_provider=lambda _ticket, _request, layer_id: buffers[layer_id],
+        h2d_progress_callback=lambda *_args, **_kwargs: None,
         kvcaches=[torch.empty(0), torch.empty(0)],
         slot_mapping=torch.arange(108),
     )
@@ -125,7 +129,8 @@ def test_lmcache_layer_stream_sends_chunk_segments_for_each_layer() -> None:
     stream = _LMCacheCSKLayerStream(
         gpu_connector,
         ReusePlan.from_dict(_plan()),
-        groups,
+        layer_provider=lambda _ticket, _request, layer_id: groups[layer_id],
+        h2d_progress_callback=lambda *_args, **_kwargs: None,
         kvcaches=[torch.empty(0), torch.empty(0)],
         slot_mapping=torch.arange(108),
     )
@@ -150,7 +155,8 @@ def test_partial_prefix_binds_the_complete_source_object() -> None:
     stream = _LMCacheCSKLayerStream(
         gpu_connector,
         ReusePlan.from_dict(partial),
-        buffers,
+        layer_provider=lambda _ticket, _request, layer_id: buffers[layer_id],
+        h2d_progress_callback=lambda *_args, **_kwargs: None,
         kvcaches=[torch.empty(0), torch.empty(0)],
         slot_mapping=torch.arange(108),
     )

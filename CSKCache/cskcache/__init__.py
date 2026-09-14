@@ -60,6 +60,11 @@ from .host_memory.base import (
 )
 from .runtime.request_manager import RequestManager
 from .runtime.coordinator import SchedulerReuseCoordinator
+from .runtime.progressive_loading import (
+    ProgressiveLoadCoordinator,
+    ProgressiveLoadingConfig,
+    ProgressiveLoadSnapshot,
+)
 from .runtime.transport import PlanTransportCoordinator
 from .execution.base import (
     CalibrationResidualCorrectionMethod,
@@ -176,6 +181,9 @@ __all__ = [
     "SkillMatchMode",
     "RequestManager",
     "SchedulerReuseCoordinator",
+    "ProgressiveLoadCoordinator",
+    "ProgressiveLoadingConfig",
+    "ProgressiveLoadSnapshot",
     "PlanTransportCoordinator",
     "VerifiedRequestBinding",
     "StorageManager",

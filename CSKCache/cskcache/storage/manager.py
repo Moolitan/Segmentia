@@ -6,6 +6,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Sequence
 import threading
+import time
 import uuid
 
 from ..metadata.base import StorageBackend
@@ -33,6 +34,8 @@ class _TicketHostLoad:
     io_operation_id: str
     batch: CSKReadBatch
     future: Future[tuple[Any, ...]] | None = None
+    layer_futures: dict[int, Future[Any]] | None = None
+    layer_objects: list[Any | None] | None = None
     memory_objects: tuple[Any, ...] | None = None
     resident_hit: bool = False
 
@@ -50,6 +53,8 @@ class StorageManager:
         host_buffer_pool: HostBufferPool | None = None,
         max_inflight_loads: int = 1,
         retain_last_host_object: bool = False,
+        progressive_loading: bool = False,
+        progress_observer: Any | None = None,
     ) -> None:
         if max_inflight_loads <= 0:
             raise ValueError("max_inflight_loads must be > 0")
@@ -77,11 +82,14 @@ class StorageManager:
         self._host_buffer_pool = host_buffer_pool
         self._max_inflight_loads = max_inflight_loads
         self._lock = threading.RLock()
+        self._condition = threading.Condition(self._lock)
         self._executor: ThreadPoolExecutor | None = None
         self._loads_by_ticket: dict[str, _TicketHostLoad] = {}
         self._retain_last_host_object = retain_last_host_object
         self._resident_cache_object_id: str | None = None
         self._resident_memory_objects: tuple[Any, ...] | None = None
+        self._progressive_loading = progressive_loading
+        self._progress_observer = progress_observer
         self._closed = False
 
     def read_object_into(
@@ -170,6 +178,15 @@ class StorageManager:
                 )
                 self._loads_by_ticket[ticket] = load
                 try:
+                    if (
+                        self._progressive_loading
+                        and self._progress_observer is not None
+                    ):
+                        self._progress_observer.register(ticket, batch.lengths)
+                        for layer_id in batch.layer_ids:
+                            self._progress_observer.mark_host_ready(
+                                ticket, layer_id
+                            )
                     self._metadata_manager.start_host_load(
                         ticket,
                         io_operation_id=load.io_operation_id,
@@ -215,6 +232,12 @@ class StorageManager:
                 cache_object_id=cache_object_id,
                 io_operation_id=f"host-io-{uuid.uuid4().hex}",
                 batch=batch,
+                layer_futures={} if self._progressive_loading else None,
+                layer_objects=(
+                    [None] * len(batch.extents)
+                    if self._progressive_loading
+                    else None
+                ),
             )
             self._loads_by_ticket[ticket] = load
             try:
@@ -230,21 +253,50 @@ class StorageManager:
                     io_operation_id=load.io_operation_id,
                     layers=len(load.batch.extents),
                     bytes=sum(load.batch.lengths),
+                    progressive=self._progressive_loading,
                 )
-                load.future = executor.submit(
-                    self._load_into_pool,
-                    ticket,
-                    load.io_operation_id,
-                    load.batch,
-                )
-                load.future.add_done_callback(
-                    lambda future, owner=ticket: self._complete_host_load(
-                        owner, future
+                if self._progressive_loading:
+                    if self._progress_observer is not None:
+                        self._progress_observer.register(ticket, batch.lengths)
+                    assert load.layer_futures is not None
+                    for layer_id in batch.layer_ids:
+                        future = executor.submit(
+                            self._load_layer_into_pool,
+                            ticket,
+                            load.io_operation_id,
+                            load.batch,
+                            layer_id,
+                        )
+                        load.layer_futures[layer_id] = future
+                        future.add_done_callback(
+                            lambda completed, owner=ticket, layer=layer_id: (
+                                self._complete_layer_host_load(
+                                    owner, layer, completed
+                                )
+                            )
+                        )
+                else:
+                    load.future = executor.submit(
+                        self._load_into_pool,
+                        ticket,
+                        load.io_operation_id,
+                        load.batch,
                     )
-                )
+                    load.future.add_done_callback(
+                        lambda future, owner=ticket: self._complete_host_load(
+                            owner, future
+                        )
+                    )
                 return state
             except Exception:
                 self._loads_by_ticket.pop(ticket, None)
+                if self._progress_observer is not None:
+                    try:
+                        self._progress_observer.mark_failed(
+                            ticket, "host load submission failed"
+                        )
+                    except KeyError:
+                        pass
                 try:
                     self._metadata_manager.mark_host_failed(
                         ticket, "host load submission failed"
@@ -270,6 +322,61 @@ class StorageManager:
                 raise RuntimeError("ready ticket has no resident buffer group")
             return load.memory_objects
 
+    def is_layer_ready(self, ticket: str, layer_id: int) -> bool:
+        """Return whether one progressive Host layer is immutable and usable."""
+
+        with self._lock:
+            load = self._loads_by_ticket.get(ticket)
+            if load is None:
+                raise KeyError(f"ticket has no live host load: {ticket}")
+            if not 0 <= layer_id < len(load.batch.extents):
+                raise ValueError("layer_id is outside the host load")
+            if load.memory_objects is not None:
+                return True
+            return bool(
+                load.layer_objects is not None
+                and load.layer_objects[layer_id] is not None
+            )
+
+    def wait_for_layer(
+        self,
+        ticket: str,
+        layer_id: int,
+        *,
+        timeout: float | None = None,
+    ) -> Any:
+        """Wait locally for one progressive Host layer without requeueing."""
+
+        deadline = None if timeout is None else time.monotonic() + timeout
+        with self._condition:
+            while True:
+                load = self._loads_by_ticket.get(ticket)
+                if load is None:
+                    raise KeyError(f"ticket has no live host load: {ticket}")
+                if not 0 <= layer_id < len(load.batch.extents):
+                    raise ValueError("layer_id is outside the host load")
+                if load.memory_objects is not None:
+                    return load.memory_objects[layer_id]
+                if (
+                    load.layer_objects is not None
+                    and load.layer_objects[layer_id] is not None
+                ):
+                    return load.layer_objects[layer_id]
+                state = self._metadata_manager.get_runtime(ticket)
+                if state.host_load_state is HostLoadState.FAILED:
+                    raise RuntimeError(
+                        state.fallback_reason or "progressive Host load failed"
+                    )
+                if deadline is None:
+                    self._condition.wait()
+                    continue
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"timed out waiting for Host layer {layer_id}"
+                    )
+                self._condition.wait(remaining)
+
     def cancel_host_load(
         self,
         ticket: str,
@@ -283,14 +390,16 @@ class StorageManager:
         with self._lock:
             load = self._detach_ticket_locked(ticket)
             if not load.resident_hit:
-                buffers_to_release = load.memory_objects
-            load.memory_objects = None
+                buffers_to_release = self._take_loaded_buffers(load)
             state = self._metadata_manager.get_runtime(ticket)
             if state.binding_state not in (
                 BindingState.FALLBACK,
                 BindingState.RELEASED,
             ):
                 self._metadata_manager.fallback(ticket, reason)
+            if self._progress_observer is not None:
+                self._progress_observer.release(ticket)
+            self._condition.notify_all()
         self._release_buffers(buffers_to_release)
 
     def release_host_load(self, ticket: str) -> RuntimeReuseState:
@@ -312,8 +421,12 @@ class StorageManager:
                         buffers=len(load.memory_objects),
                     )
             else:
-                buffers_to_release = load.memory_objects
+                buffers_to_release = self._take_loaded_buffers(load)
             load.memory_objects = None
+            load.layer_objects = None
+            if self._progress_observer is not None:
+                self._progress_observer.release(ticket)
+            self._condition.notify_all()
         self._release_buffers(buffers_to_release)
         return state
 
@@ -392,6 +505,98 @@ class StorageManager:
             self._release_buffers(memory_objects)
             raise
 
+    def _load_layer_into_pool(
+        self,
+        ticket: str,
+        io_operation_id: str,
+        batch: CSKReadBatch,
+        layer_id: int,
+    ) -> Any:
+        profile_event(
+            "csk_layer_ssd_submit",
+            ticket,
+            cache_object_id=batch.cache_object_id,
+            io_operation_id=io_operation_id,
+            layer=layer_id,
+            bytes=batch.lengths[layer_id],
+            storage_backend=self.storage_backend,
+        )
+        return self._transfer.load_layer(batch, layer_id)
+
+    def _complete_layer_host_load(
+        self,
+        ticket: str,
+        layer_id: int,
+        future: Future[Any],
+    ) -> None:
+        try:
+            memory_object = future.result()
+            error: Exception | None = None
+        except Exception as exc:
+            memory_object = None
+            error = exc
+
+        release_now: tuple[Any, ...] | None = None
+        failed_buffers: tuple[Any, ...] | None = None
+        with self._condition:
+            load = self._loads_by_ticket.get(ticket)
+            matches = bool(
+                load is not None
+                and load.layer_futures is not None
+                and load.layer_futures.get(layer_id) is future
+            )
+            if not matches:
+                release_now = (
+                    None if memory_object is None else (memory_object,)
+                )
+            elif error is not None:
+                assert load is not None
+                self._loads_by_ticket.pop(ticket, None)
+                failed_buffers = self._take_loaded_buffers(load)
+                try:
+                    self._metadata_manager.mark_host_failed(
+                        ticket, f"{type(error).__name__}: {error}"
+                    )
+                except ValueError:
+                    pass
+                if self._progress_observer is not None:
+                    self._progress_observer.mark_failed(
+                        ticket, f"{type(error).__name__}: {error}"
+                    )
+            else:
+                assert load is not None and load.layer_objects is not None
+                if load.layer_objects[layer_id] is not None:
+                    release_now = (memory_object,)
+                else:
+                    load.layer_objects[layer_id] = memory_object
+                    if self._progress_observer is not None:
+                        self._progress_observer.mark_host_ready(
+                            ticket, layer_id
+                        )
+                    profile_event(
+                        "csk_layer_host_ready",
+                        ticket,
+                        cache_object_id=load.cache_object_id,
+                        io_operation_id=load.io_operation_id,
+                        layer=layer_id,
+                        bytes=load.batch.lengths[layer_id],
+                    )
+                    if all(item is not None for item in load.layer_objects):
+                        load.memory_objects = tuple(load.layer_objects)
+                        self._metadata_manager.mark_host_ready(ticket)
+                        profile_event(
+                            "csk_host_ready",
+                            ticket,
+                            cache_object_id=load.cache_object_id,
+                            io_operation_id=load.io_operation_id,
+                            buffers=len(load.memory_objects),
+                            resident_hit=False,
+                            progressive=True,
+                        )
+            self._condition.notify_all()
+        self._release_buffers(release_now)
+        self._release_buffers(failed_buffers)
+
     def _complete_host_load(
         self,
         ticket: str,
@@ -439,6 +644,17 @@ class StorageManager:
         if load is None:
             raise KeyError(f"ticket has no live host load: {ticket}")
         return load
+
+    @staticmethod
+    def _take_loaded_buffers(load: _TicketHostLoad) -> tuple[Any, ...] | None:
+        buffers = load.memory_objects
+        if buffers is None and load.layer_objects is not None:
+            buffers = tuple(
+                item for item in load.layer_objects if item is not None
+            )
+        load.memory_objects = None
+        load.layer_objects = None
+        return buffers or None
 
     def _get_executor_locked(self) -> ThreadPoolExecutor:
         if self._executor is None:

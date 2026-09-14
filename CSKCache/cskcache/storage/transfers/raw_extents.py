@@ -101,6 +101,45 @@ class RawExtentTransfer:
             )
         )
 
+    def load_layer(self, batch: CSKReadBatch, layer_id: int) -> Any:
+        """Allocate, read, and arrange one layer from a validated object."""
+
+        if self._host_buffer_pool is None:
+            raise RuntimeError("raw_block loading has no host buffer pool")
+        if not 0 <= layer_id < len(batch.extents):
+            raise ValueError("raw_block layer_id is outside the read batch")
+        extent = batch.extents[layer_id]
+        if extent.layer_id != layer_id:
+            raise ValueError("raw_block batch is not in model-layer order")
+        single = CSKReadBatch(
+            cache_object_id=batch.cache_object_id,
+            container_id=batch.container_id,
+            extents=(extent,),
+        )
+        source_objects = tuple(
+            self._host_buffer_pool.acquire_persistent(single.extents)
+        )
+        if len(source_objects) != 1:
+            self._host_buffer_pool.release(source_objects)
+            raise RuntimeError("host buffer pool did not return one layer")
+        try:
+            read_result = self.read_into(single, source_objects)
+            if not read_result.complete:
+                raise RuntimeError("raw_block returned an incomplete layer")
+        except Exception:
+            self._host_buffer_pool.release(source_objects)
+            raise
+        arranged = tuple(
+            self._host_buffer_pool.arrange_loaded_layers(
+                single.extents,
+                source_objects,
+            )
+        )
+        if len(arranged) != 1:
+            self._host_buffer_pool.release(arranged)
+            raise RuntimeError("host layout did not return one arranged layer")
+        return arranged[0]
+
     @staticmethod
     def _validate_generation_sidecar(container: ContainerMetadata) -> None:
         path = generation_sidecar_path(container)

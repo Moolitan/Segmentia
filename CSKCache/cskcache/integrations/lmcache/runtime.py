@@ -12,6 +12,10 @@ from ...metadata.manager import MetadataManager
 from ...profile import profile_event
 from ...runtime.base import CorrectionStrategy, ReusePolicy
 from ...runtime.request_manager import RequestManager
+from ...runtime.progressive_loading import (
+    ProgressiveLoadCoordinator,
+    ProgressiveLoadingConfig,
+)
 from ...runtime.validator import validate_catalog_layout
 from ...host_memory.pool import LMCacheHostBufferPool
 from ...storage.manager import StorageManager
@@ -55,8 +59,21 @@ class LMCacheRuntimeBridge:
                         f"LMCache metadata has no {attribute}"
                     )
                 metadata_path = metadata_path.replace(placeholder, str(value))
+        progressive_loading = config.get_extra_config_value(
+            "csk_progressive_loading", True
+        )
+        if not isinstance(progressive_loading, bool):
+            raise ValueError("csk_progressive_loading must be a boolean")
+        defer_host_load_until_execution = config.get_extra_config_value(
+            "csk_defer_host_load_until_execution", False
+        )
+        if not isinstance(defer_host_load_until_execution, bool):
+            raise ValueError(
+                "csk_defer_host_load_until_execution must be a boolean"
+            )
         ticket_ttl_seconds = config.get_extra_config_value(
-            "csk_prefetch_handle_ttl_seconds", 60.0
+            "csk_prefetch_handle_ttl_seconds",
+            None if progressive_loading else 60.0,
         )
         retain_last_host_object = config.get_extra_config_value(
             "csk_retain_last_host_object", False
@@ -140,6 +157,24 @@ class LMCacheRuntimeBridge:
                 ),
             ),
             retain_last_host_object=retain_last_host_object,
+            progressive_loading=progressive_loading,
+            progressive_config=ProgressiveLoadingConfig(
+                ssd_bandwidth_bytes_per_ms=float(
+                    config.get_extra_config_value(
+                        "csk_progressive_ssd_bytes_per_ms", 7_000_000.0
+                    )
+                ),
+                h2d_bandwidth_bytes_per_ms=float(
+                    config.get_extra_config_value(
+                        "csk_progressive_h2d_bytes_per_ms", 22_000_000.0
+                    )
+                ),
+                bandwidth_ewma_alpha=float(
+                    config.get_extra_config_value(
+                        "csk_progressive_bandwidth_ewma_alpha", 0.2
+                    )
+                ),
+            ),
         )
         if not config.local_cpu or not engine.use_layerwise:
             raise ValueError(
@@ -187,32 +222,55 @@ class LMCacheRuntimeBridge:
             local_disk_reader.register_catalog_objects(
                 metadata_manager.list_objects()
             )
-        storage_manager = StorageManager(
-            metadata_manager,
-            raw_backend if settings.storage_backend == "raw_block" else None,
-            storage_backend=settings.storage_backend,
-            local_disk_backend=local_disk_reader,
-            host_buffer_pool=host_pool,
-            max_inflight_loads=4,
-            retain_last_host_object=settings.retain_last_host_object,
+        progressive_coordinator = (
+            ProgressiveLoadCoordinator(settings.progressive_config)
+            if settings.progressive_loading
+            else None
         )
-        model_path = engine.metadata.model_name
+        storage_manager = None
+        try:
+            storage_manager = StorageManager(
+                metadata_manager,
+                raw_backend if settings.storage_backend == "raw_block" else None,
+                storage_backend=settings.storage_backend,
+                local_disk_backend=local_disk_reader,
+                host_buffer_pool=host_pool,
+                max_inflight_loads=4,
+                retain_last_host_object=settings.retain_last_host_object,
+                progressive_loading=settings.progressive_loading,
+                progress_observer=progressive_coordinator,
+            )
+            model_path = engine.metadata.model_name
+            manager = RequestManager(
+                metadata_manager,
+                storage_manager,
+                model_fingerprint=fingerprint_model(model_path),
+                tokenizer_fingerprint=fingerprint_tokenizer(
+                    settings.tokenizer_path or model_path
+                ),
+                ticket_ttl_seconds=settings.ticket_ttl_seconds,
+                progressive_coordinator=progressive_coordinator,
+                defer_host_load_until_execution=(
+                    defer_host_load_until_execution
+                ),
+            )
+        except Exception:
+            if storage_manager is not None:
+                storage_manager.close()
+            if progressive_coordinator is not None:
+                progressive_coordinator.close()
+            raise
         self._settings = settings
         self._engine = engine
-        self._manager = RequestManager(
-            metadata_manager,
-            storage_manager,
-            model_fingerprint=fingerprint_model(model_path),
-            tokenizer_fingerprint=fingerprint_tokenizer(
-                settings.tokenizer_path or model_path
-            ),
-            ticket_ttl_seconds=settings.ticket_ttl_seconds,
-        )
+        self._manager = manager
         logger.info(
-            "CSKCache T0 enabled: metadata=%s backend=%s model=%s",
+            "CSKCache T0 enabled: metadata=%s backend=%s model=%s "
+            "progressive=%s defer_host_load_until_execution=%s",
             settings.metadata_path,
             settings.storage_backend,
             model_path,
+            settings.progressive_loading,
+            defer_host_load_until_execution,
         )
 
     def submit_prefetch(self, ticket: str, skill_name: str) -> bool:
@@ -300,6 +358,31 @@ class LMCacheRuntimeBridge:
             ticket, request_id
         ).to_dict()
 
+    def mark_execution_selected(self, ticket: str, request_id: str) -> bool:
+        """Notify the worker-local CSKCache controller of an execution slot."""
+
+        return self._manager.mark_execution_selected(ticket, request_id)
+
+    def query_progressive_requirement(
+        self, ticket: str, request_id: str
+    ) -> dict[str, object]:
+        """Return this rank's boundary readiness and calibration requirement."""
+
+        return self._manager.query_progressive_requirement(ticket, request_id)
+
+    def finalize_progressive_reuse(
+        self,
+        ticket: str,
+        request_id: str,
+        calibration_tokens: int,
+    ) -> dict[str, object] | None:
+        """Freeze the rank-consistent progressive ReusePlan."""
+
+        plan = self._manager.finalize_progressive_reuse(
+            ticket, request_id, calibration_tokens
+        )
+        return None if plan is None else plan.to_dict()
+
     def activate_reuse(
         self, ticket: str, request_id: str
     ) -> dict[str, object] | None:
@@ -336,10 +419,34 @@ class LMCacheRuntimeBridge:
     ) -> Sequence[Any]:
         return self._manager.get_active_layer_buffers(ticket, request_id)
 
+    def get_active_layer_buffer(
+        self, ticket: str, request_id: str, layer_id: int
+    ) -> Any:
+        """Wait locally for one immutable progressive Host layer."""
+
+        return self._manager.get_active_layer_buffer(
+            ticket, request_id, layer_id
+        )
+
     def mark_layer_loaded(
         self, ticket: str, request_id: str, layer_id: int
     ) -> None:
         self._manager.mark_layer_loaded(ticket, request_id, layer_id)
+
+    def mark_h2d_complete(
+        self,
+        ticket: str,
+        *,
+        transferred_bytes: int,
+        duration_ms: float,
+    ) -> None:
+        """Record one observed progressive Pinned-to-GPU transfer."""
+
+        self._manager.mark_h2d_complete(
+            ticket,
+            transferred_bytes=transferred_bytes,
+            duration_ms=duration_ms,
+        )
 
     def mark_layer_corrected(
         self, ticket: str, request_id: str, layer_id: int

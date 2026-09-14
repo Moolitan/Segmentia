@@ -77,6 +77,10 @@ class SchedulerReuseCoordinator:
         state = self._states.get(request_id)
         if state is None or state.phase is not SchedulerReusePhase.INITIAL:
             return num_new_tokens
+        if not state.execution_selected_notified:
+            if control is not None:
+                control.mark_csk_execution_selected(state.ticket, request_id)
+            state.execution_selected_notified = True
         boundary = state.plan.calibration_start
         if num_computed_tokens >= boundary:
             state.phase = SchedulerReusePhase.FALLBACK
@@ -123,6 +127,66 @@ class SchedulerReuseCoordinator:
         readiness = control.query_csk_readiness(state.ticket, request_id)
         if readiness.get("status") == "loading":
             return False
+        if readiness.get("status") == "ready":
+            try:
+                final_plan = ReusePlan.from_dict(readiness.get("plan"))
+            except (TypeError, ValueError):
+                readiness = {
+                    "status": "fallback",
+                    "plan": None,
+                    "reason": "invalid_final_reuse_plan",
+                }
+            else:
+                fixed_before = (
+                    state.plan.ticket,
+                    state.plan.cache_object_id,
+                    state.plan.request_id,
+                    state.plan.segment_start,
+                    state.plan.segment_end,
+                    state.plan.calibration_start,
+                    state.plan.reuse_end,
+                    state.plan.block_alignment,
+                    state.plan.correction_strategy,
+                    state.plan.correction_alpha,
+                    state.plan.deviation_recompute_ratio,
+                    state.plan.deviation_check_layer,
+                    state.plan.source_object_token_count,
+                    state.plan.source_reuse_start
+                    - (state.plan.reuse_start - state.plan.segment_start),
+                )
+                fixed_after = (
+                    final_plan.ticket,
+                    final_plan.cache_object_id,
+                    final_plan.request_id,
+                    final_plan.segment_start,
+                    final_plan.segment_end,
+                    final_plan.calibration_start,
+                    final_plan.reuse_end,
+                    final_plan.block_alignment,
+                    final_plan.correction_strategy,
+                    final_plan.correction_alpha,
+                    final_plan.deviation_recompute_ratio,
+                    final_plan.deviation_check_layer,
+                    final_plan.source_object_token_count,
+                    final_plan.source_reuse_start
+                    - (final_plan.reuse_start - final_plan.segment_start),
+                )
+                if (
+                    fixed_after != fixed_before
+                    or final_plan.reuse_start < state.plan.reuse_start
+                ):
+                    readiness = {
+                        "status": "fallback",
+                        "plan": None,
+                        "reason": "final_reuse_plan_changed_fixed_boundary",
+                    }
+                else:
+                    state.plan = final_plan
+                    readiness = {
+                        "status": "ready",
+                        "plan": final_plan.to_dict(),
+                        "reason": None,
+                    }
         state.readiness = readiness
         return True
 

@@ -60,6 +60,60 @@ class PlanTransportCoordinator:
         self._active[request_id] = prepared
         return prepared
 
+    def finalize(
+        self,
+        ticket: str,
+        request_id: str,
+        raw_plan: object,
+    ) -> ReusePlan | None:
+        """Validate and store a boundary-frozen refinement of a plan."""
+
+        prepared = self._prepared.get(request_id)
+        if prepared is None or prepared.ticket != ticket:
+            return None
+        try:
+            final = ReusePlan.from_dict(raw_plan)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+        fixed_prepared = (
+            prepared.ticket,
+            prepared.cache_object_id,
+            prepared.request_id,
+            prepared.segment_start,
+            prepared.segment_end,
+            prepared.calibration_start,
+            prepared.reuse_end,
+            prepared.block_alignment,
+            prepared.correction_strategy,
+            prepared.correction_alpha,
+            prepared.deviation_recompute_ratio,
+            prepared.deviation_check_layer,
+            prepared.source_object_token_count,
+            prepared.source_reuse_start
+            - (prepared.reuse_start - prepared.segment_start),
+        )
+        fixed_final = (
+            final.ticket,
+            final.cache_object_id,
+            final.request_id,
+            final.segment_start,
+            final.segment_end,
+            final.calibration_start,
+            final.reuse_end,
+            final.block_alignment,
+            final.correction_strategy,
+            final.correction_alpha,
+            final.deviation_recompute_ratio,
+            final.deviation_check_layer,
+            final.source_object_token_count,
+            final.source_reuse_start
+            - (final.reuse_start - final.segment_start),
+        )
+        if fixed_final != fixed_prepared or final.reuse_start < prepared.reuse_start:
+            return None
+        self._prepared[request_id] = final
+        return final
+
     def bind_allocation(
         self,
         request_id: str,

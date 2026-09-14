@@ -141,6 +141,8 @@ class LayerwiseReuseStream(Protocol):
 
     def staged_key(self, layer_id: int) -> torch.Tensor: ...
 
+    def staged_value(self, layer_id: int) -> torch.Tensor: ...
+
     def commit_calibration(
         self,
         layer_id: int,
@@ -158,16 +160,16 @@ class LayerwiseReuseStream(Protocol):
 class ReuseDataPlane(Protocol):
     """Model and physical interfaces required by the execution layer."""
 
-    def get_active_layer_buffers(
+    def get_active_layer_buffer(
         self,
         ticket: str,
         request_id: str,
-    ) -> Sequence[Any]: ...
+        layer_id: int,
+    ) -> Any: ...
 
     def open_layer_stream(
         self,
         plan: ReusePlan,
-        buffers: Sequence[Any],
         *,
         kvcaches: Sequence[torch.Tensor],
         slot_mapping: torch.Tensor,
@@ -211,6 +213,8 @@ class ReuseExecutionResult:
     correction_alpha: float
     correction_strategy: CorrectionStrategy = CorrectionStrategy.FIXED_PREFIX
     method: ExecutionMethod = FIXED_PREFIX_RESIDUAL_METHOD
+    # "kv", "k", or "" when the path applies no residual compensation.
+    corrected_components: str = ""
 
 
 @dataclass(frozen=True)

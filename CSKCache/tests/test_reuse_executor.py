@@ -85,10 +85,6 @@ def test_execution_method_classes_cover_all_latency_arms() -> None:
         execution_method_for(CorrectionStrategy.DIRECT), DirectReuseMethod
     )
     assert isinstance(
-        execution_method_for(CorrectionStrategy.FIXED_PREFIX),
-        CalibrationResidualCorrectionMethod,
-    )
-    assert isinstance(
         execution_method_for(CorrectionStrategy.RATIO_PREFIX),
         CalibrationResidualCorrectionMethod,
     )
@@ -559,12 +555,35 @@ def test_executor_stops_at_first_failed_layer_without_false_completion() -> None
     assert ("abort",) in data_plane.stream.calls
 
 
-def test_reuse_plan_round_trip_validates_transport_mapping() -> None:
+def test_reuse_plan_round_trip_accepts_non_aligned_transport_mapping() -> None:
     original = plan()
     assert ReusePlan.from_dict(original.to_dict()) == original
 
     malformed = original.to_dict()
     malformed["reuse_end"] = 19
     malformed["source_reuse_end"] = 9
-    with pytest.raises(ValueError, match="block aligned"):
-        ReusePlan.from_dict(malformed)
+    non_aligned = ReusePlan.from_dict(malformed)
+    assert non_aligned.reuse_end == 19
+    assert non_aligned.source_reuse_end == 9
+
+
+def test_non_aligned_failure_recomputes_from_covering_block_start() -> None:
+    non_aligned = ReusePlan(
+        ticket="call-failure",
+        cache_object_id="skill-v1",
+        request_id="request-failure",
+        segment_start=13,
+        segment_end=100,
+        reuse_start=18,
+        reuse_end=100,
+        source_reuse_start=5,
+        source_reuse_end=87,
+        calibration_start=13,
+        calibration_end=18,
+        correction_alpha=0.6,
+        block_alignment=16,
+        recompute_ratio=0.05,
+    )
+    failure = non_aligned.failure("worker_load_failed")
+    assert failure.token_start == 0
+    assert failure.token_end == 100

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # A deliberately wide schema lets results from different subsections, models,
 # and machines be concatenated without guessing column types or meanings.
@@ -26,6 +26,7 @@ SAMPLE_COLUMNS = (
     "model_path",
     "tensor_parallel_size",
     "system",
+    "source_dataset",
     "skill_name",
     "skill_tokens",
     "task_id",
@@ -39,6 +40,17 @@ SAMPLE_COLUMNS = (
     "correction_strategy",
     "correction_budget_tokens",
     "correction_ratio",
+    # Residual-compensation ablation identity.
+    "correction_alpha",
+    "corrected_components",
+    # Prefix-cache and prompt-layout baselines.
+    "turn_index",
+    "preceding_context_tokens",
+    "candidate_skill_count",
+    "skill_span_start",
+    "prefix_cache_hit_tokens",
+    "skill_span_hit_tokens",
+    "skill_span_hit_ratio",
     "concurrency",
     "replica",
     "repetition",
@@ -67,6 +79,7 @@ SUMMARY_COLUMNS = (
     "platform_id",
     "model_id",
     "system",
+    "source_dataset",
     "skill_name",
     "skill_tokens",
     "task_id",
@@ -80,12 +93,20 @@ SUMMARY_COLUMNS = (
     "correction_strategy",
     "correction_budget_tokens",
     "correction_ratio",
+    "correction_alpha",
+    "corrected_components",
+    "turn_index",
+    "candidate_skill_count",
     "concurrency",
     "sample_count",
     "median_ttft_ms",
     "median_latency_ms",
     "median_throughput_requests_per_s",
     "median_reuse_ratio",
+    "median_skill_span_hit_ratio",
+    # Constraint Recovery Rate, judged over frozen Skill Behavior Constraints.
+    "crr",
+    "crr_valid_constraints",
     "rule_adherence",
     "fallback_count",
     "input_fingerprint",

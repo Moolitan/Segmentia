@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import time
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -19,7 +20,7 @@ from ...integrations.lmcache import (
     lmcache_integration_enabled,
 )
 from ...integrations.lmcache.rank_control import CSKCacheRankControlClient
-from ...runtime.base import ReusePlan
+from ...runtime.base import CorrectionStrategy, ReusePlan
 from ...runtime.transport import PlanTransportCoordinator
 
 from .base import (
@@ -29,10 +30,8 @@ from .base import (
     CSKCacheConnectorMetadata,
     CSKCacheWorkerRequest,
     INSPECT_TOOL_OBSERVATION,
-    FINALIZE_PROGRESSIVE_REUSE,
     MARK_EXECUTION_SELECTED,
     PREPARE_REUSE,
-    QUERY_PROGRESSIVE_REQUIREMENT,
     QUERY_READINESS,
     RELEASE_REUSE,
     SUBMIT_PREFETCH,
@@ -135,23 +134,16 @@ class CSKCacheConnectorV1(LMCacheConnectorV1):
         self._runtime_control_handler = None
         self._csk_worker = None
         self._csk_rank_control = None
-        if role == KVConnectorRole.SCHEDULER:
-            config = self._lmcache_engine.config
-            progressive = config.get_extra_config_value(
-                "csk_progressive_loading", True
-            )
-            if lmcache_integration_enabled(config) and progressive:
-                try:
-                    self._csk_rank_control = (
-                        CSKCacheRankControlClient.from_lmcache(
-                            config,
-                            self._lmcache_engine.lmcache_engine_metadata,
-                        )
-                    )
-                except (AttributeError, TypeError, ValueError) as error:
-                    logger.error(
-                        "CSKCache rank control is unavailable: %s", error
-                    )
+        if role == KVConnectorRole.SCHEDULER and lmcache_integration_enabled(
+            self._lmcache_engine.config
+        ):
+            try:
+                self._csk_rank_control = CSKCacheRankControlClient.from_lmcache(
+                    self._lmcache_engine.config,
+                    self._lmcache_engine.lmcache_engine_metadata,
+                )
+            except (AttributeError, TypeError, ValueError) as error:
+                logger.error("CSKCache rank readiness is unavailable: %s", error)
 
     def register_kv_caches(self, kv_caches: dict[str, torch.Tensor]) -> None:
         super().register_kv_caches(kv_caches)
@@ -181,6 +173,7 @@ class CSKCacheConnectorV1(LMCacheConnectorV1):
                     )
                 ),
                 correct_value=self._correct_value_enabled(),
+                measure_performance=self._csk_runtime.profitability_enabled,
             )
             engine.gpu_connector.set_layerwise_model_provider(
                 lambda: self._csk_worker.layerwise_model
@@ -267,16 +260,6 @@ class CSKCacheConnectorV1(LMCacheConnectorV1):
         if command == MARK_EXECUTION_SELECTED:
             return runtime.mark_execution_selected(
                 payload["ticket"], payload["request_id"]
-            )
-        if command == QUERY_PROGRESSIVE_REQUIREMENT:
-            return runtime.query_progressive_requirement(
-                payload["ticket"], payload["request_id"]
-            )
-        if command == FINALIZE_PROGRESSIVE_REUSE:
-            return runtime.finalize_progressive_reuse(
-                payload["ticket"],
-                payload["request_id"],
-                payload["calibration_tokens"],
             )
         if command == QUERY_READINESS:
             return runtime.query_readiness(
@@ -385,6 +368,14 @@ class CSKCacheConnectorV1(LMCacheConnectorV1):
                     raise RuntimeError("attention metadata is unavailable")
                 if engine is None or self._csk_worker is None:
                     raise RuntimeError("CSKCache worker is unavailable")
+                measure_performance = (
+                    self._csk_runtime.profitability_enabled
+                    and CorrectionStrategy(request.plan.correction_strategy)
+                    is CorrectionStrategy.RATIO_PREFIX
+                )
+                if measure_performance:
+                    torch.cuda.synchronize(self._lmcache_engine.device)
+                execution_started_ns = time.perf_counter_ns()
                 result = self._csk_worker.execute(
                     request.plan,
                     token_ids=request.token_ids,
@@ -392,6 +383,17 @@ class CSKCacheConnectorV1(LMCacheConnectorV1):
                     slot_mapping=request.slot_mapping.to(
                         self._lmcache_engine.device
                     ),
+                )
+                if measure_performance:
+                    torch.cuda.synchronize(self._lmcache_engine.device)
+                execution_duration_ms = max(
+                    (time.perf_counter_ns() - execution_started_ns) / 1_000_000,
+                    0.001,
+                )
+                self._csk_runtime.record_execution(
+                    request.plan,
+                    result,
+                    duration_ms=execution_duration_ms,
                 )
                 self._csk_runtime.release(result.ticket)
             except Exception:
@@ -469,105 +471,54 @@ class CSKCacheConnectorV1(LMCacheConnectorV1):
             return _CSKLookupControl(lookup).query_csk_readiness(
                 ticket, request_id
             )
-        requirements = self._csk_rank_control.execute_all(
-            QUERY_PROGRESSIVE_REQUIREMENT,
+        results = self._csk_rank_control.execute_all(
+            QUERY_READINESS,
             {"ticket": ticket, "request_id": request_id},
         )
-        if not requirements:
+        if not results or any(not isinstance(item, dict) for item in results):
             return {
                 "status": "fallback",
                 "plan": None,
-                "reason": "progressive_rank_control_failed",
-            }
-        if all(
-            isinstance(item, dict) and item.get("status") == "unsupported"
-            for item in requirements
-        ):
-            return _CSKLookupControl(lookup).query_csk_readiness(
-                ticket, request_id
-            )
-        if any(not isinstance(item, dict) for item in requirements):
-            return {
-                "status": "fallback",
-                "plan": None,
-                "reason": "invalid_progressive_rank_response",
-            }
-        supported = requirements
-        if any(item.get("status") == "unsupported" for item in supported):
-            return {
-                "status": "fallback",
-                "plan": None,
-                "reason": "progressive_rank_capability_mismatch",
+                "reason": "rank_readiness_unavailable",
             }
         fallback = next(
-            (item for item in supported if item.get("status") == "fallback"),
+            (item for item in results if item.get("status") == "fallback"),
             None,
         )
         if fallback is not None:
             return {
                 "status": "fallback",
                 "plan": None,
-                "reason": fallback.get("reason", "progressive_rank_failed"),
+                "reason": fallback.get("reason", "rank_reuse_failed"),
             }
-        if any(item.get("status") != "ready" for item in supported):
+        if any(item.get("status") == "loading" for item in results):
             return {"status": "loading", "plan": None, "reason": None}
-        modes = {item.get("mode") for item in supported}
-        if modes == {"static_layerwise"}:
-            plans = [item.get("plan") for item in supported]
-            if not plans or any(plan != plans[0] for plan in plans[1:]):
-                return {
-                    "status": "fallback",
-                    "plan": None,
-                    "reason": "static_layerwise_rank_plan_mismatch",
-                }
-            try:
-                plan = ReusePlan.from_dict(plans[0])
-            except (TypeError, ValueError):
-                return {
-                    "status": "fallback",
-                    "plan": None,
-                    "reason": "invalid_static_layerwise_plan",
-                }
-            if plan.ticket != ticket or plan.request_id != request_id:
-                return {
-                    "status": "fallback",
-                    "plan": None,
-                    "reason": "static_layerwise_plan_binding_mismatch",
-                }
-            return {"status": "ready", "plan": plan.to_dict(), "reason": None}
-        if modes != {None}:
+        if any(item.get("status") != "ready" for item in results):
             return {
                 "status": "fallback",
                 "plan": None,
-                "reason": "progressive_rank_mode_mismatch",
+                "reason": "invalid_rank_readiness",
+            }
+        plans = [item.get("plan") for item in results]
+        if not plans or any(plan != plans[0] for plan in plans[1:]):
+            return {
+                "status": "fallback",
+                "plan": None,
+                "reason": "rank_reuse_plan_mismatch",
             }
         try:
-            calibration_tokens = max(
-                int(item["required_calibration_tokens"])
-                for item in supported
-            )
-        except (KeyError, TypeError, ValueError):
+            plan = ReusePlan.from_dict(plans[0])
+        except (TypeError, ValueError):
             return {
                 "status": "fallback",
                 "plan": None,
-                "reason": "invalid_progressive_rank_requirement",
+                "reason": "invalid_rank_reuse_plan",
             }
-        raw_plan = lookup.execute_external_control(
-            FINALIZE_PROGRESSIVE_REUSE,
-            {
-                "ticket": ticket,
-                "request_id": request_id,
-                "calibration_tokens": calibration_tokens,
-            },
-        )
-        plan = self._csk_transport.finalize(
-            ticket, request_id, raw_plan
-        )
-        if plan is None:
+        if plan.ticket != ticket or plan.request_id != request_id:
             return {
                 "status": "fallback",
                 "plan": None,
-                "reason": "progressive_plan_finalization_failed",
+                "reason": "rank_reuse_plan_binding_mismatch",
             }
         return {"status": "ready", "plan": plan.to_dict(), "reason": None}
 

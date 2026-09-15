@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import config as local
@@ -99,9 +100,6 @@ def _measure_hierarchy(run: RunContext) -> None:
                 case_root=server_root,
                 chunk_tokens=local.CHUNK_TOKENS,
                 correction_alpha=local.CORRECTION_ALPHA,
-                minimum_full_recompute_tokens=(
-                    local.MINIMUM_FULL_RECOMPUTE_TOKENS
-                ),
                 minimum_reuse_tokens=local.MINIMUM_REUSE_TOKENS,
             )
             with VLLMServer(server_cfg) as server:
@@ -145,7 +143,9 @@ def _measure_hierarchy(run: RunContext) -> None:
                                 "io_engine": "io_uring",
                                 "use_odirect": True,
                                 "correction_strategy": local.SYSTEM.correction_strategy,
-                                "correction_budget_tokens": local.SYSTEM.calibration_tokens,
+                                "correction_budget_tokens": math.ceil(
+                                    skill_tokens * local.SYSTEM.calibration_ratio
+                                ),
                                 "replica": replica,
                                 "repetition": repetition,
                                 "warmup": warmup,

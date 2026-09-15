@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import threading
 import time
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
-from ..metadata.base import CacheObjectMetadata
 from ..metadata.skill_format import parse_skill_payload
 from ..metadata.manager import MetadataManager
 from ..profile import profile_event
@@ -24,16 +22,9 @@ from .base import (
     VerifiedRequestBinding,
 )
 from ..storage.manager import StorageManager
-from .progressive_loading import ProgressiveLoadCoordinator
 
-
-@dataclass(frozen=True)
-class _ProgressivePreparedPlan:
-    policy: ReusePolicy
-    provisional_plan: ReusePlan
-    base_tokens: int
-    max_tokens: int
-    frozen_plan: ReusePlan | None = None
+if TYPE_CHECKING:
+    from .system_profile import SystemPerformanceTracker
 
 
 class RequestManager:
@@ -52,8 +43,7 @@ class RequestManager:
         model_fingerprint: str,
         tokenizer_fingerprint: str,
         ticket_ttl_seconds: float | None = 60.0,
-        progressive_coordinator: ProgressiveLoadCoordinator | None = None,
-        defer_host_load_until_execution: bool = False,
+        performance_tracker: SystemPerformanceTracker | None = None,
     ) -> None:
         if not model_fingerprint or not tokenizer_fingerprint:
             raise ValueError("deployment fingerprints must be non-empty")
@@ -68,9 +58,7 @@ class RequestManager:
             if ticket_ttl_seconds is None
             else int(ticket_ttl_seconds * 1_000_000_000)
         )
-        self._progressive_coordinator = progressive_coordinator
-        self._defer_host_load_until_execution = defer_host_load_until_execution
-        self._progressive_plans: dict[str, _ProgressivePreparedPlan] = {}
+        self._performance_tracker = performance_tracker
         self._lock = threading.RLock()
         self._closed = False
 
@@ -117,14 +105,7 @@ class RequestManager:
                     else now_ns + self._ticket_ttl_ns
                 ),
             )
-            if self._defer_host_load_until_execution:
-                profile_event(
-                    "csk_host_load_deferred",
-                    ticket,
-                    cache_object_id=cache_object.object_id,
-                    trigger="execution_selected",
-                )
-            elif not self._submit_host_load(ticket, cache_object.object_id):
+            if not self._submit_host_load(ticket, cache_object.object_id):
                 return False
             return True
 
@@ -250,10 +231,6 @@ class RequestManager:
                     BindingState.RELEASED,
                 ):
                     self._metadata_manager.fallback(ticket, reason)
-            finally:
-                self._progressive_plans.pop(ticket, None)
-                if self._progressive_coordinator is not None:
-                    self._progressive_coordinator.release(ticket)
 
     def prepare_reuse(
         self,
@@ -263,7 +240,7 @@ class RequestManager:
         block_alignment: int,
         policy: ReusePolicy | None = None,
     ) -> ReusePlan | None:
-        """Create the aligned online-recompute and reuse ranges.
+        """Create exact token-level online-recompute and reuse ranges.
 
         This method only plans token ranges.  It neither waits for SSD I/O nor
         moves KV to the GPU.  A range that cannot retain the minimum reusable
@@ -298,28 +275,8 @@ class RequestManager:
                 matched_tokens
             )
             strategy = CorrectionStrategy(selected_policy.correction_strategy)
-            if (
-                self._progressive_coordinator is not None
-                and strategy
-                in (
-                    CorrectionStrategy.FIXED_PREFIX,
-                    CorrectionStrategy.RATIO_PREFIX,
-                )
-            ):
-                return self._prepare_progressive_reuse(
-                    state,
-                    cache_object=cache_object,
-                    policy=selected_policy,
-                    calibration_tokens=calibration_tokens,
-                    block_alignment=block_alignment,
-                )
-            nominal_start = (
-                state.segment_start
-                + selected_policy.minimum_full_recompute_tokens
-                + calibration_tokens
-            )
-            reuse_start = _round_up(nominal_start, block_alignment)
-            reuse_end = _round_down(state.segment_end, block_alignment)
+            reuse_start = state.segment_start + calibration_tokens
+            reuse_end = state.segment_end
             if reuse_end - reuse_start < selected_policy.minimum_reuse_tokens:
                 self.cancel(ticket, "reusable_suffix_too_short")
                 return None
@@ -354,6 +311,15 @@ class RequestManager:
                     selected_policy.deviation_recompute_ratio
                 ),
                 deviation_check_layer=selected_policy.deviation_check_layer,
+                recompute_ratio=(
+                    selected_policy.calibration_ratio
+                    if strategy is CorrectionStrategy.RATIO_PREFIX
+                    else (
+                        selected_policy.deviation_recompute_ratio
+                        if strategy is CorrectionStrategy.DEVIATION_TOPK
+                        else 0.0
+                    )
+                ),
             )
             if state.reuse_start is not None:
                 existing = self._plan_from_state(state)
@@ -366,208 +332,14 @@ class RequestManager:
             return plan
 
     def mark_execution_selected(self, ticket: str, request_id: str) -> bool:
-        """Notify CSKCache that normal Prefill received an execution slot."""
+        """Confirm that an already-prefetched ticket belongs to this request."""
 
         with self._lock:
             try:
                 state = self._metadata_manager.get_runtime(ticket)
             except KeyError:
                 return False
-            if state.request_id != request_id or state.reuse_start is None:
-                return False
-            if (
-                self._defer_host_load_until_execution
-                and state.host_load_state is HostLoadState.NOT_STARTED
-            ):
-                profile_event(
-                    "csk_execution_host_load_trigger",
-                    request_id,
-                    ticket=ticket,
-                    cache_object_id=state.cache_object_id,
-                )
-                if not self._submit_host_load(ticket, state.cache_object_id):
-                    return False
-            coordinator = self._progressive_coordinator
-            if coordinator is not None:
-                try:
-                    coordinator.mark_execution_selected(ticket)
-                except KeyError:
-                    return False
-            return True
-
-    def query_progressive_requirement(
-        self,
-        ticket: str,
-        request_id: str,
-    ) -> dict[str, object]:
-        """Return one rank's boundary readiness and calibration requirement."""
-
-        with self._lock:
-            coordinator = self._progressive_coordinator
-            prepared = self._progressive_plans.get(ticket)
-            if coordinator is None:
-                return {"status": "unsupported", "reason": "not_progressive"}
-            try:
-                state = self._metadata_manager.get_runtime(ticket)
-                snapshot = coordinator.snapshot(ticket)
-            except KeyError:
-                return {"status": "fallback", "reason": "unknown_ticket"}
-            if state.request_id != request_id:
-                return {
-                    "status": "fallback",
-                    "reason": "request_binding_mismatch",
-                }
-            if (
-                state.binding_state
-                in (BindingState.FALLBACK, BindingState.RELEASED)
-                or snapshot.failure_reason is not None
-            ):
-                return {
-                    "status": "fallback",
-                    "reason": snapshot.failure_reason
-                    or state.fallback_reason
-                    or state.binding_state.value,
-                }
-            if prepared is None:
-                if snapshot.host_ready_prefix < 1:
-                    return {
-                        "status": "loading",
-                        "reason": "first_layer_not_host_ready",
-                        "progress": snapshot.to_dict(),
-                    }
-                if state.reuse_start is None:
-                    return {"status": "fallback", "reason": "reuse_plan_missing"}
-                return {
-                    "status": "ready",
-                    "reason": None,
-                    "mode": "static_layerwise",
-                    "plan": self._plan_from_state(state).to_dict(),
-                    "progress": snapshot.to_dict(),
-                }
-            if snapshot.host_ready_prefix < snapshot.total_layers:
-                return {
-                    "status": "loading",
-                    "reason": "host_layers_not_ready",
-                    "progress": snapshot.to_dict(),
-                }
-            if prepared.frozen_plan is not None:
-                frozen = prepared.frozen_plan
-                return {
-                    "status": "ready",
-                    "reason": None,
-                    "required_calibration_tokens": (
-                        frozen.calibration_end - frozen.calibration_start
-                    ),
-                    "progress": snapshot.to_dict(),
-                    "provisional_plan": prepared.provisional_plan.to_dict(),
-                    "frozen_plan": frozen.to_dict(),
-                }
-            return {
-                "status": "ready",
-                "reason": None,
-                "required_calibration_tokens": prepared.base_tokens,
-                "progress": snapshot.to_dict(),
-                "provisional_plan": prepared.provisional_plan.to_dict(),
-            }
-
-    def finalize_progressive_reuse(
-        self,
-        ticket: str,
-        request_id: str,
-        calibration_tokens: int,
-    ) -> ReusePlan | None:
-        """Freeze the fixed calibration plan after every Host layer is ready."""
-
-        if calibration_tokens <= 0:
-            return None
-        with self._lock:
-            prepared = self._progressive_plans.get(ticket)
-            if prepared is None:
-                return None
-            provisional = prepared.provisional_plan
-            if provisional.request_id != request_id:
-                return None
-            selected_tokens = min(
-                max(calibration_tokens, prepared.base_tokens),
-                prepared.max_tokens,
-            )
-            reuse_start = _round_up(
-                provisional.calibration_start + selected_tokens,
-                provisional.block_alignment,
-            )
-            if reuse_start - provisional.calibration_start > prepared.max_tokens:
-                reuse_start = _round_down(
-                    provisional.calibration_start + prepared.max_tokens,
-                    provisional.block_alignment,
-                )
-            if prepared.frozen_plan is not None:
-                return (
-                    prepared.frozen_plan
-                    if prepared.frozen_plan.reuse_start == reuse_start
-                    else None
-                )
-            if (
-                provisional.reuse_end - reuse_start
-                < prepared.policy.minimum_reuse_tokens
-            ):
-                self.cancel(ticket, "progressive_reusable_suffix_too_short")
-                return None
-            state = self._metadata_manager.get_runtime(ticket)
-            cache_object = self._metadata_manager.get_object(state.cache_object_id)
-            relative_start = reuse_start - provisional.segment_start
-            relative_end = provisional.reuse_end - provisional.segment_start
-            plan = ReusePlan(
-                ticket=ticket,
-                cache_object_id=provisional.cache_object_id,
-                request_id=request_id,
-                segment_start=provisional.segment_start,
-                segment_end=provisional.segment_end,
-                reuse_start=reuse_start,
-                reuse_end=provisional.reuse_end,
-                source_reuse_start=(
-                    cache_object.source_position_start + relative_start
-                ),
-                source_reuse_end=(
-                    cache_object.source_position_start + relative_end
-                ),
-                calibration_start=provisional.calibration_start,
-                calibration_end=reuse_start,
-                correction_alpha=provisional.correction_alpha,
-                block_alignment=provisional.block_alignment,
-                source_token_count=provisional.source_object_token_count,
-                correction_strategy=provisional.correction_strategy,
-                deviation_recompute_ratio=(
-                    provisional.deviation_recompute_ratio
-                ),
-                deviation_check_layer=provisional.deviation_check_layer,
-            )
-            try:
-                self._metadata_manager.finalize_reuse_plan(ticket, plan)
-            except ValueError:
-                self.cancel(ticket, "progressive_plan_finalization_failed")
-                return None
-            self._progressive_plans[ticket] = _ProgressivePreparedPlan(
-                policy=prepared.policy,
-                provisional_plan=prepared.provisional_plan,
-                base_tokens=prepared.base_tokens,
-                max_tokens=prepared.max_tokens,
-                frozen_plan=plan,
-            )
-            profile_fields = {
-                "ticket": ticket,
-                "base_tokens": prepared.base_tokens,
-                "requested_tokens": calibration_tokens,
-                "actual_tokens": plan.calibration_end
-                - plan.calibration_start,
-                "reuse_start": plan.reuse_start,
-                "reuse_end": plan.reuse_end,
-            }
-            profile_event(
-                "csk_progressive_plan_frozen",
-                request_id,
-                **profile_fields,
-            )
-            return plan
+            return state.request_id == request_id and state.reuse_start is not None
 
     def query_reuse_readiness(
         self, ticket: str, request_id: str
@@ -604,9 +376,60 @@ class RequestManager:
                     ReuseReadiness.FALLBACK, reason="reuse_plan_missing"
                 )
             plan = self._plan_from_state(state)
+            tracker = self._performance_tracker
+            if (
+                tracker is not None
+                and tracker.enabled
+                and CorrectionStrategy(plan.correction_strategy)
+                is CorrectionStrategy.RATIO_PREFIX
+            ):
+                try:
+                    storage_bytes, elapsed_ms = (
+                        self._storage_manager.host_load_metrics(ticket)
+                    )
+                except KeyError:
+                    return ReuseReadinessResult(
+                        ReuseReadiness.FALLBACK,
+                        reason="host_load_metrics_missing",
+                    )
+                skill_tokens = plan.segment_end - plan.segment_start
+                assert plan.recompute_ratio is not None
+                ratio = plan.recompute_ratio
+                estimate = tracker.estimate(
+                    skill_tokens=skill_tokens,
+                    storage_bytes=storage_bytes,
+                    prefetch_elapsed_ms=(
+                        float("inf")
+                        if state.host_load_state is HostLoadState.READY
+                        else elapsed_ms
+                    ),
+                    strategy=CorrectionStrategy(plan.correction_strategy).value,
+                    ratio=ratio,
+                )
+                if estimate is not None:
+                    profile_event(
+                        "csk_profitability_estimate",
+                        request_id,
+                        ticket=ticket,
+                        strategy=CorrectionStrategy(
+                            plan.correction_strategy
+                        ).value,
+                        recompute_ratio=ratio,
+                        system_profile_path=str(tracker.path),
+                        t_pf_ms=estimate.t_pf_ms,
+                        t_ready_ms=estimate.t_ready_ms,
+                        t_comp_ms=estimate.t_comp_ms,
+                        t_comp_visible_ms=estimate.t_comp_visible_ms,
+                        gain_ms=estimate.gain_ms,
+                        profitable=estimate.profitable,
+                    )
+                    if not estimate.profitable:
+                        self.cancel(ticket, "reuse_not_profitable")
+                        return ReuseReadinessResult(
+                            ReuseReadiness.FALLBACK,
+                            reason="reuse_not_profitable",
+                        )
             if state.host_load_state is HostLoadState.READY:
-                return ReuseReadinessResult(ReuseReadiness.READY, plan=plan)
-            if self._layerwise_first_ready(ticket):
                 return ReuseReadinessResult(ReuseReadiness.READY, plan=plan)
             return ReuseReadinessResult(ReuseReadiness.LOADING, plan=plan)
 
@@ -632,15 +455,14 @@ class RequestManager:
                 return None
             if state.binding_state is BindingState.ACTIVE:
                 return self._plan_from_state(state)
-            layerwise = self._layerwise_first_ready(ticket)
             if state.binding_state is not BindingState.VERIFIED:
                 return None
-            if not layerwise and state.host_load_state is not HostLoadState.READY:
+            if state.host_load_state is not HostLoadState.READY:
                 return None
             try:
                 active = self._metadata_manager.activate(
                     ticket,
-                    require_complete_host_load=not layerwise,
+                    require_complete_host_load=True,
                 )
             except ValueError:
                 return None
@@ -675,11 +497,9 @@ class RequestManager:
         request_id: str,
         layer_id: int,
     ) -> object:
-        """Wait for and return one request-owned progressive Host layer."""
+        """Return one layer from the request-owned complete Host object."""
 
-        with self._lock:
-            self._require_active_request(ticket, request_id)
-        return self._storage_manager.wait_for_layer(ticket, layer_id)
+        return self.get_active_layer_buffers(ticket, request_id)[layer_id]
 
     def mark_layer_loaded(
         self, ticket: str, request_id: str, layer_id: int
@@ -697,20 +517,14 @@ class RequestManager:
         transferred_bytes: int,
         duration_ms: float,
     ) -> None:
-        """Feed one measured layer transfer into CSKCache's H2D EWMA."""
+        """Record one measured transfer for profiling consumers."""
 
-        with self._lock:
-            coordinator = self._progressive_coordinator
-            if coordinator is None:
-                return
-            try:
-                coordinator.mark_h2d_complete(
-                    ticket,
-                    transferred_bytes=transferred_bytes,
-                    duration_ms=duration_ms,
-                )
-            except KeyError:
-                return
+        profile_event(
+            "csk_h2d_complete",
+            ticket,
+            transferred_bytes=transferred_bytes,
+            duration_ms=duration_ms,
+        )
 
     def mark_layer_corrected(
         self, ticket: str, request_id: str, layer_id: int
@@ -729,10 +543,6 @@ class RequestManager:
                 state = self._storage_manager.release_host_load(ticket)
             except KeyError:
                 state = self._metadata_manager.release(ticket)
-            finally:
-                self._progressive_plans.pop(ticket, None)
-                if self._progressive_coordinator is not None:
-                    self._progressive_coordinator.release(ticket)
             return state
 
     def close(self) -> None:
@@ -743,8 +553,6 @@ class RequestManager:
                 return
             self._closed = True
         self._storage_manager.close()
-        if self._progressive_coordinator is not None:
-            self._progressive_coordinator.close()
 
     def _expire_locked(self) -> None:
         for state in self._metadata_manager.expire():
@@ -754,9 +562,6 @@ class RequestManager:
                 )
             except (KeyError, ValueError):
                 pass
-            self._progressive_plans.pop(state.ticket, None)
-            if self._progressive_coordinator is not None:
-                self._progressive_coordinator.release(state.ticket)
 
     def _require_active_request(
         self, ticket: str, request_id: str
@@ -795,82 +600,6 @@ class RequestManager:
             return False
         return True
 
-    def _layerwise_first_ready(self, ticket: str) -> bool:
-        if self._progressive_coordinator is None:
-            return False
-        try:
-            return self._storage_manager.is_layer_ready(ticket, 0)
-        except KeyError:
-            return False
-
-    def _prepare_progressive_reuse(
-        self,
-        state: RuntimeReuseState,
-        *,
-        cache_object: CacheObjectMetadata,
-        policy: ReusePolicy,
-        calibration_tokens: int,
-        block_alignment: int,
-    ) -> ReusePlan | None:
-        assert state.request_id is not None
-        assert state.segment_start is not None
-        assert state.segment_end is not None
-        decision_boundary = (
-            state.segment_start + policy.minimum_full_recompute_tokens
-        )
-        reuse_end = _round_down(state.segment_end, block_alignment)
-        reuse_start = _round_up(
-            decision_boundary + calibration_tokens,
-            block_alignment,
-        )
-        if reuse_end - reuse_start < policy.minimum_reuse_tokens:
-            self.cancel(state.ticket, "reusable_suffix_too_short")
-            return None
-        max_tokens = reuse_end - policy.minimum_reuse_tokens - decision_boundary
-        if max_tokens < reuse_start - decision_boundary:
-            self.cancel(state.ticket, "progressive_calibration_budget_missing")
-            return None
-        relative_start = reuse_start - state.segment_start
-        relative_end = reuse_end - state.segment_start
-        plan = ReusePlan(
-            ticket=state.ticket,
-            cache_object_id=state.cache_object_id,
-            request_id=state.request_id,
-            segment_start=state.segment_start,
-            segment_end=state.segment_end,
-            reuse_start=reuse_start,
-            reuse_end=reuse_end,
-            source_reuse_start=(
-                cache_object.source_position_start + relative_start
-            ),
-            source_reuse_end=cache_object.source_position_start + relative_end,
-            calibration_start=decision_boundary,
-            calibration_end=reuse_start,
-            correction_alpha=policy.correction_alpha,
-            block_alignment=block_alignment,
-            source_token_count=cache_object.token_count,
-            correction_strategy=CorrectionStrategy(policy.correction_strategy),
-            deviation_recompute_ratio=policy.deviation_recompute_ratio,
-            deviation_check_layer=policy.deviation_check_layer,
-        )
-        prepared = self._progressive_plans.get(state.ticket)
-        if prepared is not None:
-            if prepared.provisional_plan != plan:
-                return None
-            return prepared.frozen_plan or prepared.provisional_plan
-        try:
-            self._metadata_manager.set_reuse_plan(state.ticket, plan)
-        except ValueError:
-            self.cancel(state.ticket, "reuse_plan_registration_failed")
-            return None
-        self._progressive_plans[state.ticket] = _ProgressivePreparedPlan(
-            policy=policy,
-            provisional_plan=plan,
-            base_tokens=plan.calibration_end - plan.calibration_start,
-            max_tokens=max_tokens,
-        )
-        return plan
-
     @staticmethod
     def _duplicate_is_live(state: RuntimeReuseState, object_id: str) -> bool:
         return (
@@ -901,6 +630,7 @@ class RequestManager:
             state.correction_strategy,
             state.deviation_recompute_ratio,
             state.deviation_check_layer,
+            state.recompute_ratio,
             state.block_alignment,
         )
         if any(value is None for value in required):
@@ -923,11 +653,5 @@ class RequestManager:
             correction_strategy=CorrectionStrategy(state.correction_strategy),
             deviation_recompute_ratio=float(state.deviation_recompute_ratio),
             deviation_check_layer=int(state.deviation_check_layer),
+            recompute_ratio=float(state.recompute_ratio),
         )
-
-def _round_up(value: int, alignment: int) -> int:
-    return ((value + alignment - 1) // alignment) * alignment
-
-
-def _round_down(value: int, alignment: int) -> int:
-    return (value // alignment) * alignment

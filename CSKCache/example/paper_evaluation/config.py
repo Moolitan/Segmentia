@@ -36,6 +36,11 @@ SERVER_START_TIMEOUT_SECONDS = 900
 REQUEST_TIMEOUT_SECONDS = 900
 PREFETCH_TIMEOUT_SECONDS = 60
 
+# Paper Section 4.4 profitability gate. A missing table makes the first real
+# request a measurement request instead of applying an uncalibrated budget.
+PROFITABILITY_ENABLED = False
+SYSTEM_PROFILE_PATH = None
+
 
 @dataclass(frozen=True)
 class Platform:

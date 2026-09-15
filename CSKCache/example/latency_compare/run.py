@@ -56,13 +56,15 @@ def lmcache_extra_config() -> dict[str, object]:
         "csk_storage_layout": cfg.STORAGE_LAYOUT,
         "csk_host_layout": cfg.HOST_LAYOUT,
         "csk_execution_order": cfg.EXECUTION_ORDER,
-        "csk_progressive_loading": True,
         "csk_prefetch_handle_ttl_seconds": None,
-        "csk_minimum_full_recompute_tokens": cfg.MINIMUM_FULL_RECOMPUTE_TOKENS,
-        "csk_calibration_tokens": cfg.CALIBRATION_TOKENS,
+        "csk_correction_strategy": "ratio_prefix",
+        "csk_calibration_ratio": cfg.CALIBRATION_RATIO,
         "csk_minimum_reuse_tokens": cfg.MINIMUM_REUSE_TOKENS,
         "csk_correction_alpha": cfg.CORRECTION_ALPHA,
+        "csk_profitability_enabled": cfg.PROFITABILITY_ENABLED,
     }
+    if cfg.SYSTEM_PROFILE_PATH is not None:
+        result["csk_system_profile_path"] = str(cfg.SYSTEM_PROFILE_PATH)
     if cfg.STORAGE_BACKEND == "raw_block":
         catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
         containers = catalog.get("containers") or []

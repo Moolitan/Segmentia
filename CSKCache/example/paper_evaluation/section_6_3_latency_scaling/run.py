@@ -108,7 +108,6 @@ def _server_config(
         case_root=server_dir,
         chunk_tokens=local.CHUNK_TOKENS,
         correction_alpha=local.CORRECTION_ALPHA,
-        minimum_full_recompute_tokens=local.MINIMUM_FULL_RECOMPUTE_TOKENS,
         minimum_reuse_tokens=local.MINIMUM_REUSE_TOKENS,
         host_page_tokens=local.HOST_PAGE_TOKENS,
         catalog_override=catalog_view,
@@ -407,8 +406,6 @@ def main() -> None:
         expected_model_id=PLATFORMS[platform_id].model_id,
         buckets=local.LENGTH_BUCKETS,
         max_ratio=local.MAX_CALIBRATION_RATIO,
-        minimum_full_recompute_tokens=local.MINIMUM_FULL_RECOMPUTE_TOKENS,
-        block_alignment=local.VLLM_BLOCK_ALIGNMENT_TOKENS,
         minimum_reuse_tokens=local.MINIMUM_REUSE_TOKENS,
     )
     values = {
@@ -434,7 +431,6 @@ def main() -> None:
         "chunk_tokens": local.CHUNK_TOKENS,
         "host_page_tokens": local.HOST_PAGE_TOKENS,
         "vllm_block_alignment_tokens": local.VLLM_BLOCK_ALIGNMENT_TOKENS,
-        "minimum_full_recompute_tokens": local.MINIMUM_FULL_RECOMPUTE_TOKENS,
         "minimum_reuse_tokens": local.MINIMUM_REUSE_TOKENS,
         "deviation_recompute_ratio": local.DEVIATION_RECOMPUTE_RATIO,
         "deviation_check_layer": local.DEVIATION_CHECK_LAYER,

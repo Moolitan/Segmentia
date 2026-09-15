@@ -21,8 +21,6 @@ CANCEL_PREFETCH = "cskcache.cancel_prefetch"
 MARK_EXECUTION_SELECTED = "cskcache.mark_execution_selected"
 PREPARE_REUSE = "cskcache.prepare_reuse"
 QUERY_READINESS = "cskcache.query_readiness"
-QUERY_PROGRESSIVE_REQUIREMENT = "cskcache.query_progressive_requirement"
-FINALIZE_PROGRESSIVE_REUSE = "cskcache.finalize_progressive_reuse"
 ACTIVATE_REUSE = "cskcache.activate_reuse"
 RELEASE_REUSE = "cskcache.release_reuse"
 

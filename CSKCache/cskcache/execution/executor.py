@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import time
 
 import torch
 
@@ -35,12 +36,15 @@ class CSKCacheReuseExecutor:
         expected_layers: int,
         execution_order: str = "h2d_first",
         correct_value: bool = True,
+        measure_performance: bool = False,
         corrector: ContextAwareKVCorrector | None = None,
     ) -> None:
         if expected_layers <= 0:
             raise ValueError("expected_layers must be positive")
         if not isinstance(correct_value, bool):
             raise TypeError("correct_value must be a boolean")
+        if not isinstance(measure_performance, bool):
+            raise TypeError("measure_performance must be a boolean")
         try:
             parsed_order = ExecutionOrder(execution_order)
         except ValueError as exc:
@@ -51,6 +55,7 @@ class CSKCacheReuseExecutor:
         self._expected_layers = expected_layers
         self._execution_order = parsed_order.value
         self._correct_value = correct_value
+        self._measure_performance = measure_performance
         self._corrector = corrector or ContextAwareKVCorrector()
 
     @property
@@ -79,7 +84,7 @@ class CSKCacheReuseExecutor:
             raise ValueError("slot_mapping does not cover the CSKCache reuse range")
 
         profile_t0_event = None
-        if PROFILE_ENABLED:
+        if PROFILE_ENABLED or self._measure_performance:
             profile_t0_event = torch.cuda.Event(enable_timing=True)
             profile_t0_event.record()
             profile_t0_event.synchronize()
@@ -127,6 +132,15 @@ class CSKCacheReuseExecutor:
             raise RuntimeError(f"unsupported reuse execution method: {method.name}")
 
         calibration_model = self._data_plane.open_calibration_model(plan, token_ids)
+        calibration_forward_durations: list[float] = []
+
+        def compute_layer(*args, **kwargs):
+            return self._compute_correct_install_layer(
+                *args,
+                **kwargs,
+                calibration_forward_durations=calibration_forward_durations,
+            )
+
         try:
             if self._execution_order == "h2d_first":
                 compute_events = execute_h2d_first(
@@ -134,7 +148,7 @@ class CSKCacheReuseExecutor:
                     plan=plan,
                     stream=stream,
                     calibration_model=calibration_model,
-                    compute_layer=self._compute_correct_install_layer,
+                    compute_layer=compute_layer,
                     profile_t0_event=profile_t0_event,
                 )
             else:
@@ -143,7 +157,7 @@ class CSKCacheReuseExecutor:
                     plan=plan,
                     stream=stream,
                     calibration_model=calibration_model,
-                    compute_layer=self._compute_correct_install_layer,
+                    compute_layer=compute_layer,
                     profile_t0_event=profile_t0_event,
                 )
 
@@ -156,6 +170,10 @@ class CSKCacheReuseExecutor:
             stream.finish()
 
             if profile_t0_event is not None:
+                calibration_forward_durations = [
+                    events.start.elapsed_time(events.calibration_forward_end)
+                    for _layer_id, events in compute_events
+                ]
                 profile_event(
                     "cskcache_layer_compute",
                     plan.request_id,
@@ -207,6 +225,7 @@ class CSKCacheReuseExecutor:
             correction_strategy=strategy,
             method=method,
             corrected_components=self.corrected_components,
+            calibration_forward_ms=sum(calibration_forward_durations),
         )
 
     def _execute_deviation_topk(
@@ -324,6 +343,7 @@ class CSKCacheReuseExecutor:
         stream: LayerwiseReuseStream,
         calibration_model: LayerwiseCalibrationModel,
         profile_t0_event: torch.cuda.Event | None,
+        calibration_forward_durations: list[float],
     ) -> LayerComputeEvents | None:
 
         calibration_tokens = plan.calibration_end - plan.calibration_start
@@ -337,12 +357,16 @@ class CSKCacheReuseExecutor:
 
         # C_l(P): actual auxiliary-model forward against the current request
         # prefix, returning position-corrected calibration KV.
+        calibration_started_ns = time.perf_counter_ns()
         try:
             recomputed_key, recomputed_value = next(calibration_model)
         except StopIteration as exc:
             raise RuntimeError(
                 f"calibration model ended before layer {layer_id}"
             ) from exc
+        calibration_forward_durations.append(
+            (time.perf_counter_ns() - calibration_started_ns) / 1_000_000
+        )
         if events is not None:
             events[1].record()
 

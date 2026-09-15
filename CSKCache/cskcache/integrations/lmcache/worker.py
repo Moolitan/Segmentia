@@ -568,7 +568,7 @@ class _LMCacheCSKLayerStream:
                 for source in step.slices
             )
             if signature != self._slice_signature:
-                raise ValueError("progressive Host layers disagree on layout")
+                raise ValueError("Host layers disagree on layout")
         return tuple(objects[index] for index in self._transfer_indices)
 
     def submit_layer(self, layer_id: int) -> None:
@@ -688,6 +688,7 @@ class LMCacheWorkerIntegration:
         *,
         execution_order: str,
         correct_value: bool = True,
+        measure_performance: bool = False,
     ) -> None:
         self._data_plane = LMCacheCSKDataPlane(
             runtime,
@@ -699,6 +700,7 @@ class LMCacheWorkerIntegration:
             expected_layers=self._data_plane.num_layers,
             execution_order=execution_order,
             correct_value=correct_value,
+            measure_performance=measure_performance,
         )
 
     @property

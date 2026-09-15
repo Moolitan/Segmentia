@@ -18,8 +18,8 @@ SKILL_NAME = "doc-coauthoring"
 SKILL_PATH = ROOT / "skills/doc-coauthoring/SKILL.md"
 TASK_PROMPT_PATH = TASK_PROMPT_ROOT / "doc-coauthoring-retry-design-doc.txt"
 SYSTEM = SystemVariant(
-    "CSKCache", "cskcache", correction_strategy="fixed_prefix",
-    calibration_tokens=256,
+    "CSKCache", "cskcache", correction_strategy="ratio_prefix",
+    calibration_ratio=256 / SKILL_TOKENS,
 )
 HIERARCHY_MODES = (
     ("Blocking SSD", False),
@@ -31,5 +31,4 @@ REPLICAS = 3
 WARMUPS = 1
 REPETITIONS = 5
 CORRECTION_ALPHA = 0.6
-MINIMUM_FULL_RECOMPUTE_TOKENS = 32
 MINIMUM_REUSE_TOKENS = 256

@@ -36,9 +36,9 @@ def validate_config() -> None:
         raise ValueError("current LMCache execution uses a single-layer host layout")
     if cfg.EXECUTION_ORDER not in {"h2d_first", "compute_first"}:
         raise ValueError("EXECUTION_ORDER must be h2d_first or compute_first")
+    if not 0.0 < cfg.CALIBRATION_RATIO <= 1.0:
+        raise ValueError("CALIBRATION_RATIO must be in (0, 1]")
     for value, name in (
-        (cfg.MINIMUM_FULL_RECOMPUTE_TOKENS, "MINIMUM_FULL_RECOMPUTE_TOKENS"),
-        (cfg.CALIBRATION_TOKENS, "CALIBRATION_TOKENS"),
         (cfg.MINIMUM_REUSE_TOKENS, "MINIMUM_REUSE_TOKENS"),
     ):
         if value <= 0:
@@ -63,13 +63,15 @@ def lmcache_extra_config() -> dict[str, object]:
         "csk_storage_layout": cfg.STORAGE_LAYOUT,
         "csk_host_layout": cfg.HOST_LAYOUT,
         "csk_execution_order": cfg.EXECUTION_ORDER,
-        "csk_progressive_loading": True,
         "csk_prefetch_handle_ttl_seconds": None,
-        "csk_minimum_full_recompute_tokens": cfg.MINIMUM_FULL_RECOMPUTE_TOKENS,
-        "csk_calibration_tokens": cfg.CALIBRATION_TOKENS,
+        "csk_correction_strategy": "ratio_prefix",
+        "csk_calibration_ratio": cfg.CALIBRATION_RATIO,
         "csk_minimum_reuse_tokens": cfg.MINIMUM_REUSE_TOKENS,
         "csk_correction_alpha": cfg.CORRECTION_ALPHA,
+        "csk_profitability_enabled": cfg.PROFITABILITY_ENABLED,
     }
+    if cfg.SYSTEM_PROFILE_PATH is not None:
+        result["csk_system_profile_path"] = str(cfg.SYSTEM_PROFILE_PATH)
     if cfg.STORAGE_BACKEND == "raw_block":
         catalog = json.loads(metadata_path.read_text(encoding="utf-8"))
         containers = catalog.get("containers") or []
@@ -142,7 +144,9 @@ def shell_environment() -> dict[str, str]:
             if cfg.MODE == "cskcache" and cfg.STORAGE_BACKEND == "local_disk"
             else ""
         ),
-        "CSKCACHE_PROFILE": "1" if cfg.PROFILE else "0",
+        "CSKCACHE_PROFILE": (
+            "1" if cfg.PROFILE or cfg.PROFITABILITY_ENABLED else "0"
+        ),
         "CSKCACHE_FINE_TIMELINE": "1" if cfg.FINE_TIMELINE else "0",
         "CSKCACHE_DISABLE_VISUALIZER": "1" if cfg.DISABLE_VISUALIZER else "0",
     }

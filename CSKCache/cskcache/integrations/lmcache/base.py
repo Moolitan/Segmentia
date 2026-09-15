@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from ...layouts import KVLayout
 from ...runtime.base import ReusePolicy
-from ...runtime.progressive_loading import ProgressiveLoadingConfig
 
 
 @dataclass(frozen=True)
@@ -22,10 +21,6 @@ class LMCacheRuntimeSettings:
     ticket_ttl_seconds: float | None
     reuse_policy: ReusePolicy
     retain_last_host_object: bool = False
-    progressive_loading: bool = True
-    progressive_config: ProgressiveLoadingConfig = field(
-        default_factory=ProgressiveLoadingConfig
-    )
 
     def __post_init__(self) -> None:
         if not self.metadata_path:
@@ -63,5 +58,3 @@ class LMCacheRuntimeSettings:
             raise ValueError("csk_prefetch_handle_ttl_seconds must be positive")
         if not isinstance(self.retain_last_host_object, bool):
             raise ValueError("csk_retain_last_host_object must be a boolean")
-        if not isinstance(self.progressive_loading, bool):
-            raise ValueError("csk_progressive_loading must be a boolean")

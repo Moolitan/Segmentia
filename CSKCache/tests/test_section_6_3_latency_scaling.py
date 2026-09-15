@@ -197,19 +197,15 @@ def test_fixed_bucket_boundaries_are_left_closed_right_open() -> None:
         assert bucket_for_tokens(token_count, local.LENGTH_BUCKETS) == expected
 
 
-def test_reuse_eligibility_includes_full_recompute_and_worst_case_alignment():
+def test_reuse_eligibility_uses_only_the_requested_ratio():
     assert not eligible_for_all_ratios(
-        300,
+        269,
         max_ratio=0.05,
-        minimum_full_recompute_tokens=32,
-        block_alignment=16,
         minimum_reuse_tokens=256,
     )
     assert eligible_for_all_ratios(
-        498,
+        270,
         max_ratio=0.05,
-        minimum_full_recompute_tokens=32,
-        block_alignment=16,
         minimum_reuse_tokens=256,
     )
 
@@ -334,8 +330,6 @@ def test_verified_pool_loader_requires_exactly_one_workload_per_bucket(tmp_path)
         expected_model_id="Qwen3-14B",
         buckets=local.LENGTH_BUCKETS,
         max_ratio=0.05,
-        minimum_full_recompute_tokens=32,
-        block_alignment=16,
         minimum_reuse_tokens=256,
     )
     assert [item.length_bucket for item in workloads] == list(local.BUCKET_ORDER)

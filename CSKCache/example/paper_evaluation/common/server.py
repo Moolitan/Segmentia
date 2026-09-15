@@ -64,7 +64,11 @@ def base_environment(platform: Platform) -> dict[str, str]:
 
 
 def cacheblend_environment(
-    *, ratio: float, chunk_tokens: int, storage_root: Path
+    *,
+    ratio: float,
+    chunk_tokens: int,
+    storage_root: Path,
+    use_odirect: bool = False,
 ) -> dict[str, str]:
     return {
         "LMCACHE_CHUNK_SIZE": str(chunk_tokens),
@@ -77,12 +81,18 @@ def cacheblend_environment(
         "LMCACHE_LOCAL_DISK": f"file://{storage_root}",
         "LMCACHE_MAX_LOCAL_DISK_SIZE": "1000",
         "LMCACHE_MAX_LOCAL_CPU_SIZE": "5",
-        "LMCACHE_FORCE_SKIP_SAVE": "0",
+        "LMCACHE_EXTRA_CONFIG": json.dumps(
+            {"use_odirect": use_odirect, "disk_io_threads": 4},
+            separators=(",", ":"),
+        ),
     }
 
 
 def cskcache_environment(
-    extra_config: Mapping[str, Any], *, host_page_tokens: int | None = None
+    extra_config: Mapping[str, Any],
+    *,
+    host_page_tokens: int | None = None,
+    max_local_cpu_gib: float = 5.0,
 ) -> dict[str, str]:
     logical_chunk_tokens = int(extra_config["csk_chunk_size_tokens"])
     physical_page_tokens = (
@@ -94,17 +104,21 @@ def cskcache_environment(
         raise ValueError(
             "host_page_tokens must be at least csk_chunk_size_tokens"
         )
+    if max_local_cpu_gib <= 0:
+        raise ValueError("max_local_cpu_gib must be positive")
+    runtime_config = dict(extra_config)
     return {
         "LMCACHE_CHUNK_SIZE": str(physical_page_tokens),
         "LMCACHE_USE_LAYERWISE": "True",
         "LMCACHE_FORCE_SKIP_SAVE": "1",
         "LMCACHE_LOCAL_CPU": "True",
-        "LMCACHE_MAX_LOCAL_CPU_SIZE": "5",
+        "LMCACHE_MAX_LOCAL_CPU_SIZE": str(max_local_cpu_gib),
         "LMCACHE_MAX_LOCAL_DISK_SIZE": "1000",
         "VLLM_CSK_T0_PREFETCH": "1",
+        "VLLM_CSK_REQUEST_PREFETCH": "0",
         "CSKCACHE_PROFILE": "1",
         "LMCACHE_EXTRA_CONFIG": json.dumps(
-            dict(extra_config), separators=(",", ":")
+            runtime_config, separators=(",", ":")
         ),
     }
 

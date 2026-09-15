@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import config as local
@@ -134,8 +135,8 @@ def main() -> None:
             (
                 SystemVariant(
                     f"Chunk-{chunk}", "cskcache",
-                    correction_strategy="fixed_prefix",
-                    calibration_tokens=local.CALIBRATION_TOKENS,
+                    correction_strategy="ratio_prefix",
+                    calibration_ratio=local.CALIBRATION_RATIO,
                 ),
                 chunk,
                 catalogs[chunk],
@@ -164,9 +165,6 @@ def main() -> None:
                 chunk_tokens=chunk,
                 catalog_override=catalog_override,
                 correction_alpha=local.CORRECTION_ALPHA,
-                minimum_full_recompute_tokens=(
-                    local.MINIMUM_FULL_RECOMPUTE_TOKENS
-                ),
                 minimum_reuse_tokens=local.MINIMUM_REUSE_TOKENS,
             )
             with VLLMServer(server_cfg) as server:
@@ -228,7 +226,12 @@ def main() -> None:
                                     "mutation_position": position,
                                     "correction_strategy": variant.correction_strategy,
                                     "correction_budget_tokens": (
-                                        variant.calibration_tokens or ""
+                                        math.ceil(
+                                            len(source_identity.token_ids)
+                                            * variant.calibration_ratio
+                                        )
+                                        if variant.calibration_ratio is not None
+                                        else ""
                                     ),
                                     "correction_ratio": variant.cacheblend_ratio,
                                     "repetition": repetition,

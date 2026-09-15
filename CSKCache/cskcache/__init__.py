@@ -60,12 +60,14 @@ from .host_memory.base import (
 )
 from .runtime.request_manager import RequestManager
 from .runtime.coordinator import SchedulerReuseCoordinator
-from .runtime.progressive_loading import (
-    ProgressiveLoadCoordinator,
-    ProgressiveLoadingConfig,
-    ProgressiveLoadSnapshot,
-)
 from .runtime.transport import PlanTransportCoordinator
+from .runtime.system_profile import (
+    ProfitabilityEstimate,
+    SystemPerformanceProfile,
+    SystemPerformanceTracker,
+    deployment_fingerprint,
+    resolve_system_profile_path,
+)
 from .execution.base import (
     CalibrationResidualCorrectionMethod,
     DeviationTopKLayerResult,
@@ -181,10 +183,12 @@ __all__ = [
     "SkillMatchMode",
     "RequestManager",
     "SchedulerReuseCoordinator",
-    "ProgressiveLoadCoordinator",
-    "ProgressiveLoadingConfig",
-    "ProgressiveLoadSnapshot",
     "PlanTransportCoordinator",
+    "ProfitabilityEstimate",
+    "SystemPerformanceProfile",
+    "SystemPerformanceTracker",
+    "deployment_fingerprint",
+    "resolve_system_profile_path",
     "VerifiedRequestBinding",
     "StorageManager",
     "StorageTransfer",

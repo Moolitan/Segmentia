@@ -56,7 +56,6 @@ class CalibrationResidualCorrectionMethod(ExecutionMethod):
     """Recompute a contiguous calibration prefix and compensate cached keys."""
 
     SUPPORTED_STRATEGIES: ClassVar[tuple[CorrectionStrategy, ...]] = (
-        CorrectionStrategy.FIXED_PREFIX,
         CorrectionStrategy.RATIO_PREFIX,
     )
 
@@ -82,9 +81,6 @@ class DeviationTopKRecomputeMethod(ExecutionMethod):
 
 NORMAL_PREFILL_METHOD = NormalPrefillMethod()
 DIRECT_REUSE_METHOD = DirectReuseMethod()
-FIXED_PREFIX_RESIDUAL_METHOD = CalibrationResidualCorrectionMethod(
-    CorrectionStrategy.FIXED_PREFIX
-)
 RATIO_PREFIX_RESIDUAL_METHOD = CalibrationResidualCorrectionMethod(
     CorrectionStrategy.RATIO_PREFIX
 )
@@ -99,7 +95,6 @@ def execution_method_for(
     parsed = CorrectionStrategy(strategy)
     methods = {
         CorrectionStrategy.DIRECT: DIRECT_REUSE_METHOD,
-        CorrectionStrategy.FIXED_PREFIX: FIXED_PREFIX_RESIDUAL_METHOD,
         CorrectionStrategy.RATIO_PREFIX: RATIO_PREFIX_RESIDUAL_METHOD,
         CorrectionStrategy.DEVIATION_TOPK: DEVIATION_TOPK_METHOD,
     }
@@ -211,10 +206,11 @@ class ReuseExecutionResult:
     request_id: str
     processed_layers: int
     correction_alpha: float
-    correction_strategy: CorrectionStrategy = CorrectionStrategy.FIXED_PREFIX
-    method: ExecutionMethod = FIXED_PREFIX_RESIDUAL_METHOD
+    correction_strategy: CorrectionStrategy = CorrectionStrategy.RATIO_PREFIX
+    method: ExecutionMethod = RATIO_PREFIX_RESIDUAL_METHOD
     # "kv", "k", or "" when the path applies no residual compensation.
     corrected_components: str = ""
+    calibration_forward_ms: float = 0.0
 
 
 @dataclass(frozen=True)

@@ -13,8 +13,10 @@ from typing import Any, Mapping, Sequence
 from paper_evaluation.config import (
     API_KEY,
     PREFETCH_TIMEOUT_SECONDS,
+    PROFITABILITY_ENABLED,
     RAW_POOL_ROOT,
     REQUEST_TIMEOUT_SECONDS,
+    SYSTEM_PROFILE_PATH,
     Platform,
 )
 from .csk_config import build_extra_config
@@ -26,7 +28,7 @@ from .server import (
     cacheblend_environment,
     cskcache_environment,
 )
-from .workloads import BLEND_SEPARATOR, skill_tool, target_messages
+from .workloads import skill_tool, target_messages
 
 
 TIMELINE_REQUEST_MARKER = "cskcache-latency-"
@@ -43,9 +45,13 @@ class SystemVariant:
     name: str
     family: str
     correction_strategy: str = ""
-    calibration_tokens: int = 0
     calibration_ratio: float | None = None
     cacheblend_ratio: float | None = None
+    cacheblend_use_odirect: bool = False
+    # Ablation knobs. ``correction_alpha`` overrides the subsection default
+    # when set; ``correct_value`` False selects the Key-only arm.
+    correction_alpha: float | None = None
+    correct_value: bool = True
 
 
 @dataclass(frozen=True)
@@ -79,13 +85,13 @@ def make_server_config(
     host_layout: str = "packed_chunks_single_layer",
     execution_order: str = "h2d_first",
     correction_alpha: float = 0.6,
-    minimum_full_recompute_tokens: int = 32,
     minimum_reuse_tokens: int = 256,
     backend: str = "raw_block",
     io_engine: str = "io_uring",
     use_odirect: bool = True,
     catalog_override: Path | None = None,
     host_page_tokens: int | None = None,
+    max_local_cpu_gib: float = 5.0,
     raw_slot_bytes: int = 128 * 1024**2,
     raw_metadata_bytes: int = 64 * 1024**2,
 ) -> ServerConfig:
@@ -114,15 +120,20 @@ def make_server_config(
             log_path=log,
             trace_path=trace,
             extra_env=cacheblend_environment(
-                ratio=variant.cacheblend_ratio,
-                chunk_tokens=chunk_tokens,
-                storage_root=storage_root,
-            ),
+            ratio=variant.cacheblend_ratio,
+            chunk_tokens=chunk_tokens,
+            storage_root=storage_root,
+            use_odirect=variant.cacheblend_use_odirect,
+        ),
             connector=CACHEBLEND_CONNECTOR,
             enable_prefix_caching=False,
         )
     if variant.family != "cskcache":
         raise ValueError(f"unsupported system family: {variant.family}")
+    if variant.correction_strategy == "ratio_prefix" and (
+        variant.calibration_ratio is None
+    ):
+        raise ValueError("prefix correction requires an explicit ratio")
     extra = build_extra_config(
         pool_root=RAW_POOL_ROOT,
         model_id=platform.model_id,
@@ -132,19 +143,31 @@ def make_server_config(
         host_layout=host_layout,
         execution_order=execution_order,
         correction_strategy=variant.correction_strategy,
-        calibration_tokens=variant.calibration_tokens,
-        calibration_ratio=variant.calibration_ratio,
-        correction_alpha=correction_alpha,
-        minimum_full_recompute_tokens=minimum_full_recompute_tokens,
+        calibration_ratio=(variant.calibration_ratio or 0.05),
+        correction_alpha=(
+            correction_alpha
+            if variant.correction_alpha is None
+            else variant.correction_alpha
+        ),
+        correct_value=variant.correct_value,
         minimum_reuse_tokens=minimum_reuse_tokens,
+        profitability_enabled=PROFITABILITY_ENABLED,
+        system_profile_path=SYSTEM_PROFILE_PATH,
         io_engine=io_engine,
         use_odirect=use_odirect,
         catalog_override=catalog_override,
         raw_slot_bytes=raw_slot_bytes,
         raw_metadata_bytes=raw_metadata_bytes,
     )
+    if variant.correction_strategy == "deviation_topk":
+        if variant.cacheblend_ratio is None:
+            raise ValueError("deviation_topk variant requires cacheblend_ratio")
+        extra["csk_deviation_recompute_ratio"] = variant.cacheblend_ratio
+        extra["csk_deviation_check_layer"] = 1
     environment = cskcache_environment(
-        extra, host_page_tokens=host_page_tokens
+        extra,
+        host_page_tokens=host_page_tokens,
+        max_local_cpu_gib=max_local_cpu_gib,
     )
     environment["CSKCACHE_PROFILE_TRACE_PATH"] = str(
         case_root / "cskcache_profile.jsonl"
@@ -339,7 +362,7 @@ def prepare_request_pair(
             skill_text=(
                 skill_text if source_skill_text is None else source_skill_text
             ),
-            task_prompt=f"Cache this source context.\n{BLEND_SEPARATOR}",
+            task_prompt="Cache this source context.",
             tool_call_id=tool_call_id,
         )
         nonstream_chat(
@@ -422,6 +445,54 @@ def execute_prepared_request(
         tool_call_id=prepared.tool_call_id,
         fallback=fallback,
         fallback_reason=reason,
+    )
+
+
+def execute_message_request(
+    server,
+    *,
+    messages: Sequence[Mapping[str, Any]],
+    case_id: str,
+    max_tokens: int,
+    tools: Sequence[Mapping[str, Any]] | None = None,
+    enable_thinking: bool = False,
+) -> RequestResult:
+    """Measure one chat request built from explicit messages.
+
+    Prompt-layout baselines assemble their own messages instead of the
+    Skill-tool structure of :func:`run_request_pair`, but must be timed
+    through the same server-side timeline boundary.
+    """
+
+    client_request_id = _benchmark_request_id(case_id)
+    payload: dict[str, Any] = {
+        "model": server.config.platform.served_model,
+        "request_id": client_request_id,
+        "messages": list(messages),
+        "temperature": 0,
+        "max_tokens": max_tokens,
+        "chat_template_kwargs": {"enable_thinking": enable_thinking},
+    }
+    if tools is not None:
+        payload["tools"] = list(tools)
+        payload["tool_choice"] = "none"
+    completion = nonstream_chat(
+        server.base_url,
+        api_key=API_KEY,
+        payload=payload,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    ttft_ms, prompt_tokens, cached_tokens = _timeline_ttft(
+        server.config.trace_path, f"chatcmpl-{client_request_id}"
+    )
+    return RequestResult(
+        completion=completion,
+        server_ttft_ms=ttft_ms,
+        prompt_tokens=prompt_tokens,
+        cached_tokens=cached_tokens,
+        tool_call_id="",
+        fallback=False,
+        fallback_reason="",
     )
 
 

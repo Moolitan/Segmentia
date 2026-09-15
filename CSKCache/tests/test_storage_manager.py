@@ -21,7 +21,6 @@ from cskcache import (
     StorageManager,
     generation_sidecar_path,
     publish_generation_sidecar,
-    ProgressiveLoadCoordinator,
 )
 
 
@@ -84,27 +83,6 @@ class BlockingExtentBackend(FileExtentBackend):
         self.started.set()
         if not self.allow_completion.wait(timeout=5):
             raise TimeoutError("test did not release the physical read")
-        return super().read_extents_into(offsets, lengths, objs)
-
-
-class ProgressiveExtentBackend(FileExtentBackend):
-    """Complete layer zero while holding every later layer read."""
-
-    def __init__(self, container: ContainerMetadata) -> None:
-        super().__init__(container)
-        self.later_started = threading.Event()
-        self.allow_later = threading.Event()
-
-    def read_extents_into(
-        self,
-        offsets: Sequence[int],
-        lengths: Sequence[int],
-        objs: Sequence[Any],
-    ) -> list[bool]:
-        if offsets[0] != self.header_bytes:
-            self.later_started.set()
-            if not self.allow_later.wait(timeout=5):
-                raise TimeoutError("test did not release later layer reads")
         return super().read_extents_into(offsets, lengths, objs)
 
 
@@ -524,48 +502,6 @@ def test_submit_returns_while_one_40_layer_read_is_pending(tmp_path: Path) -> No
     assert released.binding_state is BindingState.RELEASED
     assert pool.release_calls == 1
     storage.close()
-
-
-def test_progressive_load_publishes_layer_before_complete_object(
-    tmp_path: Path,
-) -> None:
-    metadata, container, payloads = prepare_manager(tmp_path)
-    metadata.create_ticket("call-progressive", "internal-comms:v1:qwen3-14b")
-    backend = ProgressiveExtentBackend(container)
-    pool = RecordingHostBufferPool()
-    coordinator = ProgressiveLoadCoordinator()
-    storage = StorageManager(
-        metadata,
-        backend,
-        host_buffer_pool=pool,
-        max_inflight_loads=4,
-        progressive_loading=True,
-        progress_observer=coordinator,
-    )
-    try:
-        submitted = storage.submit_host_load(
-            "call-progressive", "internal-comms:v1:qwen3-14b"
-        )
-        assert submitted.host_load_state is HostLoadState.LOADING
-        layer_zero = storage.wait_for_layer(
-            "call-progressive", 0, timeout=1
-        )
-        assert bytes(layer_zero.byte_array) == payloads[0]
-        assert storage.poll_host_load("call-progressive") is HostLoadState.LOADING
-        assert backend.later_started.wait(timeout=1)
-        snapshot = coordinator.snapshot("call-progressive")
-        assert snapshot.host_ready_prefix == 1
-        assert snapshot.completed_ssd_bytes == len(payloads[0])
-
-        backend.allow_later.set()
-        wait_for_host_state(storage, "call-progressive", HostLoadState.READY)
-        assert coordinator.snapshot("call-progressive").host_ready_prefix == 40
-        assert backend.read_calls == 40
-        storage.release_host_load("call-progressive")
-    finally:
-        backend.allow_later.set()
-        storage.close()
-        coordinator.close()
 
 
 def test_same_object_tickets_load_and_release_independent_buffers(

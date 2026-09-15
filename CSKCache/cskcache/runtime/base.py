@@ -65,7 +65,6 @@ class CorrectionStrategy(str, Enum):
     """Online contextualization policy for one authenticated Skill span."""
 
     DIRECT = "direct"
-    FIXED_PREFIX = "fixed_prefix"
     RATIO_PREFIX = "ratio_prefix"
     DEVIATION_TOPK = "deviation_topk"
 
@@ -79,14 +78,12 @@ class ReusePolicy:
     is prepared for scheduling.
     """
 
-    minimum_full_recompute_tokens: int = 32
-    calibration_tokens: int = 32
-    calibration_ratio: float | None = None
+    calibration_ratio: float = 0.05
     deviation_recompute_ratio: float = 0.15
     deviation_check_layer: int = 1
     minimum_reuse_tokens: int = 256
     correction_alpha: float = 0.6
-    correction_strategy: CorrectionStrategy = CorrectionStrategy.FIXED_PREFIX
+    correction_strategy: CorrectionStrategy = CorrectionStrategy.RATIO_PREFIX
 
     def __post_init__(self) -> None:
         self.validate()
@@ -98,17 +95,12 @@ class ReusePolicy:
             raise ValueError(
                 f"unsupported correction_strategy: {self.correction_strategy}"
             ) from exc
-        if self.minimum_full_recompute_tokens <= 0:
-            raise ValueError("minimum_full_recompute_tokens must be > 0")
-        if strategy is CorrectionStrategy.FIXED_PREFIX and self.calibration_tokens <= 0:
-            raise ValueError("calibration_tokens must be > 0")
         if strategy is CorrectionStrategy.RATIO_PREFIX and (
-            self.calibration_ratio is None
-            or isinstance(self.calibration_ratio, bool)
+            isinstance(self.calibration_ratio, bool)
             or not 0.0 < self.calibration_ratio <= 1.0
         ):
             raise ValueError(
-                "ratio_prefix requires calibration_ratio in (0, 1]"
+                "prefix correction requires calibration_ratio in (0, 1]"
             )
         if strategy is CorrectionStrategy.DEVIATION_TOPK and (
             isinstance(self.deviation_recompute_ratio, bool)
@@ -140,10 +132,7 @@ class ReusePolicy:
             CorrectionStrategy.DEVIATION_TOPK,
         ):
             return 0
-        if strategy is CorrectionStrategy.FIXED_PREFIX:
-            return self.calibration_tokens
-        assert self.calibration_ratio is not None
-        return max(1, math.ceil(authenticated_tokens * self.calibration_ratio))
+        return math.ceil(authenticated_tokens * self.calibration_ratio)
 
 
 @dataclass(frozen=True)
@@ -169,9 +158,10 @@ class ReusePlan:
     correction_alpha: float
     block_alignment: int
     source_token_count: int | None = None
-    correction_strategy: CorrectionStrategy = CorrectionStrategy.FIXED_PREFIX
+    correction_strategy: CorrectionStrategy = CorrectionStrategy.RATIO_PREFIX
     deviation_recompute_ratio: float = 0.15
     deviation_check_layer: int = 1
+    recompute_ratio: float | None = None
 
     def __post_init__(self) -> None:
         """Validate once when the immutable execution plan is constructed."""
@@ -181,6 +171,14 @@ class ReusePlan:
                 self,
                 "source_token_count",
                 self.segment_end - self.segment_start,
+            )
+        if self.recompute_ratio is None:
+            segment_tokens = self.segment_end - self.segment_start
+            calibration_tokens = self.calibration_end - self.calibration_start
+            object.__setattr__(
+                self,
+                "recompute_ratio",
+                0.0 if segment_tokens <= 0 else calibration_tokens / segment_tokens,
             )
         self.validate()
 
@@ -236,7 +234,7 @@ class ReusePlan:
             )
         values["source_token_count"] = source_token_count
         strategy = payload.get(
-            "correction_strategy", CorrectionStrategy.FIXED_PREFIX.value
+            "correction_strategy", CorrectionStrategy.RATIO_PREFIX.value
         )
         if not isinstance(strategy, str):
             raise ValueError(
@@ -260,6 +258,15 @@ class ReusePlan:
                 "CSKCache reuse plan requires integer deviation_check_layer"
             )
         values["deviation_check_layer"] = check_layer
+        recompute_ratio = payload.get("recompute_ratio")
+        if recompute_ratio is not None and (
+            isinstance(recompute_ratio, bool)
+            or not isinstance(recompute_ratio, (int, float))
+        ):
+            raise ValueError("CSKCache reuse plan requires numeric recompute_ratio")
+        values["recompute_ratio"] = (
+            None if recompute_ratio is None else float(recompute_ratio)
+        )
         return cls(**values)  # type: ignore[arg-type]
 
     @property
@@ -329,13 +336,10 @@ class ReusePlan:
             raise ValueError("CSKCache source and target reuse lengths differ")
         if self.block_alignment <= 0:
             raise ValueError("CSKCache block alignment must be positive")
-        if (
-            self.reuse_start % self.block_alignment
-            or self.reuse_end % self.block_alignment
-        ):
-            raise ValueError("CSKCache reuse range must be block aligned")
         if not 0.0 <= self.correction_alpha <= 1.0:
             raise ValueError("CSKCache correction alpha must be in [0, 1]")
+        if self.recompute_ratio is None or not 0.0 <= self.recompute_ratio <= 1.0:
+            raise ValueError("CSKCache recompute ratio must be in [0, 1]")
 
     def to_dict(self) -> dict[str, str | int | float]:
         return {
@@ -358,6 +362,7 @@ class ReusePlan:
             ).value,
             "deviation_recompute_ratio": self.deviation_recompute_ratio,
             "deviation_check_layer": self.deviation_check_layer,
+            "recompute_ratio": self.recompute_ratio,
         }
 
     def failure(self, reason: str) -> "ReuseFailure":
@@ -366,7 +371,9 @@ class ReusePlan:
         return ReuseFailure(
             ticket=self.ticket,
             request_id=self.request_id,
-            token_start=self.calibration_start,
+            token_start=(
+                self.calibration_start // self.block_alignment
+            ) * self.block_alignment,
             token_end=self.reuse_end,
             reason=reason,
         )
@@ -514,6 +521,7 @@ class RuntimeReuseState:
     correction_strategy: CorrectionStrategy | None = None
     deviation_recompute_ratio: float | None = None
     deviation_check_layer: int | None = None
+    recompute_ratio: float | None = None
     block_alignment: int | None = None
     io_operation_id: str | None = None
     loaded_through_layer: int = -1

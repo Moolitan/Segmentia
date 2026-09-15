@@ -359,18 +359,16 @@ def test_csk_t0_initialization_resolves_raw_block_plugin_key(monkeypatch) -> Non
             storage_backend,
             local_disk_backend,
             host_buffer_pool,
-            max_inflight_loads,
-            retain_last_host_object,
-            progressive_loading,
-            progress_observer,
+                max_inflight_loads,
+                retain_last_host_object,
+                performance_tracker,
         ):
             captured["raw_backend"] = backend
             captured["storage_backend"] = storage_backend
             captured["local_disk_backend"] = local_disk_backend
             captured["max_inflight_loads"] = max_inflight_loads
             captured["retain_last_host_object"] = retain_last_host_object
-            captured["progressive_loading"] = progressive_loading
-            captured["progress_observer"] = progress_observer
+            captured["performance_tracker"] = performance_tracker
 
     class FakeRequestManager:
         def __init__(self, *_args, **kwargs):

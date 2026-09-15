@@ -1,4 +1,4 @@
-"""CSKCache-owned fan-out control over LMCache's opaque RPC transport."""
+"""Rank-wise readiness collection over LMCache's opaque RPC transport."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ logger = init_logger(__name__)
 
 
 class CSKCacheRankControlClient:
-    """Collect one opaque CSKCache control result from every worker rank."""
+    """Return rank-local readiness without requiring byte-identical replies."""
 
     def __init__(self, transport: Any) -> None:
         self._transport = transport
@@ -30,31 +30,20 @@ class CSKCacheRankControlClient:
     def from_lmcache(
         cls, config: Any, metadata: Any
     ) -> "CSKCacheRankControlClient":
-        """Open a CSKCache-owned connection to every LMCache lookup server."""
-
         if metadata is None or metadata.engine_id is None:
             raise ValueError("LMCache metadata is unavailable for rank control")
         lookup_ids = config.get_lookup_server_worker_ids(
             metadata.use_mla, metadata.world_size
         )
-        ranks = (
-            list(lookup_ids)
-            if lookup_ids
-            else list(range(metadata.world_size))
-        )
+        ranks = list(lookup_ids) if lookup_ids else list(range(metadata.world_size))
         if ranks != list(range(metadata.world_size)):
-            raise ValueError(
-                "progressive loading requires one lookup server per worker rank"
-            )
+            raise ValueError("CSKCache requires one lookup server per worker rank")
         kv_extra = metadata.kv_connector_extra_config or {}
         rpc_port = kv_extra.get("lmcache_rpc_port", 0)
         sockets = [
             SocketParams(
                 socket_path=get_zmq_rpc_path_lmcache(
-                    metadata.engine_id,
-                    "lookup",
-                    rpc_port,
-                    rank,
+                    metadata.engine_id, "lookup", rpc_port, rank
                 ),
                 rank=rank,
             )
@@ -68,12 +57,8 @@ class CSKCacheRankControlClient:
         )
 
     def execute_all(
-        self,
-        command: str,
-        payload: Mapping[str, Any],
+        self, command: str, payload: Mapping[str, Any]
     ) -> list[Any]:
-        """Return rank-local JSON results without imposing equality."""
-
         payload_json = json.dumps(
             dict(payload), sort_keys=True, separators=(",", ":")
         )
@@ -84,10 +69,7 @@ class CSKCacheRankControlClient:
                 )
             if len(responses) != self._transport.world_size:
                 return []
-            return [
-                json.loads(response.decode("utf-8"))
-                for response in responses
-            ]
+            return [json.loads(response.decode("utf-8")) for response in responses]
         except Exception:
             logger.exception("CSKCache rank control failed: %s", command)
             return []

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import config as local
@@ -70,9 +71,6 @@ def main() -> None:
                 case_root=server_root,
                 chunk_tokens=local.CHUNK_TOKENS,
                 correction_alpha=local.CORRECTION_ALPHA,
-                minimum_full_recompute_tokens=(
-                    local.MINIMUM_FULL_RECOMPUTE_TOKENS
-                ),
                 minimum_reuse_tokens=local.MINIMUM_REUSE_TOKENS,
             )
             with VLLMServer(server_cfg) as server:
@@ -122,8 +120,8 @@ def main() -> None:
                                 encoding="utf-8",
                             )
                             budget = (
-                                variant.calibration_tokens
-                                if variant.calibration_tokens
+                                math.ceil(skill_tokens * variant.calibration_ratio)
+                                if variant.calibration_ratio is not None
                                 else ""
                             )
                             row = {

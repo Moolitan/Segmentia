@@ -41,11 +41,12 @@ def build_extra_config(
     host_layout: str,
     execution_order: str,
     correction_strategy: str,
-    calibration_tokens: int,
-    calibration_ratio: float | None,
+    calibration_ratio: float,
     correction_alpha: float,
-    minimum_full_recompute_tokens: int,
     minimum_reuse_tokens: int,
+    profitability_enabled: bool,
+    system_profile_path: Path | None = None,
+    correct_value: bool = True,
     io_engine: str = "io_uring",
     use_odirect: bool = True,
     queue_depth: int = 64,
@@ -66,14 +67,16 @@ def build_extra_config(
         "csk_storage_layout": storage_layout,
         "csk_host_layout": host_layout,
         "csk_execution_order": execution_order,
-        "csk_prefetch_handle_ttl_seconds": 60.0,
+        "csk_prefetch_handle_ttl_seconds": None,
         "csk_correction_strategy": correction_strategy,
-        "csk_minimum_full_recompute_tokens": minimum_full_recompute_tokens,
-        "csk_calibration_tokens": calibration_tokens,
         "csk_calibration_ratio": calibration_ratio,
         "csk_minimum_reuse_tokens": minimum_reuse_tokens,
         "csk_correction_alpha": correction_alpha,
+        "csk_correct_value": correct_value,
+        "csk_profitability_enabled": profitability_enabled,
     }
+    if system_profile_path is not None:
+        result["csk_system_profile_path"] = str(system_profile_path)
     if backend == "local_disk":
         return result
     if backend != "raw_block":

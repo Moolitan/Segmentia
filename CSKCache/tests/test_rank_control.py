@@ -17,25 +17,25 @@ class _FakeTransport:
     def send_and_recv_all(self, frames):
         self.frames = frames
         return [
-            json.dumps({"rank": 0, "tokens": 16}).encode(),
-            json.dumps({"rank": 1, "tokens": 24}).encode(),
+            json.dumps({"status": "ready", "rank": 0}).encode(),
+            json.dumps({"status": "loading", "rank": 1}).encode(),
         ]
 
     def close(self) -> None:
         self.closed = True
 
 
-def test_cskcache_rank_control_preserves_rank_local_results() -> None:
+def test_cskcache_rank_control_preserves_rank_local_readiness() -> None:
     transport = _FakeTransport()
     client = CSKCacheRankControlClient(transport)
 
-    assert client.execute_all("cskcache.requirement", {"ticket": "call-1"}) == [
-        {"rank": 0, "tokens": 16},
-        {"rank": 1, "tokens": 24},
+    assert client.execute_all("cskcache.query_readiness", {"ticket": "call-1"}) == [
+        {"status": "ready", "rank": 0},
+        {"status": "loading", "rank": 1},
     ]
     assert transport.frames == [
         "external_control",
-        "cskcache.requirement",
+        "cskcache.query_readiness",
         '{"ticket":"call-1"}',
     ]
 
@@ -48,4 +48,4 @@ def test_cskcache_rank_control_fails_closed_on_partial_response() -> None:
     transport.send_and_recv_all = lambda _frames: [b"null"]
     client = CSKCacheRankControlClient(transport)
 
-    assert client.execute_all("cskcache.requirement", {}) == []
+    assert client.execute_all("cskcache.query_readiness", {}) == []

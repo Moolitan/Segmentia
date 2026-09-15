@@ -22,10 +22,9 @@ from cskcache import (
     RequestManager,
     SkillMatchMode,
     StorageManager,
+    SystemPerformanceTracker,
     fingerprint_full_token_chunks,
     publish_generation_sidecar,
-    ProgressiveLoadCoordinator,
-    ProgressiveLoadingConfig,
 )
 
 
@@ -99,8 +98,7 @@ def build_runtime(
     ttl_seconds: float | None = 60.0,
     skill_tokens: Sequence[int] = SKILL_TOKENS,
     chunk_size_tokens: int = 256,
-    progressive_loading: bool = False,
-    defer_host_load_until_execution: bool = False,
+    profitability_enabled: bool = False,
 ):
     raw_path = tmp_path / "skill.raw"
     raw_path.write_bytes(b"\0" * 16384)
@@ -150,17 +148,17 @@ def build_runtime(
     metadata.publish_object(cache_object)
     backend = BlockingBackend(container)
     pool = RecordingPool()
-    coordinator = (
-        ProgressiveLoadCoordinator(ProgressiveLoadingConfig())
-        if progressive_loading
-        else None
+    tracker = SystemPerformanceTracker(
+        enabled=profitability_enabled,
+        environment={"deployment": "test"},
+        metadata_path=tmp_path / "metadata.json",
+        explicit_path=tmp_path / "system-profile.json",
     )
     storage = StorageManager(
         metadata,
         backend,
         host_buffer_pool=pool,
-        progressive_loading=progressive_loading,
-        progress_observer=coordinator,
+        performance_tracker=tracker,
     )
     requests = RequestManager(
         metadata,
@@ -168,8 +166,7 @@ def build_runtime(
         model_fingerprint="model-a",
         tokenizer_fingerprint="tokenizer-a",
         ticket_ttl_seconds=ttl_seconds,
-        progressive_coordinator=coordinator,
-        defer_host_load_until_execution=defer_host_load_until_execution,
+        performance_tracker=tracker,
     )
     return metadata, backend, pool, storage, requests
 
@@ -207,60 +204,6 @@ def test_select_is_nonblocking_and_duplicate_is_idempotent(tmp_path: Path) -> No
             time.sleep(0.005)
         requests.release("call-1")
         assert pool.acquire_calls == pool.release_calls == 1
-    finally:
-        backend.complete.set()
-        requests.close()
-
-
-def test_execution_trigger_defers_io_and_starts_one_layerwise_load(
-    tmp_path: Path,
-) -> None:
-    skill_tokens = tuple(range(1000, 2024))
-    metadata, backend, _pool, _storage, requests = build_runtime(
-        tmp_path,
-        ttl_seconds=None,
-        skill_tokens=skill_tokens,
-        progressive_loading=True,
-        defer_host_load_until_execution=True,
-    )
-    try:
-        assert requests.select_skill("call-1", "internal-comms")
-        assert requests.select_skill("call-1", "internal-comms")
-        assert not backend.started.wait(timeout=0.05)
-        assert backend.read_calls == 0
-        assert metadata.get_runtime("call-1").host_load_state is HostLoadState.NOT_STARTED
-
-        bind_verified_request(requests, skill_tokens=skill_tokens)
-        plan = requests.prepare_reuse(
-            "call-1",
-            "request-1",
-            block_alignment=16,
-            policy=ReusePolicy(
-                correction_strategy=CorrectionStrategy.DEVIATION_TOPK,
-                deviation_recompute_ratio=0.15,
-                deviation_check_layer=1,
-            ),
-        )
-        assert plan is not None
-        assert not requests.mark_execution_selected("call-1", "wrong-request")
-        assert backend.read_calls == 0
-        assert requests.mark_execution_selected("call-1", "request-1")
-        assert backend.started.wait(timeout=5)
-        assert requests.mark_execution_selected("call-1", "request-1")
-
-        backend.complete.set()
-        deadline = time.monotonic() + 5
-        while True:
-            requirement = requests.query_progressive_requirement(
-                "call-1", "request-1"
-            )
-            if requirement["status"] == "ready":
-                break
-            assert time.monotonic() < deadline
-            time.sleep(0.005)
-        assert requirement["mode"] == "static_layerwise"
-        assert requirement["plan"] == plan.to_dict()
-        assert requests.activate_reuse("call-1", "request-1") == plan
     finally:
         backend.complete.set()
         requests.close()
@@ -505,8 +448,8 @@ def test_binding_reuses_only_longest_unchanged_chunk_prefix(
         assert plan is not None
         assert plan.source_object_token_count == len(skill_tokens)
         assert (plan.segment_start, plan.segment_end) == (13, 397)
-        assert (plan.reuse_start, plan.reuse_end) == (80, 384)
-        assert (plan.source_reuse_start, plan.source_reuse_end) == (67, 371)
+        assert (plan.reuse_start, plan.reuse_end) == (33, 397)
+        assert (plan.source_reuse_start, plan.source_reuse_end) == (20, 384)
     finally:
         backend.complete.set()
         requests.close()
@@ -623,7 +566,7 @@ def test_wrong_skill_and_wrong_prompt_tokens_fail_closed(tmp_path: Path) -> None
         requests.close()
 
 
-def test_prepare_reuse_aligns_online_and_source_ranges(tmp_path: Path) -> None:
+def test_prepare_reuse_keeps_exact_non_aligned_token_ranges(tmp_path: Path) -> None:
     skill_tokens = tuple(range(1000, 2024))
     metadata, backend, _pool, _storage, requests = build_runtime(
         tmp_path, skill_tokens=skill_tokens
@@ -641,14 +584,15 @@ def test_prepare_reuse_aligns_online_and_source_ranges(tmp_path: Path) -> None:
 
         assert plan is not None
         assert (plan.segment_start, plan.segment_end) == (13, 1037)
-        assert (plan.reuse_start, plan.reuse_end) == (80, 1024)
-        assert (plan.source_reuse_start, plan.source_reuse_end) == (67, 1011)
-        assert (plan.calibration_start, plan.calibration_end) == (48, 80)
-        assert plan.calibration_start - plan.segment_start >= 32
+        assert (plan.reuse_start, plan.reuse_end) == (65, 1037)
+        assert (plan.source_reuse_start, plan.source_reuse_end) == (52, 1024)
+        assert (plan.calibration_start, plan.calibration_end) == (13, 65)
+        assert plan.reuse_start % plan.block_alignment != 0
+        assert plan.reuse_end % plan.block_alignment != 0
         assert plan.correction_alpha == 0.6
         state = metadata.get_runtime("call-1")
-        assert state.reuse_start == 80
-        assert state.reuse_end == 1024
+        assert state.reuse_start == 65
+        assert state.reuse_end == 1037
         assert requests.prepare_reuse(
             "call-1", "request-1", block_alignment=16
         ) == plan
@@ -720,82 +664,6 @@ def test_prepare_reuse_resolves_ratio_and_direct_strategies(tmp_path: Path) -> N
     assert deviation.deviation_check_layer == 1
 
 
-def test_progressive_plan_waits_for_all_host_layers_and_keeps_base_budget(
-    tmp_path: Path,
-) -> None:
-    skill_tokens = tuple(range(1000, 2024))
-    metadata, backend, _pool, storage, legacy_requests = build_runtime(
-        tmp_path, skill_tokens=skill_tokens
-    )
-    coordinator = ProgressiveLoadCoordinator(
-        ProgressiveLoadingConfig(
-            ssd_bandwidth_bytes_per_ms=1_000.0,
-            h2d_bandwidth_bytes_per_ms=1_000.0,
-        )
-    )
-    requests = RequestManager(
-        metadata,
-        storage,
-        model_fingerprint="model-a",
-        tokenizer_fingerprint="tokenizer-a",
-        ticket_ttl_seconds=None,
-        progressive_coordinator=coordinator,
-    )
-    try:
-        assert requests.select_skill("call-1", "internal-comms")
-        assert backend.started.wait(timeout=5)
-        coordinator.register("call-1", (1_000_000_000, 1_000_000_000))
-        bind_verified_request(requests, skill_tokens=skill_tokens)
-        provisional = requests.prepare_reuse(
-            "call-1",
-            "request-1",
-            block_alignment=16,
-            policy=ReusePolicy(
-                correction_strategy=CorrectionStrategy.RATIO_PREFIX,
-                calibration_ratio=0.05,
-                minimum_reuse_tokens=256,
-            ),
-        )
-        assert provisional is not None
-        assert provisional.calibration_start == 32
-        assert provisional.calibration_end == provisional.reuse_start
-
-        assert requests.mark_execution_selected("call-1", "request-1")
-        coordinator.mark_host_ready("call-1", 0)
-        loading = requests.query_progressive_requirement(
-            "call-1", "request-1"
-        )
-        assert loading["status"] == "loading"
-        assert loading["reason"] == "host_layers_not_ready"
-
-        coordinator.mark_host_ready("call-1", 1)
-        requirement = requests.query_progressive_requirement(
-            "call-1", "request-1"
-        )
-        assert requirement["status"] == "ready"
-        required = int(requirement["required_calibration_tokens"])
-        assert required == provisional.calibration_end - provisional.calibration_start
-
-        final = requests.finalize_progressive_reuse(
-            "call-1", "request-1", required
-        )
-        assert final is not None
-        assert final.calibration_start == provisional.calibration_start
-        assert final.reuse_end == provisional.reuse_end
-        assert final.reuse_start == provisional.reuse_start
-        assert final.reuse_start % 16 == 0
-        assert requests.finalize_progressive_reuse(
-            "call-1", "request-1", required
-        ) == final
-        assert requests.finalize_progressive_reuse(
-            "call-1", "request-1", required + 16
-        ) is None
-    finally:
-        backend.complete.set()
-        requests.close()
-        legacy_requests.close()
-
-
 def test_readiness_is_orthogonal_to_verified_request(tmp_path: Path) -> None:
     skill_tokens = tuple(range(1000, 2024))
     _metadata, backend, _pool, _storage, requests = build_runtime(
@@ -825,6 +693,76 @@ def test_readiness_is_orthogonal_to_verified_request(tmp_path: Path) -> None:
         assert requests.query_reuse_readiness(
             "call-1", "wrong-request"
         ).status is ReuseReadiness.FALLBACK
+    finally:
+        backend.complete.set()
+        requests.close()
+
+
+def test_profitability_gate_uses_persisted_costs_at_reuse_boundary(
+    tmp_path: Path,
+) -> None:
+    skill_tokens = tuple(range(1000, 2024))
+    _metadata, backend, _pool, _storage, requests = build_runtime(
+        tmp_path,
+        skill_tokens=skill_tokens,
+        profitability_enabled=True,
+    )
+    try:
+        tracker = requests._performance_tracker
+        assert tracker is not None
+        tracker.record_prefill(100, 10.0)
+        tracker.record_ssd(1024, 1.0)
+        tracker.record_composition(
+            strategy="ratio_prefix",
+            ratio=0.05,
+            tokens=1024,
+            duration_ms=40.0,
+        )
+        assert requests.select_skill("call-1", "internal-comms")
+        assert backend.started.wait(timeout=5)
+        bind_verified_request(requests, skill_tokens=skill_tokens)
+        assert requests.prepare_reuse(
+            "call-1", "request-1", block_alignment=16
+        ) is not None
+        readiness = requests.query_reuse_readiness("call-1", "request-1")
+        assert readiness.status is ReuseReadiness.LOADING
+    finally:
+        backend.complete.set()
+        requests.close()
+
+
+def test_unprofitable_reuse_falls_back_without_waiting_for_prefetch(
+    tmp_path: Path,
+) -> None:
+    skill_tokens = tuple(range(1000, 2024))
+    metadata, backend, _pool, _storage, requests = build_runtime(
+        tmp_path,
+        skill_tokens=skill_tokens,
+        profitability_enabled=True,
+    )
+    try:
+        tracker = requests._performance_tracker
+        assert tracker is not None
+        tracker.record_prefill(100, 1.0)
+        tracker.record_ssd(1024, 100.0)
+        tracker.record_composition(
+            strategy="ratio_prefix",
+            ratio=0.05,
+            tokens=1024,
+            duration_ms=1000.0,
+        )
+        assert requests.select_skill("call-1", "internal-comms")
+        assert backend.started.wait(timeout=5)
+        bind_verified_request(requests, skill_tokens=skill_tokens)
+        assert requests.prepare_reuse(
+            "call-1", "request-1", block_alignment=16
+        ) is not None
+        readiness = requests.query_reuse_readiness("call-1", "request-1")
+        assert readiness.status is ReuseReadiness.FALLBACK
+        assert readiness.reason == "reuse_not_profitable"
+        assert metadata.get_runtime("call-1").fallback_reason == (
+            "reuse_not_profitable"
+        )
     finally:
         backend.complete.set()
         requests.close()
@@ -938,7 +876,7 @@ def test_short_reusable_suffix_falls_back_and_releases_load(
             "call-1",
             "request-1",
             block_alignment=16,
-            policy=ReusePolicy(minimum_reuse_tokens=352),
+            policy=ReusePolicy(minimum_reuse_tokens=381),
         ) is None
         state = metadata.get_runtime("call-1")
         assert state.binding_state is BindingState.FALLBACK

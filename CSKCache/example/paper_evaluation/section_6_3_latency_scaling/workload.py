@@ -110,24 +110,10 @@ def eligible_for_all_ratios(
     token_count: int,
     *,
     max_ratio: float,
-    minimum_full_recompute_tokens: int,
-    block_alignment: int,
     minimum_reuse_tokens: int,
 ) -> bool:
-    if block_alignment <= 0:
-        raise ValueError("block_alignment must be positive")
-    calibration = max(1, math.ceil(token_count * max_ratio))
-    reusable_by_residue = []
-    for segment_start in range(block_alignment):
-        nominal_start = segment_start + minimum_full_recompute_tokens + calibration
-        reuse_start = (
-            (nominal_start + block_alignment - 1) // block_alignment
-        ) * block_alignment
-        reuse_end = (
-            (segment_start + token_count) // block_alignment
-        ) * block_alignment
-        reusable_by_residue.append(reuse_end - reuse_start)
-    return min(reusable_by_residue) >= minimum_reuse_tokens
+    calibration = math.ceil(token_count * max_ratio)
+    return token_count - calibration >= minimum_reuse_tokens
 
 
 def load_fixed_workloads(
@@ -136,8 +122,6 @@ def load_fixed_workloads(
     expected_model_id: str,
     buckets: Sequence[tuple[str, int, int | None]],
     max_ratio: float,
-    minimum_full_recompute_tokens: int,
-    block_alignment: int,
     minimum_reuse_tokens: int,
 ) -> tuple[list[Workload], dict[str, Any], dict[str, Any]]:
     """Load the verified six-object pool and fail on any source drift."""
@@ -179,8 +163,6 @@ def load_fixed_workloads(
         if not eligible_for_all_ratios(
             token_count,
             max_ratio=max_ratio,
-            minimum_full_recompute_tokens=minimum_full_recompute_tokens,
-            block_alignment=block_alignment,
             minimum_reuse_tokens=minimum_reuse_tokens,
         ):
             raise RuntimeError(f"workload leaves too few reusable tokens: {record}")
